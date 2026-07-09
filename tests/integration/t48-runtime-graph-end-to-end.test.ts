@@ -73,6 +73,7 @@ const BUN = process.execPath; // the bun running this test
 const UTIL = join(AIDLC_SRC, "tools", "aidlc-utility.ts");
 const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
 const RUNTIME = join(AIDLC_SRC, "tools", "aidlc-runtime.ts");
+const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 
 interface RuntimeStageRow {
   stage_slug: string;
@@ -198,6 +199,22 @@ beforeAll(() => {
   // --- Gate-start -> approve stage 1 (emits GATE_APPROVED + STAGE_COMPLETED
   // + the in-line STAGE_STARTED for stage 2), then compile #2 (.sh:75-79). ---
   run(STATE, ["gate-start", firstStage, "--project-dir", proj]);
+  // requirements-analysis declares a reviewer; the §12a gate precondition needs
+  // a terminal REVIEW_COMPLETED before approve will commit. Record it (this test
+  // targets the runtime-graph compile, not the reviewer gate).
+  run(LOG, [
+    "review",
+    "--stage",
+    firstStage,
+    "--reviewer",
+    "aidlc-product-lead-agent",
+    "--iteration",
+    "1",
+    "--verdict",
+    "READY",
+    "--project-dir",
+    proj,
+  ]);
   run(STATE, [
     "approve",
     firstStage,

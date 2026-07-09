@@ -51,7 +51,16 @@ import {
 
 const BUN = process.execPath;
 const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
+const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 const MID_IDEATION = "state-mid-ideation.md"; // Current Stage: feasibility
+
+// Record a fresh terminal review so a reviewer-bearing stage passes the §12a
+// gate precondition (these tests target the artifact guard, not the reviewer
+// gate). code-generation is per-unit → record per unit; its reviewer is the
+// architecture reviewer.
+function reviewCodeGen(proj: string, unit: string): void {
+  spawnSync(BUN, [LOG, "review", "--stage", "code-generation", "--unit", unit, "--reviewer", "aidlc-architecture-reviewer-agent", "--iteration", "1", "--verdict", "READY", "--project-dir", proj], { encoding: "utf-8" });
+}
 
 // Drive a state subcommand with the artifact guard ENABLED (clear the suite's
 // bypass var). Returns exit code + combined output.
@@ -209,6 +218,7 @@ describe("t185: stage-completion artifact guard (#366)", () => {
       stageCodeGenDocsOnly();
       writeWorkspaceFile(proj, "src/auth/login.ts"); // outside aidlc/ + harness
       guarded(proj, ["gate-start", "code-generation"]);
+      reviewCodeGen(proj, UNIT);
       const r = guarded(proj, ["approve", "code-generation", "--user-input", "ok"]);
       expect(r.rc).toBe(0);
     });
@@ -280,6 +290,9 @@ describe("t185: stage-completion artifact guard (#366)", () => {
     }
     function approveCodeGen(): { rc: number; out: string } {
       guarded(proj, ["gate-start", "code-generation"]);
+      // Satisfy the §12a reviewer precondition; the artifact guard (the subject
+      // here) runs first, so a REFUSES case still refuses for the artifact reason.
+      reviewCodeGen(proj, UNIT);
       return guarded(proj, ["approve", "code-generation", "--user-input", "ok"]);
     }
 

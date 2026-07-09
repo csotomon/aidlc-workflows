@@ -337,7 +337,7 @@ Special states: `[AIDLC] ready` (no workflow), `[AIDLC] COMPLETE [▓▓▓▓�
 
 ## Audit Event Taxonomy
 
-The audit trail (the intent's `audit/` shards) uses a **71-event taxonomy** defined in `.claude/knowledge/aidlc-shared/audit-format.md`. Every event is tool-owned or hook-owned - the conductor no longer emits events from prose. See [State Machine](12-state-machine.md) for the canonical emitter registry and the audit-first atomicity rules; the summary below is a cross-reference, not the source of truth.
+The audit trail (the intent's `audit/` shards) uses a **74-event taxonomy** defined in `.claude/knowledge/aidlc-shared/audit-format.md`. Every event is tool-owned or hook-owned - the conductor no longer emits events from prose. See [State Machine](12-state-machine.md) for the canonical emitter registry and the audit-first atomicity rules; the summary below is a cross-reference, not the source of truth.
 
 ### Event Categories
 
@@ -349,7 +349,7 @@ The audit trail (the intent's `audit/` shards) uses a **71-event taxonomy** defi
 | **Stage** | 6 | `STAGE_STARTED`, `STAGE_AWAITING_APPROVAL`, `STAGE_REVISING`, `STAGE_COMPLETED`, `STAGE_SKIPPED`, `STAGE_JUMPED` | `aidlc-state.ts` (gate-start/approve/reject/skip/advance), `aidlc-jump.ts` |
 | **Initialization** | 3 | `WORKSPACE_SCAFFOLDED`, `WORKSPACE_SCANNED`, `WORKSPACE_INITIALISED` | `aidlc-utility.ts init` |
 | **Navigation** | 4 | `SCOPE_CHANGED`, `SCOPE_DETECTED`, `DEPTH_CHANGED`, `TEST_STRATEGY_CHANGED` | `aidlc-utility.ts` |
-| **Interaction** | 4 | `DECISION_RECORDED`, `GATE_APPROVED`, `GATE_REJECTED`, `QUESTION_ANSWERED` | `aidlc-log.ts`, `aidlc-state.ts` |
+| **Interaction** | 6 | `DECISION_RECORDED`, `GATE_APPROVED`, `GATE_REJECTED`, `QUESTION_ANSWERED`, `REVIEW_REQUESTED`, `REVIEW_COMPLETED` | `aidlc-log.ts`, `aidlc-state.ts` |
 | **Artifact** | 3 | `ARTIFACT_CREATED`, `ARTIFACT_UPDATED`, `ARTIFACT_REUSED` | audit-logger hook, `aidlc-state.ts reuse-artifact` |
 | **Subagent** | 1 | `SUBAGENT_COMPLETED` | log-subagent hook |
 | **Reviewer scope** | 1 | `REVIEWER_SCOPE_BLOCKED` | reviewer-scope hook |

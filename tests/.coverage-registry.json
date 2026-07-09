@@ -20,23 +20,23 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 452,
+    "total": 455,
     "enumeratedByClass": {
       "function": 231,
-      "audit": 72,
+      "audit": 74,
       "scope": 9,
       "stage": 32,
       "hook": 12,
-      "subcommand": 89,
+      "subcommand": 90,
       "render-surface": 7
     },
     "coveredByClass": {
       "function": 95,
-      "audit": 31,
+      "audit": 33,
       "scope": 9,
       "stage": 8,
       "hook": 11,
-      "subcommand": 76,
+      "subcommand": 77,
       "render-surface": 7
     }
   },
@@ -335,6 +335,30 @@
       "coveredBy": [
         {
           "file": "tests/unit/t35.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "REVIEW_COMPLETED",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t115.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "REVIEW_REQUESTED",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t115.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -4289,6 +4313,18 @@
       "coveredBy": [
         {
           "file": "tests/unit/t31.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-log review",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t115.test.ts",
           "mechanism": "cli"
         }
       ],

@@ -35,7 +35,20 @@ resetAidlcEnv();
 
 const BUN = process.execPath;
 const ORCH = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
+const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 const RP = `aidlc/spaces/${DEFAULT_SPACE}/intents/${DEFAULT_RECORD_DIR}`;
+
+// functional-design declares a reviewer; the §12a gate precondition refuses an
+// approve without a terminal REVIEW_COMPLETED. These tests target the coverage /
+// vacuous-guard branches, not the reviewer gate, so record a READY review first.
+function logReviewReady(proj: string, stage: string, reviewer: string, unit?: string): void {
+  const args = [LOG, "review", "--stage", stage, "--reviewer", reviewer, "--iteration", "1", "--verdict", "READY"];
+  if (unit) args.push("--unit", unit);
+  args.push("--project-dir", proj);
+  const res = spawnSync(BUN, args, { encoding: "utf-8" });
+  // Keep a log-record failure local, not surfaced later as a confusing gate error.
+  expect(res.status).toBe(0);
+}
 
 // nfr-requirements produces[] and their per-kind applicability (verified against
 // the stage frontmatter): performance/scalability/reliability are kind-gated;
@@ -227,6 +240,11 @@ describe("t208 engine unit-kind pruning", () => {
   test("5: an all-vacuous per-unit stage approves (guard's vacuous branch)", () => {
     const proj = seedProject("functional-design");
     seedKindDag(proj, [{ name: "pack1", kind: "packaging" }, { name: "pack2", kind: "packaging" }]);
+    // functional-design declares a reviewer and is per-unit; the §12a gate
+    // precondition requires one review PER UNIT (this test targets the
+    // vacuous-guard branch).
+    logReviewReady(proj, "functional-design", "aidlc-architecture-reviewer-agent", "pack1");
+    logReviewReady(proj, "functional-design", "aidlc-architecture-reviewer-agent", "pack2");
     const d = runReport(proj, ["--stage", "functional-design", "--result", "approved"], true);
     expect(d.kind).toBe("done");
   }, 30000);
