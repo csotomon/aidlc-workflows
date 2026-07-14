@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.3.13] - 2026-07-14
+
+`/aidlc --doctor` gains an `--export` flag that writes a small, redacted diagnostic report so a misbehaving workflow can be debugged without sharing the whole project directory. It runs one fresh doctor analysis (the same structured findings the live report now renders), reconstructs the workflow timeline from the audit trail (stage durations, gates, revisions, reviewer iterations — scoped to the latest run, events timestamp-sorted), runs a fixed set of deterministic condition→remedy rules (unresolved gates, missing/malformed ensemble evidence, state/audit drift, stale or missing runtime graph, cold hooks, incomplete reviewer loops), and exports only allowlisted, normalized fields — never artifact, contribution, question, or memory bodies. Every project/home path, and every custom intent/stage/agent/unit/artifact identifier, is hashed or redacted before serialization; symlinked inputs are rejected; per-file and total size are capped. The same `DoctorFinding` model backs both the live `--doctor` output and the export. **Upgrade:** re-copy your `dist/<harness>/` shell into the project.
+
+* `/aidlc --doctor --export` runs a fresh doctor pass and writes a report directory (`report.md`, `report.json`, `manifest.json`, and normalized `evidence/`) under `aidlc/diagnostics/`, packaged as a timestamped `aidlc-diagnostic-report-<ts>.tar.gz` when a system `tar` is available and left as a directory (with manual-share instructions) otherwise. Override the output location with `--output <dir>`.
+* Plain `/aidlc --doctor` now also surfaces the new structured findings (`gate-unresolved`, `runtime-graph-stale`, and the rest) — the live report and the export share one analysis.
+* Diagnosis is deterministic (no LLM) and recovery bypasses (e.g. `AIDLC_DISABLE_ENSEMBLE_EVIDENCE=1`) are always reported as unsafe-to-automate with a prominent warning.
+* No new package dependency is introduced; the export never includes workspace source, raw state/audit/runtime-graph files, artifact/contribution/question/memory bodies, environment variables, or command output.
+
 ## [2.3.10] - 2026-07-14
 
 The linter sensor now pins the eslint version it runs (`eslint@10`) instead of resolving whatever `eslint` bunx finds first. A bare `bunx eslint` prefers a project-local node_modules copy, then any `eslint` on PATH, before fetching from the registry - and distro packages ship ancient versions (Ubuntu's apt eslint is 6.4.0, installed as a transitive dependency of `apt install npm`). Pre-flat-config eslint cannot read `eslint.config.js`, so on such a box every linter fire silently degraded to a `Note=tool-unavailable` PASS, masking real lint findings. **Upgrade:** re-copy your `dist/<harness>/` shell into the project.
