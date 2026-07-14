@@ -137,6 +137,9 @@ if (target === "verb-intercept") {
   const cwd = kiro.cwd ?? process.cwd();
   const utilArgs = [join(".kiro", "tools", "aidlc-utility.ts"), cmd.subcommand];
   if (cmd.arg !== undefined) utilArgs.push(cmd.arg);
+  // Allowlisted trailing args (today: --doctor --export [--output <dir>]) so the
+  // documented export surface reaches the tool through the Kiro seam too.
+  if (cmd.extraArgs !== undefined) utilArgs.push(...cmd.extraArgs);
   // Reuse the exact bun binary running this adapter; the child must not depend on
   // PATH containing bun (the hook environment often lacks the bun install dir).
   const run = Bun.spawnSync([process.execPath, ...utilArgs], { cwd, stdout: "pipe", stderr: "pipe" });

@@ -21,7 +21,7 @@ All AI-DLC commands start with the orchestrator invocation. This chapter is a co
 | `/aidlc` | Resume an existing workflow (if an intent exists) or birth the first intent and start new |
 | `/aidlc --status` | Display a read-only status summary |
 | `/aidlc --doctor` | Run a health check on your setup |
-| `/aidlc --doctor --bundle` | Run a fresh health check, then export a small, redacted diagnostic bundle for sharing |
+| `/aidlc --doctor --export` | Run a fresh health check, then write a small, redacted diagnostic report for sharing |
 | `/aidlc --stage <slug\|#>` | Jump to a specific stage |
 | `/aidlc --stage <slug> --single` | Run one stage in isolation, without advancing your workflow |
 | `/aidlc --phase <name\|#>` | Jump to the start of a phase |
@@ -211,6 +211,8 @@ Display current workflow progress without modifying anything.
 
 Validate that all of this implementation's prerequisites, configuration, and stage-graph integrity are in place. Exits 0 on full pass, 1 on any failure; the full report writes to stdout in both cases so the orchestrator surfaces it either way. `--doctor` is **read-only** — on a fresh shell with no intent yet (no `audit/` shards) it creates no files, so it is safe to run before the first intent is born; once an intent exists it records a `HEALTH_CHECKED` audit row.
 
+When a workflow has issues, `--doctor` also prints a **Workflow diagnosis** section listing the structured findings (e.g. `gate-unresolved`, `runtime-graph-stale`) for unresolved gates, a stale or missing runtime graph, cold hooks, and similar "it will not advance" causes. The live report and `--export` share one analysis, so the findings are identical either way.
+
 **Syntax:**
 
 ```
@@ -273,48 +275,48 @@ Validate that all of this implementation's prerequisites, configuration, and sta
 
 ---
 
-### `/aidlc --doctor --bundle` — Export a diagnostic bundle
+### `/aidlc --doctor --export` — Write a diagnostic report
 
-Add `--bundle` to `--doctor` to export a small, redacted diagnostic bundle so a
+Add `--export` to `--doctor` to write a small, redacted diagnostic report so a
 misbehaving workflow can be debugged without sharing your whole project
-directory. It runs a **fresh** doctor pass first (the bundle never reflects a
-cached diagnosis), then writes the bundle. The bundle write never changes
+directory. It runs a **fresh** doctor pass first (the report never reflects a
+cached diagnosis), then writes the report. The report write never changes
 doctor's exit code.
 
 **Syntax:**
 
 ```
-/aidlc --doctor --bundle
-/aidlc --doctor --bundle --bundle-out <dir>
+/aidlc --doctor --export
+/aidlc --doctor --export --output <dir>
 ```
 
-`--bundle-out <dir>` overrides the output location; the default is
+`--output <dir>` overrides the output location; the default is
 `aidlc/diagnostics/` under the project.
 
 **What it produces:** a timestamped `.tar.gz` when a system `tar` is available,
-otherwise the bundle directory is retained with instructions to compress it
+otherwise the report directory is retained with instructions to compress it
 yourself before sharing (no new package dependency, no bespoke archive writer).
-The bundle contains:
+The report contains:
 
 | File | Contents |
 |------|----------|
 | `report.md` | Human-readable workflow timeline plus findings |
 | `report.json` | Machine-readable timeline, findings, and summary |
-| `manifest.json` | Bundle schema version, AI-DLC version, harness, hashed intent id, per-file SHA-256 checksums, applied redactions, truncation notices, and the excluded list |
+| `manifest.json` | Report schema version, AI-DLC version, harness, hashed intent id, per-file SHA-256 checksums, applied redactions, truncation notices, and the excluded list |
 | `evidence/normalized.json` | Allowlisted, normalized fields only — never raw files |
 
-**What it diagnoses:** the bundle reconstructs the workflow **timeline** from the
+**What it diagnoses:** the report reconstructs the workflow **timeline** from the
 audit trail (stage durations, gates, revisions, reviewer iterations, gaps, and
 abnormal/incomplete flags), then runs **deterministic** condition→remedy rules
 (no LLM) for the common "it will not advance" causes: unresolved approval gates,
 missing or malformed ensemble collaborator evidence, state/audit drift, a
 stale or missing runtime graph, cold or frozen hook heartbeats, and incomplete
 reviewer loops. Findings come from the same shared `DoctorFinding` model the
-live `--doctor` uses, so the command and the bundle can never diverge. A remedy
+live `--doctor` uses, so the command and the report can never diverge. A remedy
 that names a recovery bypass (for example `AIDLC_DISABLE_ENSEMBLE_EVIDENCE=1`)
 is always flagged as not safe to automate.
 
-**Safety.** The bundle never includes workspace source, raw state/audit/
+**Safety.** The report never includes workspace source, raw state/audit/
 runtime-graph files, artifact/contribution/question/memory bodies, environment
 variables, or command output. Every emitted string is redacted: your home dir
 becomes `~`, the project root becomes `<project>`, intent ids are hashed, and
@@ -325,8 +327,8 @@ created owner-only where the platform supports it.
 **Example output:**
 
 ```
-Diagnostic bundle created:
-  aidlc/diagnostics/aidlc-doctor-bundle-20260714-153000-3f9a1c22.tar.gz
+Diagnostic report created:
+  aidlc/diagnostics/aidlc-diagnostic-report-20260714-153000-3f9a1c22.tar.gz
 
 Findings:
   ERROR gate-unresolved

@@ -436,7 +436,16 @@ export interface TerminalCommand {
   subcommand: string;
   arg?: string;
   source: "read-only-flag" | "workspace-verb";
+  // Allowlisted trailing args carried through to the tool. Today only
+  // `--doctor` uses this (`--export` and `--output <dir>`); a fixed allowlist,
+  // so an arbitrary token can never ride the terminal path into the tool.
+  extraArgs?: string[];
 }
+
+// The allowlisted trailing flags `--doctor` accepts (diagnostic export). Kept
+// as a set here so the engine (parseNextFlags) and this classifier — the two
+// terminal-command deciders — stay byte-for-byte in agreement.
+export const DOCTOR_EXPORT_FLAGS: ReadonlySet<string> = new Set(["--export", "--output"]);
 
 // Classify the post-`/aidlc` argument tokens. Returns the terminal command to run
 // deterministically, or null when the input is NOT a terminal command (freeform
@@ -456,7 +465,29 @@ export function classifyTerminalCommand(args: string[]): TerminalCommand | null 
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (READ_ONLY_FLAGS.has(a)) {
-      return { subcommand: a.replace(/^--/, ""), source: "read-only-flag" };
+      const subcommand = a.replace(/^--/, "");
+      // --doctor carries allowlisted export args (--export, --output <dir>).
+      // Collect them from the rest of the token stream so the seam runs the
+      // same command the engine's directive names. Mirrors parseNextFlags.
+      if (a === "--doctor") {
+        const extraArgs: string[] = [];
+        for (let j = i + 1; j < args.length; j++) {
+          const t = args[j];
+          if (!DOCTOR_EXPORT_FLAGS.has(t)) continue;
+          extraArgs.push(t);
+          if (t === "--output") {
+            const val = args[j + 1];
+            if (val !== undefined && !val.startsWith("--")) {
+              extraArgs.push(val);
+              j++;
+            }
+          }
+        }
+        return extraArgs.length > 0
+          ? { subcommand, source: "read-only-flag", extraArgs }
+          : { subcommand, source: "read-only-flag" };
+      }
+      return { subcommand, source: "read-only-flag" };
     }
     if (i === 0 && WORKSPACE_VERBS.has(a)) {
       const next = args[i + 1];

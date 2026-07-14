@@ -48,9 +48,12 @@ import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import {
   auditBlockField,
+  auditShardDir,
   docsRoot,
   hooksHealthDir,
   isoTimestamp,
+  listIntentDirs,
+  listSpaces,
   parseCheckboxes,
   planFilePath,
   readAllAuditShards,
@@ -249,21 +252,31 @@ interface AuditEvent {
   block: string;
 }
 
-// Split the merged audit buffer into events. Blocks are separated by a blank
-// line; the event name and timestamp live as **Event**/**Timestamp** fields.
-// Chronological order follows the recorded timestamps (readAllAuditShards
-// already merge-sorts), with unparseable timestamps kept in buffer order.
+// Split the merged audit buffer into events, sorted CHRONOLOGICALLY by
+// **Timestamp** with the buffer (ledger) position as the tie-breaker. The
+// merged buffer concatenates per-shard files (readAllAuditShards sorts shard
+// FILENAMES, not events), and multi-host/worktree shards interleave in real
+// time, so a timestamp sort is required for durations and gate outcomes to be
+// correct. Events with an unparseable timestamp keep their ledger position
+// (sorted after parseable ones at the same instant) rather than being dropped.
 export function parseAuditEvents(audit: string): AuditEvent[] {
-  const events: AuditEvent[] = [];
+  const events: Array<AuditEvent & { pos: number }> = [];
   if (!audit.trim()) return events;
+  let pos = 0;
   for (const block of audit.split(/\n\s*\n/)) {
     const event = auditBlockField(block, "Event");
     if (!event) continue;
     const tsRaw = auditBlockField(block, "Timestamp") ?? "";
     const ms = tsRaw ? Date.parse(tsRaw) : NaN;
-    events.push({ event, timestampMs: ms, timestampRaw: tsRaw, block });
+    events.push({ event, timestampMs: ms, timestampRaw: tsRaw, block, pos: pos++ });
   }
-  return events;
+  events.sort((a, b) => {
+    const am = Number.isFinite(a.timestampMs) ? a.timestampMs : Number.POSITIVE_INFINITY;
+    const bm = Number.isFinite(b.timestampMs) ? b.timestampMs : Number.POSITIVE_INFINITY;
+    if (am !== bm) return am - bm;
+    return a.pos - b.pos; // ledger-position tie-break (stable within a timestamp)
+  });
+  return events.map(({ pos: _pos, ...e }) => e);
 }
 
 // A "?" literal is the report's honest representation of missing evidence —
@@ -295,8 +308,26 @@ export interface Timeline {
 // invent transitions. `stateContent` supplies the current status and the
 // checkbox for a stage whose STAGE_COMPLETED never landed (incomplete).
 export function reconstructTimeline(audit: string, stateContent: string): Timeline {
-  const events = parseAuditEvents(audit);
+  const allEvents = parseAuditEvents(audit);
   const notes: string[] = [];
+
+  // Scope to the LATEST workflow run: a restarted/replayed workflow records a
+  // fresh WORKFLOW_STARTED, and grouping across runs would let an old stage's
+  // start or an old gate resolution corrupt the current picture. Slice from the
+  // last WORKFLOW_STARTED onward (timestamp-sorted above). No WORKFLOW_STARTED
+  // → keep all events (a partial/legacy trail is better than an empty report).
+  let startIdx = -1;
+  for (let i = allEvents.length - 1; i >= 0; i--) {
+    if (allEvents[i].event === "WORKFLOW_STARTED") {
+      startIdx = i;
+      break;
+    }
+  }
+  const priorRuns = allEvents.slice(0, Math.max(0, startIdx)).filter((e) => e.event === "WORKFLOW_STARTED").length;
+  const events = startIdx >= 0 ? allEvents.slice(startIdx) : allEvents;
+  if (priorRuns > 0) {
+    notes.push(`Scoped to the latest of ${priorRuns + 1} recorded workflow runs; earlier runs are omitted.`);
+  }
 
   const workflowStarted = events.find((e) => e.event === "WORKFLOW_STARTED");
   const status = stateContent ? extractStatus(stateContent) : UNKNOWN;
@@ -392,22 +423,25 @@ function extractStatus(stateContent: string): string {
   return m ? m[1] : UNKNOWN;
 }
 
-// Gate outcome for a stage: the LAST gate-resolution event wins. When the stage
-// started but no resolution was recorded and its checkbox is still awaiting
-// approval, the gate is genuinely "unresolved" (the debugging signal). No gate
-// event at all → "none".
+// Gate outcome for a stage: the LATEST gate event wins, honouring order. `evs`
+// is timestamp-sorted (parseAuditEvents) and scoped to one run, so a re-opened
+// gate — an STAGE_AWAITING_APPROVAL recorded AFTER an earlier GATE_APPROVED —
+// correctly reads "unresolved", and an older approval can never resolve a newer
+// open gate. When no gate event fired but the checkbox is awaiting approval,
+// the gate is unresolved; otherwise "none".
 function gateOutcome(
   evs: AuditEvent[],
   checkboxState: string | undefined,
 ): StageTimelineEntry["gate"] {
-  let last: "approved" | "rejected" | null = null;
+  let latest: "approved" | "rejected" | "awaiting" | null = null;
   for (const e of evs) {
-    if (e.event === "GATE_APPROVED") last = "approved";
-    else if (e.event === "GATE_REJECTED") last = "rejected";
+    if (e.event === "GATE_APPROVED") latest = "approved";
+    else if (e.event === "GATE_REJECTED") latest = "rejected";
+    else if (e.event === "STAGE_AWAITING_APPROVAL") latest = "awaiting";
   }
-  if (last) return last;
-  const awaited = evs.some((e) => e.event === "STAGE_AWAITING_APPROVAL");
-  if (awaited || checkboxState === "awaiting-approval") return "unresolved";
+  if (latest === "approved") return "approved";
+  if (latest === "rejected") return "rejected";
+  if (latest === "awaiting" || checkboxState === "awaiting-approval") return "unresolved";
   return "none";
 }
 
@@ -463,6 +497,7 @@ export interface GraphStageLite {
   slug: string;
   phase: string;
   mode: string;
+  lead_agent: string;
   support_agents: string[];
 }
 
@@ -709,19 +744,18 @@ export function runDiagnosis(input: DiagnosisInput): DoctorFinding[] {
   return findings;
 }
 
-// Display form of a stage slug. CORE stage slugs identify framework behavior
-// and are allowlisted to stay readable (issue #575); a non-core slug (a
-// plugin/custom stage not in the shipped set) is hashed. The core set is
-// derived from the graph stages passed in — anything present in the compiled
-// graph is framework-known. Fallback: keep short slugs, hash the rest.
-let _coreSlugs: Set<string> | null = null;
-export function setCoreSlugs(slugs: Iterable<string>): void {
-  _coreSlugs = new Set(slugs);
+// Stage-slug handling is now UNIFORM: every finding/evidence field carries the
+// RAW slug, and the single redaction pass (redactString) hashes it to
+// `<id:hash>` iff it was seeded as a custom id in runDoctorAnalysis — core
+// slugs are never seeded, so they render readable, and custom slugs are hashed
+// in BOTH the Markdown and the JSON (Arden #2: no id escapes structurally).
+// setCoreSlugs is retained as a no-op shim so callers/tests need no change; the
+// core/custom decision now lives entirely in the seeding step.
+export function setCoreSlugs(_slugs: Iterable<string>): void {
+  /* no-op: redaction seeding in runDoctorAnalysis owns core-vs-custom now */
 }
 export function hashSlugForDisplay(slug: string): string {
-  if (_coreSlugs && _coreSlugs.has(slug)) return slug;
-  if (_coreSlugs === null) return slug; // no graph loaded → nothing to hash against
-  return `<stage:${shortHash(slug)}>`;
+  return slug; // raw; redactString hashes seeded custom ids uniformly
 }
 
 function safeLstat(path: string): Stats | null {
@@ -852,66 +886,108 @@ interface StagedFile {
   truncated: boolean;
 }
 
-// Build the full bundle. `liveFindings` are the shared-model findings the live
-// doctor produced; `tsToken` is a filesystem-safe timestamp the CALLER stamps
-// (isoTimestamp is unavailable to pass through pure code paths, so the caller
-// provides it). Returns the bundle dir + archive path + findings.
-export function buildBundle(
+// The single fresh doctor analysis, shared by the LIVE `--doctor` render and
+// the `--export` writer (issue #575, Arden #3): one read of state/audit/graph,
+// one timeline, one diagnosis. The caller (handleDoctor) merges these findings
+// with its legacy check rows and both renders them live AND hands this whole
+// object to buildBundle — so a plain `--doctor` shows the same structured
+// findings the export contains, and the two can never diverge.
+export interface DoctorAnalysis {
+  ctx: RedactionContext;
+  intentHash: string;
+  findings: DoctorFinding[]; // the structured diagnosis findings (explicit ids/severities)
+  timeline: Timeline;
+  evidence: NormalizedEvidence;
+}
+
+// Seed EVERY custom (non-core) identifier the report will serialize into the
+// redaction context so it is hashed before any JSON is written — not just the
+// active intent slug (Arden #2). Core stage/agent slugs identify framework
+// behavior and stay readable; anything else (custom stage/unit/artifact slugs,
+// every intent dir name across spaces, non-core agent names) is hashed.
+function seedCustomIdentifiers(
+  ctx: RedactionContext,
   projectDir: string,
-  outParentDir: string,
-  liveFindings: DoctorFinding[],
-  tsToken: string,
-): BundleResult {
+  coreSlugs: Set<string>,
+  coreAgents: Set<string>,
+  graphStages: GraphStageLite[],
+  timeline: Timeline,
+): void {
+  const seed = (id: string): void => {
+    if (id.length < 4) return; // too short to redact safely (would eat substrings)
+    if (coreSlugs.has(id) || coreAgents.has(id)) return; // framework-known, keep readable
+    if (!ctx.idHashes.has(id)) {
+      ctx.idHashes.set(id, shortHash(id));
+      ctx.rulesApplied.add("custom-id");
+    }
+  };
+  // Every intent dir across every space (filenames + inline references).
+  try {
+    for (const sp of listSpaces(projectDir)) {
+      for (const rec of listIntentDirs(projectDir, sp.name)) seed(rec);
+    }
+  } catch {
+    /* registry read best-effort */
+  }
+  // Custom stage slugs + non-core support agents seen in the graph.
+  for (const s of graphStages) {
+    seed(s.slug);
+    for (const a of s.support_agents) seed(a);
+  }
+  // Any stage slug the timeline surfaced (covers audit-only slugs not in graph).
+  for (const s of timeline.stages) seed(s.slug);
+}
+
+// Run the fresh analysis. Reads through symlink-rejecting safeRead; seeds all
+// custom ids; runs the timeline + deterministic diagnosis; builds normalized
+// evidence. Pure of any file WRITE — buildBundle does the writing.
+export function runDoctorAnalysis(projectDir: string): DoctorAnalysis {
   const ctx = newRedactionContext(projectDir);
 
-  // Resolve the active record. Seed the intent slug into the redaction map so
-  // it becomes a stable hash everywhere it appears.
-  const recAbs = recordDir(projectDir);
   const relRec = relativeRecordDir(projectDir);
   const intentSlug = relRec ? basename(relRec) : null;
   const intentHash = intentSlug ? shortHash(intentSlug) : "no-intent";
+
+  // Read sources (never emitted raw; symlinked inputs are refused by safeRead).
+  const stateContent = safeRead(stateFilePath(projectDir));
+  const audit = readAuditSafely(projectDir);
+
+  const rgPath = runtimeGraphPath(projectDir);
+  const runtimeGraphExists = existsSync(rgPath) && !isSymlink(rgPath);
+  const runtimeGraphMtimeMs = runtimeGraphExists ? safeMtime(rgPath) : null;
+  const graphStages = runtimeGraphExists ? readGraphStages(rgPath) : [];
+
+  // Core allowlists from the SHIPPED graph (always present) — the stale/missing
+  // runtime graph is the very thing we diagnose, so never seed core ids from it.
+  const shippedStages = readShippedStageGraph(projectDir);
+  const coreSlugs = new Set(shippedStages.map((s) => s.slug));
+  const coreAgents = new Set<string>();
+  for (const s of shippedStages) {
+    coreAgents.add(s.lead_agent);
+    for (const a of s.support_agents) coreAgents.add(a);
+  }
+  const stagesForDiagnosis = graphStages.length > 0 ? graphStages : shippedStages;
+  setCoreSlugs(coreSlugs);
+
+  const authoredNewest = newestStageSourceMtime(projectDir);
+  const hooksHealth = readHookHealth(projectDir, audit);
+  const markers = readMarkers(projectDir);
+  const timeline = reconstructTimeline(audit, stateContent);
+
+  // Seed the active intent + every other custom id BEFORE serialization.
   if (intentSlug) {
     ctx.idHashes.set(intentSlug, intentHash);
     ctx.rulesApplied.add("intent-id");
   }
+  seedCustomIdentifiers(ctx, projectDir, coreSlugs, coreAgents, stagesForDiagnosis, timeline);
 
-  // Read sources (never emitted raw).
-  const statePath = stateFilePath(projectDir);
-  const stateContent = existsSync(statePath) ? safeRead(statePath) : "";
-  const audit = readAllAuditShards(projectDir);
-
-  // Runtime graph — structural stages + mtimes for the stale-graph rule.
-  const rgPath = runtimeGraphPath(projectDir);
-  const runtimeGraphExists = existsSync(rgPath);
-  const runtimeGraphMtimeMs = runtimeGraphExists ? safeMtime(rgPath) : null;
-  const graphStages = runtimeGraphExists ? readGraphStages(rgPath) : [];
-
-  // Core stage slugs stay readable in the report (they identify framework
-  // behavior, issue #575); non-core (plugin/custom) slugs are hashed. Seed the
-  // core set from the SHIPPED stage-graph.json (always present in the harness
-  // tree) — not the per-intent runtime graph, which may be missing (the very
-  // thing we diagnose). The ensemble-evidence rule reads support_agents from
-  // this same shipped graph when the runtime graph is absent.
-  const shippedStages = readShippedStageGraph(projectDir);
-  const stagesForDiagnosis = graphStages.length > 0 ? graphStages : shippedStages;
-  setCoreSlugs(shippedStages.map((s) => s.slug));
-
-  // Newest authored stage-source mtime (for the stale-graph comparison).
-  const authoredNewest = newestStageSourceMtime(projectDir);
-
-  // Hook health + markers.
-  const hooksHealth = readHookHealth(projectDir, audit);
-  const markers = readMarkers(projectDir);
-
-  // Reconstruct timeline and run the deterministic diagnosis.
-  const timeline = reconstructTimeline(audit, stateContent);
-  const diagnosis = runDiagnosis({
+  const findings = runDiagnosis({
     projectDir,
     timeline,
     stateContent,
     audit,
     graphStages: stagesForDiagnosis,
-    recordAbsDir: recAbs,
+    recordAbsDir: recordDir(projectDir),
     hooksHealth,
     runtimeGraphExists,
     runtimeGraphMtimeMs,
@@ -919,11 +995,6 @@ export function buildBundle(
     markers,
   });
 
-  // Findings = live doctor findings + bundle-only diagnosis, deduped by id+
-  // summary, errors first.
-  const findings = mergeFindings(liveFindings, diagnosis);
-
-  // Normalized, redacted evidence.
   const evidence: NormalizedEvidence = {
     state: extractStateFields(stateContent),
     auditEvents: extractAuditEvents(audit),
@@ -933,7 +1004,24 @@ export function buildBundle(
     timeline,
   };
 
-  // Stage every file with redacted content.
+  return { ctx, intentHash, findings, timeline, evidence };
+}
+
+// Build the full export from a pre-computed analysis (issue #575). `tsToken` is
+// a filesystem-safe timestamp the CALLER stamps. Returns the report dir +
+// archive path + findings. Every staged string is redacted (custom ids already
+// seeded into the analysis context) before it is written.
+export function buildBundle(
+  outParentDir: string,
+  analysis: DoctorAnalysis,
+  tsToken: string,
+): BundleResult {
+  const { ctx, intentHash, findings, timeline, evidence } = analysis;
+
+  // Stage every file with redacted content. Custom stage/unit/artifact/agent
+  // ids and every intent id were seeded into ctx by runDoctorAnalysis, so the
+  // structured `timeline`/`graph` JSON is scrubbed here too — not only the
+  // Markdown render.
   const staged: StagedFile[] = [];
   staged.push(stage("report.md", renderReportMd(timeline, findings, intentHash), ctx));
   staged.push(
@@ -957,7 +1045,7 @@ export function buildBundle(
   staged.push({ relPath: "manifest.json", content: JSON.stringify(manifest, null, 2), truncated: false });
 
   // Write the canonical directory (owner-only).
-  const bundleDir = join(outParentDir, `aidlc-doctor-bundle-${tsToken}-${intentHash}`);
+  const bundleDir = join(outParentDir, `aidlc-diagnostic-report-${tsToken}-${intentHash}`);
   writeBundleDir(bundleDir, staged);
 
   // Best-effort archive.
@@ -1069,7 +1157,7 @@ function tryArchive(
   tsToken: string,
   intentHash: string,
 ): { archivePath: string | null; manualShareNote: string | null } {
-  const archiveName = `aidlc-doctor-bundle-${tsToken}-${intentHash}.tar.gz`;
+  const archiveName = `aidlc-diagnostic-report-${tsToken}-${intentHash}.tar.gz`;
   const archivePath = join(outParentDir, archiveName);
   try {
     const dirName = basename(bundleDir);
@@ -1087,7 +1175,7 @@ function tryArchive(
   return {
     archivePath: null,
     manualShareNote:
-      `Archiving is unavailable on this system. The diagnostic bundle directory was kept at:\n  ${bundleDir}\n` +
+      `Archiving is unavailable on this system. The diagnostic report directory was kept at:\n  ${bundleDir}\n` +
       `Compress it yourself (zip or tar) before sharing.`,
   };
 }
@@ -1096,7 +1184,7 @@ function tryArchive(
 
 function renderReportMd(timeline: Timeline, findings: DoctorFinding[], intentHash: string): string {
   const L: string[] = [];
-  L.push(`# AI-DLC Diagnostic Bundle`);
+  L.push(`# AI-DLC Diagnostic Report`);
   L.push("");
   L.push(`- Bundle schema: ${BUNDLE_SCHEMA_VERSION}`);
   L.push(`- AI-DLC version: ${AIDLC_VERSION}`);
@@ -1199,6 +1287,7 @@ function readGraphStages(rgPath: string): GraphStageLite[] {
       slug: typeof s.slug === "string" ? s.slug : "",
       phase: typeof s.phase === "string" ? s.phase : "",
       mode: typeof s.mode === "string" ? s.mode : "inline",
+      lead_agent: typeof s.lead_agent === "string" ? s.lead_agent : "",
       support_agents: Array.isArray(s.support_agents) ? (s.support_agents as string[]) : [],
     })).filter((s) => s.slug !== "");
   } catch {
@@ -1297,8 +1386,14 @@ function newestAuditMs(audit: string): number | null {
 
 // --- small safe helpers -----------------------------------------------------
 
+// Read a bundle INPUT, refusing to follow a symlink. Every source the exporter
+// reads (state, runtime graph, plan, markers, hook health) goes through here,
+// so a symlink planted at any input path — e.g. aidlc-state.md → /etc/passwd —
+// is rejected rather than read and (partially) copied into the report. lstat
+// does not traverse the link; a symlink (or any read error) yields "".
 function safeRead(path: string): string {
   try {
+    if (lstatSync(path).isSymbolicLink()) return "";
     return readFileSync(path, "utf-8");
   } catch {
     return "";
@@ -1311,6 +1406,33 @@ function safeMtime(path: string): number | null {
   } catch {
     return null;
   }
+}
+
+function isSymlink(path: string): boolean {
+  try {
+    return lstatSync(path).isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+
+// Read the audit trail, refusing symlinked shard files. readAllAuditShards uses
+// readFileSync and would follow a symlinked shard, so we gate on the shard dir:
+// if ANY entry under it is a symlink, we refuse the whole trail rather than
+// leak a redirected file's normalized fields into the report. Audit content is
+// otherwise only surfaced through the allowlisted extractAuditEvents.
+function readAuditSafely(projectDir: string): string {
+  const dir = auditShardDir(projectDir);
+  if (dir && existsSync(dir)) {
+    try {
+      for (const e of readdirSync(dir)) {
+        if (isSymlink(join(dir, e))) return "";
+      }
+    } catch {
+      return "";
+    }
+  }
+  return readAllAuditShards(projectDir);
 }
 
 function tryChmod(path: string, mode: number): void {

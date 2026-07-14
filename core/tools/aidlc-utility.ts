@@ -12,7 +12,7 @@ import {
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
-import { adaptLegacyResult, buildBundle } from "./aidlc-doctor-bundle.ts";
+import { buildBundle, runDoctorAnalysis } from "./aidlc-doctor-bundle.ts";
 import {
   artifactsRegistryFor,
   findCycles,
@@ -197,7 +197,7 @@ Utilities:
   codekb-path       Print the deterministic per-repo codekb directory (read-only)
   select-plugins [names]  Show or set enabled plugins (comma-separated names)
   --doctor          Run health check on hooks, settings, and directory structure
-  --doctor --bundle Export a redacted diagnostic bundle (timeline + findings, no work product)
+  --doctor --export Write a redacted diagnostic report (timeline + findings, no work product); --output <dir> to relocate
   --stage <id>      Jump to a specific stage (by slug or number, e.g., code-generation or 3.5)
   --phase <name>    Jump to the first in-scope stage of a phase (e.g., construction or 3)
   --scope <scope>   Set or change scope (standalone or with --stage/--phase)
@@ -2533,6 +2533,14 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
     });
   }
 
+  // One fresh analysis, shared by the live report AND the --export writer
+  // (issue #575, Arden #3): the structured condition->remedy findings and the
+  // reconstructed timeline are computed ONCE here. A plain --doctor renders
+  // these findings alongside the legacy check rows, so gate-unresolved /
+  // runtime-graph-stale / cold-hook and the rest surface live too - the live
+  // output and the export can never diverge. The analysis performs no writes.
+  const analysis = runDoctorAnalysis(projectDir);
+
   // Print report
   let output = "AI-DLC Health Check\n";
   output += `${"\u2500".repeat(37)}\n`;
@@ -2549,6 +2557,26 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
       failed++;
     }
   }
+  // Structured diagnosis findings (workflow timeline analysis). Errors count
+  // toward `failed` so the exit code reflects them; warnings render but do not
+  // fail doctor (advisory, matching the legacy advisory rows). Info is omitted
+  // from the live view to keep it terse - the export carries the full set.
+  const diagErrors = analysis.findings.filter((f) => f.severity === "error");
+  const diagWarnings = analysis.findings.filter((f) => f.severity === "warning");
+  if (diagErrors.length > 0 || diagWarnings.length > 0) {
+    output += `${"\u2500".repeat(37)}\n`;
+    output += "Workflow diagnosis:\n";
+    for (const f of diagErrors) {
+      output += `\u2717  [${f.id}] ${f.summary}`;
+      if (f.remedy) output += ` (${f.remedy})`;
+      output += "\n";
+      failed++;
+    }
+    for (const f of diagWarnings) {
+      output += `!  [${f.id}] ${f.summary}\n`;
+    }
+  }
+
   output += `${"\u2500".repeat(37)}\n`;
   output += `${passed} passed, ${failed} failed\n`;
 
@@ -2564,34 +2592,32 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
     });
   }
 
-  // --bundle: after the live report, export a redacted diagnostic bundle
-  // built from the SAME findings (issue #575). A fresh doctor run always
-  // precedes it (we are inside that run), so the bundle never reflects a
-  // cached diagnosis. The bundle write never changes doctor's exit code.
-  if (flags.bundle === "true") {
+  // --export: after the live report, write a redacted diagnostic report from
+  // the SAME analysis this run already computed (issue #575). No second read,
+  // no cached diagnosis. The export write never changes doctor's exit code.
+  if (flags.export === "true") {
     try {
-      const liveFindings = results.map(adaptLegacyResult);
       const tsToken = fsSafeTimestamp();
-      const outParent = flags["bundle-out"]
-        ? flags["bundle-out"]
+      const outParent = flags.output
+        ? flags.output
         : join(projectDir, "aidlc", "diagnostics");
       mkdirSync(outParent, { recursive: true });
-      const bundle = buildBundle(projectDir, outParent, liveFindings, tsToken);
-      let out = "\nDiagnostic bundle created:\n";
-      out += `  ${bundle.archivePath ?? bundle.bundleDir}\n\n`;
+      const report = buildBundle(outParent, analysis, tsToken);
+      let out = "\nDiagnostic report created:\n";
+      out += `  ${report.archivePath ?? report.bundleDir}\n\n`;
       out += "Findings:\n";
-      const topFindings = bundle.findings.filter((f) => f.severity !== "info").slice(0, 20);
+      const topFindings = report.findings.filter((f) => f.severity !== "info").slice(0, 20);
       if (topFindings.length === 0) {
         out += "  (no errors or warnings)\n";
       } else {
         for (const f of topFindings) out += `  ${f.severity.toUpperCase()} ${f.id}\n`;
       }
       out += "\nNo source files or artifact bodies were included.\n";
-      if (bundle.manualShareNote) out += `\n${bundle.manualShareNote}\n`;
+      if (report.manualShareNote) out += `\n${report.manualShareNote}\n`;
       process.stdout.write(out);
     } catch (e) {
-      // Bundle failure must not mask the live doctor result; report and go on.
-      process.stdout.write(`\nDiagnostic bundle could not be created: ${errorMessage(e)}\n`);
+      // Export failure must not mask the live doctor result; report and go on.
+      process.stdout.write(`\nDiagnostic report could not be created: ${errorMessage(e)}\n`);
     }
   }
 
