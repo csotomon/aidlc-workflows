@@ -4889,7 +4889,7 @@
           "mechanism": "cli"
         },
         {
-          "file": "tests/unit/t237-doctor-bundle.test.ts",
+          "file": "tests/unit/t242-doctor-bundle.test.ts",
           "mechanism": "cli"
         },
         {

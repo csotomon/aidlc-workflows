@@ -258,7 +258,7 @@ deterministic condition→remedy rules. The two most common causes it catches:
   points at a recompile that did not run.
 
 `report.md` inside the report lists every finding with a remedy; a remedy that
-names a recovery bypass (such as `AIDLC_DISABLE_ENSEMBLE_EVIDENCE=1`) is flagged
+names a recovery bypass (such as an `AIDLC_DISABLE_*` env var) is flagged
 as not safe to automate. See [CLI Commands](12-cli-commands.md#aidlc---doctor---export--write-a-diagnostic-report)
 for the full report contents and safety model.
 

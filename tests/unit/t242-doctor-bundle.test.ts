@@ -1,7 +1,7 @@
 // covers: subcommand:aidlc-utility:doctor
 // covers: file:aidlc-doctor-bundle
 //
-// t237 - the `/aidlc --doctor --export` redacted diagnostic exporter (issue
+// t242 - the `/aidlc --doctor --export` redacted diagnostic exporter (issue
 // #575). The feature was reworked to address review feedback: the flag is now
 // `--export` (was `--bundle`), the relocation flag is `--output <dir>` (was
 // `--bundle-out`), and the produced artifacts are named
@@ -65,8 +65,13 @@ import {
   newRedactionContext,
   reconstructTimeline,
   redactString,
+  runDiagnosis,
   shortHash,
   UNKNOWN,
+} from "../../dist/claude/.claude/tools/aidlc-doctor-bundle.ts";
+import type {
+  DiagnosisInput,
+  GraphStageLite,
 } from "../../dist/claude/.claude/tools/aidlc-doctor-bundle.ts";
 import { classifyTerminalCommand } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
@@ -200,7 +205,7 @@ function walkFiles(dir: string): string[] {
   return out;
 }
 
-describe("t237 doctor --export diagnostic exporter (#575)", () => {
+describe("t242 doctor --export diagnostic exporter (#575)", () => {
   test("1: SECRET CANARY — no secret survives into any report file or the archive", () => {
     const proj = freshProject();
     seedCanaryIntent(proj);
@@ -332,7 +337,7 @@ describe("t237 doctor --export diagnostic exporter (#575)", () => {
 
   test("7: isRecoveryBypass flags AIDLC_DISABLE_* remedies; adaptLegacyResult maps pass/fail severity", () => {
     expect(
-      isRecoveryBypass("Set AIDLC_DISABLE_ENSEMBLE_EVIDENCE=1 to bypass the validation."),
+      isRecoveryBypass("Set AIDLC_DISABLE_REVIEWER_SCOPE_HOOK=1 to bypass the guard."),
     ).toBe(true);
     expect(isRecoveryBypass("Re-run the compile step and continue.")).toBe(false);
 
@@ -343,6 +348,163 @@ describe("t237 doctor --export diagnostic exporter (#575)", () => {
     expect(ok.severity).toBe("info");
     expect(ok.safeToAutomate).toBe(true);
   });
+
+  // --- Review round-2 regressions (Arden #1/#2/#6) -----------------------------
+
+  // A minimal DiagnosisInput whose fields the test overrides per case. Neutral
+  // defaults: no graph, no hook health issues, no markers, no runtime graph.
+  function diagInput(over: Partial<DiagnosisInput>): DiagnosisInput {
+    return {
+      projectDir: "/tmp/does-not-matter",
+      timeline: {
+        stages: [],
+        workflowStartedRaw: UNKNOWN,
+        workflowStatus: UNKNOWN,
+        workflowCompleted: false,
+        notes: [],
+      },
+      stateContent: "",
+      audit: "",
+      graphStages: [],
+      recordAbsDir: null,
+      hooksHealth: { dirExists: false, heartbeats: [], degradedDrops: [] },
+      runtimeGraphExists: true,
+      runtimeGraphMtimeMs: 1,
+      authoredInputsNewestMtimeMs: 0,
+      markers: { planExists: false, planParseable: null, recoveryExists: false, stopHookDirExists: false },
+      ...over,
+    };
+  }
+
+  const RE_STAGE: GraphStageLite = {
+    slug: "reverse-engineering",
+    phase: "inception",
+    mode: "subagent",
+    lead_agent: "aidlc-developer-agent",
+    support_agents: ["aidlc-architect-agent"],
+  };
+
+  test("12: Rule 2 (ensemble) is inert without a contributions/ dir (Arden r2 #1)", () => {
+    // A brownfield project that ran reverse-engineering (subagent + support) but
+    // has NO contributions/ dir must NOT get an ensemble-evidence-missing error —
+    // the collaborator-evidence mechanism ships in #568 and is absent on v2.
+    const recordAbsDir = createTestProject();
+    created.push(recordAbsDir);
+    const findings = runDiagnosis(
+      diagInput({
+        graphStages: [RE_STAGE],
+        recordAbsDir,
+        timeline: {
+          stages: [
+            {
+              slug: "reverse-engineering",
+              startedRaw: "2026-01-01T00:00:00Z",
+              completedRaw: "2026-01-01T01:00:00Z",
+              durationMs: 3600000,
+              gate: "none",
+              revisionCount: null,
+              gapFromPrevMs: null,
+              abnormal: [],
+            },
+          ],
+          workflowStartedRaw: "2026-01-01T00:00:00Z",
+          workflowStatus: "In-Progress",
+          workflowCompleted: false,
+          notes: [],
+        },
+      }),
+    );
+    expect(findings.some((f) => f.id === "ensemble-evidence-missing")).toBe(false);
+  });
+
+  test("13: Rule 3 (drift) is scoped to the latest run, not the whole buffer (Arden r2 #2)", () => {
+    const state = "- **Status**: In-Progress\n";
+    // Whole-buffer audit HAS an old WORKFLOW_COMPLETED, but the LATEST run (after
+    // the second WORKFLOW_STARTED) is still in progress → no drift.
+    const restarted = diagInput({
+      stateContent: state,
+      audit: "irrelevant now — Rule 3 reads timeline.workflowCompleted",
+      timeline: {
+        stages: [],
+        workflowStartedRaw: "2026-01-10T00:00:00Z",
+        workflowStatus: "In-Progress",
+        workflowCompleted: false, // latest run not completed
+        notes: ["Scoped to the latest of 2 recorded workflow runs; earlier runs are omitted."],
+      },
+    });
+    expect(runDiagnosis(restarted).some((f) => f.id === "state-audit-drift")).toBe(false);
+
+    // Positive control: latest run DID complete but state disagrees → drift fires.
+    const torn = diagInput({
+      stateContent: state,
+      timeline: {
+        stages: [],
+        workflowStartedRaw: "2026-01-10T00:00:00Z",
+        workflowStatus: "In-Progress",
+        workflowCompleted: true,
+        notes: [],
+      },
+    });
+    expect(runDiagnosis(torn).some((f) => f.id === "state-audit-drift")).toBe(true);
+  });
+
+  test("14: reconstructTimeline sets workflowCompleted from the latest run only (Arden r2 #2)", () => {
+    const audit = [
+      "## started 1",
+      "**Timestamp**: 2026-01-01T00:00:00Z",
+      "**Event**: WORKFLOW_STARTED",
+      "",
+      "## completed 1",
+      "**Timestamp**: 2026-01-01T05:00:00Z",
+      "**Event**: WORKFLOW_COMPLETED",
+      "",
+      "## started 2",
+      "**Timestamp**: 2026-01-10T00:00:00Z",
+      "**Event**: WORKFLOW_STARTED",
+      "",
+    ].join("\n");
+    // The old completion is in the buffer, but the latest run (started 2) has no
+    // completion → workflowCompleted must be false.
+    expect(reconstructTimeline(audit, "").workflowCompleted).toBe(false);
+  });
+
+  test("15: seedCustomIdentifiers hashes a custom lead_agent in the graph (Arden r2 #6)", () => {
+    // A custom (non-core) lead agent must be hashed, not serialized raw. Exercised
+    // through the export: build a shipped-graph project, inject a custom lead.
+    const proj = createTestProject();
+    created.push(proj);
+    cpSync(AIDLC_SRC, join(proj, ".claude"), { recursive: true });
+    const CUSTOM_LEAD = "acme-custom-lead-agent";
+    const rgDir = join(proj, "aidlc", "spaces", "default", "intents", INTENT_SLUG);
+    mkdirSync(join(rgDir, "audit"), { recursive: true });
+    writeFileSync(
+      join(proj, "aidlc", "spaces", "default", "intents", "active-intent"),
+      `${INTENT_SLUG}\n`,
+      "utf-8",
+    );
+    writeFileSync(
+      join(rgDir, "aidlc-state.md"),
+      "- **Status**: In-Progress\n\n## Stage Progress\n- [x] intent-capture — EXECUTE\n",
+      "utf-8",
+    );
+    writeFileSync(join(rgDir, "audit", "seed.md"), "## s\n**Event**: WORKFLOW_STARTED\n**Timestamp**: 2026-01-01T00:00:00Z\n", "utf-8");
+    // A runtime graph whose one stage names a custom lead_agent.
+    writeFileSync(
+      join(rgDir, "runtime-graph.json"),
+      JSON.stringify({
+        stages: [
+          { slug: "intent-capture", phase: "ideation", mode: "inline", lead_agent: CUSTOM_LEAD, support_agents: [] },
+        ],
+      }),
+      "utf-8",
+    );
+
+    const { bundleDir } = runExport(proj);
+    expect(bundleDir).not.toBeNull();
+    const normalized = readFileSync(join(bundleDir!, "evidence", "normalized.json"), "utf-8");
+    expect(normalized, "custom lead_agent leaked into normalized.json").not.toContain(CUSTOM_LEAD);
+    expect(normalized).toContain(`<id:${shortHash(CUSTOM_LEAD)}>`);
+  }, 30000);
 
   test("8: ROUTING — the engine carries `--export --output <dir>` into the named doctor command (Arden #1)", () => {
     const outDir = "/tmp/aidlc-export-routing-x";
@@ -481,5 +643,82 @@ describe("t237 doctor --export diagnostic exporter (#575)", () => {
     // `<id:<8-hex>>` token appears where the raw slug would have been.
     const expectedId = `<id:${shortHash(CUSTOM_SLUG)}>`;
     expect(reportJson).toContain(expectedId);
+  }, 30000);
+
+  test("16: repeated stage attempts pair chronologically — a jumped-back stage reads incomplete (Arden r2 #8)", () => {
+    // aidlc-jump re-emits STAGE_STARTED after a completion. The CURRENT attempt
+    // is the last start; a completion that predates it belongs to an old attempt
+    // and must NOT make the stage read completed with a stale duration.
+    const audit = [
+      "## started 1",
+      "**Timestamp**: 2026-01-01T00:00:00Z",
+      "**Event**: STAGE_STARTED",
+      "**Stage**: alpha",
+      "",
+      "## completed 1",
+      "**Timestamp**: 2026-01-01T01:00:00Z",
+      "**Event**: STAGE_COMPLETED",
+      "**Stage**: alpha",
+      "",
+      "## started 2 (jumped back, under re-work)",
+      "**Timestamp**: 2026-01-05T00:00:00Z",
+      "**Event**: STAGE_STARTED",
+      "**Stage**: alpha",
+      "",
+    ].join("\n");
+    const a = reconstructTimeline(audit, "").stages.find((s) => s.slug === "alpha");
+    expect(a).toBeDefined();
+    // Current attempt has no completion after the latest start → incomplete, no
+    // stale duration carried over from the earlier completed attempt.
+    expect(a!.abnormal).toContain("incomplete");
+    expect(a!.completedRaw).toBe(UNKNOWN);
+    expect(a!.durationMs).toBeNull();
+    // The latest start (not the first) anchors the attempt.
+    expect(a!.startedRaw).toBe("2026-01-05T00:00:00Z");
+  });
+
+  test("17: a truncated report.json stays valid JSON (Arden r2 #10)", () => {
+    // Force a per-file truncation by seeding a huge audit trail, then assert the
+    // machine-readable artifacts still parse (a byte slice would not).
+    const proj = freshProject();
+    const recDir = seededRecordDir(proj);
+    mkdirSync(join(recDir, "audit"), { recursive: true });
+    writeFileSync(
+      join(recDir, "aidlc-state.md"),
+      "# AI-DLC State Tracking\n\n## Project Information\n- **Status**: InProgress\n\n## Stage Progress\n- [?] feasibility — EXECUTE\n",
+      "utf-8",
+    );
+    // ~1.5 MiB of distinct stage events → the normalized/report JSON exceeds the
+    // 512 KiB per-file cap and is replaced by a valid-JSON placeholder.
+    const blocks: string[] = [];
+    for (let i = 0; i < 12000; i++) {
+      blocks.push(
+        `## e${i}\n**Timestamp**: 2026-01-01T00:00:00Z\n**Event**: STAGE_STARTED\n**Stage**: stage-${i}-abcdefghijklmnop\n`,
+      );
+    }
+    writeFileSync(join(recDir, "audit", "seed.md"), blocks.join("\n"), "utf-8");
+
+    const { bundleDir } = runExport(proj);
+    expect(bundleDir).not.toBeNull();
+    const reportJson = readFileSync(join(bundleDir!, "report.json"), "utf-8");
+    const normalized = readFileSync(join(bundleDir!, "evidence", "normalized.json"), "utf-8");
+    // Both must PARSE — a byte-sliced JSON blob would throw here.
+    expect(() => JSON.parse(reportJson)).not.toThrow();
+    expect(() => JSON.parse(normalized)).not.toThrow();
+    // At least one was actually truncated (placeholder carries the marker).
+    const manifest = JSON.parse(readFileSync(join(bundleDir!, "manifest.json"), "utf-8"));
+    expect(manifest.files.some((f: { truncated: boolean }) => f.truncated)).toBe(true);
+  }, 30000);
+
+  test("18: a bare --output (no path) errors instead of creating a dir named 'true' (Arden r2 #12)", () => {
+    const proj = freshProject();
+    const res = spawnSync(
+      BUN,
+      [UTIL, "doctor", "--export", "--project-dir", proj, "--output"],
+      { encoding: "utf-8", env: { ...process.env } },
+    );
+    const combined = `${res.stdout ?? ""}${res.stderr ?? ""}`;
+    // The export path reports the error and does not silently create ./true.
+    expect(combined).toMatch(/--output requires a directory path/);
   }, 30000);
 });

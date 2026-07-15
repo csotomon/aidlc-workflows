@@ -2557,20 +2557,22 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
       failed++;
     }
   }
-  // Structured diagnosis findings (workflow timeline analysis). Errors count
-  // toward `failed` so the exit code reflects them; warnings render but do not
-  // fail doctor (advisory, matching the legacy advisory rows). Info is omitted
-  // from the live view to keep it terse - the export carries the full set.
+  // Structured diagnosis findings (workflow timeline analysis) are ADVISORY and
+  // never change doctor's exit code: they render for visibility but do not count
+  // toward `failed`. Only the legacy environment/config checks above drive the
+  // exit status, so a plain `/aidlc --doctor` keeps its pre-existing contract \u2014
+  // a workflow-level diagnosis (which can be a soft, workflow-in-progress signal)
+  // must not flip the exit code that CI and scripts gate on. Info is omitted from
+  // the live view to keep it terse; the export carries the full set.
   const diagErrors = analysis.findings.filter((f) => f.severity === "error");
   const diagWarnings = analysis.findings.filter((f) => f.severity === "warning");
   if (diagErrors.length > 0 || diagWarnings.length > 0) {
     output += `${"\u2500".repeat(37)}\n`;
-    output += "Workflow diagnosis:\n";
+    output += "Workflow diagnosis (advisory):\n";
     for (const f of diagErrors) {
       output += `\u2717  [${f.id}] ${f.summary}`;
       if (f.remedy) output += ` (${f.remedy})`;
       output += "\n";
-      failed++;
     }
     for (const f of diagWarnings) {
       output += `!  [${f.id}] ${f.summary}\n`;
@@ -2595,9 +2597,17 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
   // --export: after the live report, write a redacted diagnostic report from
   // the SAME analysis this run already computed (issue #575). No second read,
   // no cached diagnosis. The export write never changes doctor's exit code.
-  if (flags.export === "true") {
+  // `--export` is a bare boolean flag; accept it whether the arg parser recorded
+  // it as "true" (bare) or a stray token followed it, so a trailing word can
+  // never silently disable the export.
+  if ("export" in flags) {
     try {
       const tsToken = fsSafeTimestamp();
+      // A bare `--output` (no value) parses to "true"; treat that as an error
+      // rather than creating a directory literally named "true".
+      if (flags.output === "true") {
+        throw new Error("--output requires a directory path (e.g. --output /tmp/aidlc-report)");
+      }
       const outParent = flags.output
         ? flags.output
         : join(projectDir, "aidlc", "diagnostics");

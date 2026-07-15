@@ -1,4 +1,4 @@
-// aidlc-doctor-bundle.ts — the `/aidlc --doctor --bundle` diagnostic exporter.
+// aidlc-doctor-bundle.ts — the `/aidlc --doctor --export` diagnostic exporter.
 //
 // When a workflow misbehaves (a gate that will not open, a stage that will not
 // advance, an approved report repeatedly refused) debugging today means asking
@@ -27,9 +27,11 @@
 //
 // SAFETY: redaction runs before any file is written. Home → ~, project root →
 // <project>, intent/unit ids → stable short hashes, and every emitted string is
-// scanned for absolute paths and secret-like values. Symlinks are never
-// followed; per-file and total size are capped; files are created owner-only
-// where the platform supports it.
+// scanned for absolute paths and secret-like values. Symlinked inputs are
+// refused — at the leaf AND via a realpath check that rejects any input whose
+// real location escapes the project root through a symlinked parent dir;
+// per-file and total size are capped; files are created owner-only where the
+// platform supports it.
 
 import {
   chmodSync,
@@ -38,6 +40,7 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   rmSync,
   statSync,
   type Stats,
@@ -50,6 +53,7 @@ import {
   auditBlockField,
   auditShardDir,
   docsRoot,
+  harnessDir,
   hooksHealthDir,
   isoTimestamp,
   listIntentDirs,
@@ -187,8 +191,13 @@ const SECRET_PATTERNS: Array<{ rule: string; re: RegExp; replace: string }> = [
   { rule: "bearer-token", re: /\bBearer\s+[A-Za-z0-9._~+/=-]{12,}\b/g, replace: "Bearer <redacted-token>" },
   { rule: "jwt", re: /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g, replace: "<redacted-jwt>" },
   {
+    // Matches both `password=hunter2` and JSON-shaped `"password": "hunter2"` —
+    // the optional closing quote before the separator covers the JSON form,
+    // where the key's own quote sits between the name and the colon. Whole JSON
+    // documents are redacted post-serialization, so this must catch the quoted
+    // shape too, not only bare `key=value`.
     rule: "assignment-secret",
-    re: /\b(api[_-]?key|secret|token|password|passwd|pwd)\b\s*[:=]\s*['"]?[A-Za-z0-9._~+/=-]{6,}['"]?/gi,
+    re: /\b(api[_-]?key|secret|token|password|passwd|pwd)\b['"]?\s*[:=]\s*['"]?[A-Za-z0-9._~+/=-]{6,}['"]?/gi,
     replace: "$1=<redacted>",
   },
   { rule: "long-hex-or-b64", re: /\b[A-Fa-f0-9]{40,}\b/g, replace: "<redacted-hex>" },
@@ -257,8 +266,9 @@ interface AuditEvent {
 // merged buffer concatenates per-shard files (readAllAuditShards sorts shard
 // FILENAMES, not events), and multi-host/worktree shards interleave in real
 // time, so a timestamp sort is required for durations and gate outcomes to be
-// correct. Events with an unparseable timestamp keep their ledger position
-// (sorted after parseable ones at the same instant) rather than being dropped.
+// correct. Events with an unparseable timestamp are sorted to the END (treated
+// as +Infinity), preserving their relative ledger order among themselves, rather
+// than being dropped.
 export function parseAuditEvents(audit: string): AuditEvent[] {
   const events: Array<AuditEvent & { pos: number }> = [];
   if (!audit.trim()) return events;
@@ -290,8 +300,6 @@ export interface StageTimelineEntry {
   durationMs: number | null; // null when either endpoint is unknown
   gate: "approved" | "rejected" | "unresolved" | "none";
   revisionCount: number | null;
-  reviewerOutcome: "READY" | "NOT-READY" | "none" | typeof UNKNOWN;
-  reviewerIterations: number | null;
   gapFromPrevMs: number | null; // time between previous stage's end and this start
   abnormal: string[]; // e.g. ["long-duration"], ["incomplete"]
 }
@@ -300,6 +308,10 @@ export interface Timeline {
   stages: StageTimelineEntry[];
   workflowStartedRaw: string | typeof UNKNOWN;
   workflowStatus: string; // from state file, or "unknown"
+  // True when the LATEST run (the scoped slice, not the whole buffer) recorded a
+  // WORKFLOW_COMPLETED. Rule 3 (state/audit drift) reads this so it never fires
+  // on an old completion left in the buffer by a completed-then-restarted run.
+  workflowCompleted: boolean;
   notes: string[];
 }
 
@@ -353,8 +365,19 @@ export function reconstructTimeline(audit: string, stateContent: string): Timeli
   let prevEndMs: number | null = null;
   for (const slug of stageOrder) {
     const evs = byStage.get(slug)!;
-    const started = firstEvent(evs, "STAGE_STARTED");
-    const completed = lastEvent(evs, "STAGE_COMPLETED");
+    // Pair CHRONOLOGICALLY, scoped to the CURRENT attempt: a stage jumped back
+    // to (aidlc-jump re-emits STAGE_STARTED after a completion) must not read as
+    // completed with a stale duration. The current attempt begins at the LAST
+    // STAGE_STARTED; it is complete only if a STAGE_COMPLETED follows that start
+    // (events are timestamp-sorted with ledger tie-break above). A completion
+    // that predates the latest start belongs to an earlier attempt and is
+    // ignored, so a re-worked stage correctly reads incomplete/in-progress.
+    const startIdx = lastEventIndex(evs, "STAGE_STARTED");
+    const started = startIdx >= 0 ? evs[startIdx] : undefined;
+    const completed =
+      startIdx >= 0
+        ? evs.slice(startIdx).find((e) => e.event === "STAGE_COMPLETED")
+        : lastEvent(evs, "STAGE_COMPLETED");
     const startedMs = started?.timestampMs ?? NaN;
     const completedMs = completed?.timestampMs ?? NaN;
 
@@ -373,9 +396,6 @@ export function reconstructTimeline(audit: string, stateContent: string): Timeli
     const revisions = evs.filter((e) => e.event === "STAGE_REVISING").length;
     const revisionCount = revisions > 0 ? revisions : completed || started ? 0 : null;
 
-    // Reviewer: derived from recorded review outcome fields when present.
-    const { outcome, iterations } = reviewerSignal(evs);
-
     const gapFromPrevMs =
       prevEndMs !== null && Number.isFinite(startedMs) ? startedMs - prevEndMs : null;
 
@@ -390,8 +410,6 @@ export function reconstructTimeline(audit: string, stateContent: string): Timeli
       durationMs,
       gate,
       revisionCount,
-      reviewerOutcome: outcome,
-      reviewerIterations: iterations,
       gapFromPrevMs,
       abnormal,
     });
@@ -406,16 +424,18 @@ export function reconstructTimeline(audit: string, stateContent: string): Timeli
     stages,
     workflowStartedRaw: workflowStarted?.timestampRaw ?? UNKNOWN,
     workflowStatus: status,
+    workflowCompleted: events.some((e) => e.event === "WORKFLOW_COMPLETED"),
     notes,
   };
 }
 
-function firstEvent(evs: AuditEvent[], name: string): AuditEvent | undefined {
-  return evs.find((e) => e.event === name);
-}
 function lastEvent(evs: AuditEvent[], name: string): AuditEvent | undefined {
   for (let i = evs.length - 1; i >= 0; i--) if (evs[i].event === name) return evs[i];
   return undefined;
+}
+function lastEventIndex(evs: AuditEvent[], name: string): number {
+  for (let i = evs.length - 1; i >= 0; i--) if (evs[i].event === name) return i;
+  return -1;
 }
 
 function extractStatus(stateContent: string): string {
@@ -443,29 +463,6 @@ function gateOutcome(
   if (latest === "rejected") return "rejected";
   if (latest === "awaiting" || checkboxState === "awaiting-approval") return "unresolved";
   return "none";
-}
-
-// Reviewer signal from recorded events. The review outcome is carried on the
-// STAGE_COMPLETED/AWAITING blocks as a **Review** field on harnesses that
-// record it; iterations come from a **Review Iterations** field. Absent →
-// unknown/null (never inferred).
-function reviewerSignal(evs: AuditEvent[]): {
-  outcome: StageTimelineEntry["reviewerOutcome"];
-  iterations: number | null;
-} {
-  let outcome: StageTimelineEntry["reviewerOutcome"] = "none";
-  let iterations: number | null = null;
-  for (const e of evs) {
-    const review = auditBlockField(e.block, "Review");
-    if (review) {
-      const up = review.toUpperCase();
-      if (up.includes("NOT-READY") || up.includes("NOT READY")) outcome = "NOT-READY";
-      else if (up.includes("READY")) outcome = "READY";
-    }
-    const iter = auditBlockField(e.block, "Review Iterations");
-    if (iter && /^\d+$/.test(iter.trim())) iterations = Number(iter.trim());
-  }
-  return { outcome, iterations };
 }
 
 // ===========================================================================
@@ -533,7 +530,6 @@ export function runDiagnosis(input: DiagnosisInput): DoctorFinding[] {
     authoredInputsNewestMtimeMs,
     markers,
     stateContent,
-    audit,
   } = input;
 
   // Rule 1 — open / unresolved gates. A stage whose gate never resolved is the
@@ -561,6 +557,14 @@ export function runDiagnosis(input: DiagnosisInput): DoctorFinding[] {
   // graph stage that is a mob (or subagent-with-supports), check each declared
   // collaborator's contribution file for existence + identity-marker match.
   // Never reads or reports the file body or its first line's content.
+  //
+  // GATED on the contributions/ directory actually existing for the stage. The
+  // collaborator-evidence mechanism (contributions/<agent>.md + `**Collaborator:**`
+  // marker) ships in PR #568 and is absent on this base — no code writes those
+  // files. Firing on their absence would false-error every valid workflow that
+  // ran a subagent-with-supports stage (the shipped graph has exactly one:
+  // reverse-engineering). Treating "no contributions/ dir at all" as "mechanism
+  // not in use" keeps the rule inert here and correct once #568 lands.
   if (recordAbsDir) {
     for (const stage of graphStages) {
       const needs =
@@ -572,6 +576,9 @@ export function runDiagnosis(input: DiagnosisInput): DoctorFinding[] {
       const tl = timeline.stages.find((t) => t.slug === stage.slug);
       if (!tl) continue;
       const contribDir = join(recordAbsDir, stage.phase, stage.slug, "contributions");
+      // Mechanism not in use on this project — no contributions/ dir was ever
+      // written for this stage, so there is no evidence contract to enforce.
+      if (!existsSync(contribDir)) continue;
       const problems: Array<Record<string, unknown>> = [];
       for (const agent of stage.support_agents) {
         const file = join(contribDir, `${agent}.md`);
@@ -600,10 +607,7 @@ export function runDiagnosis(input: DiagnosisInput): DoctorFinding[] {
           remedy:
             "Each declared collaborator must write its contribution file with the " +
             "identity-marker first line before approval. Dispatch the missing " +
-            "collaborator(s) to write their contribution, then re-report. " +
-            "WARNING: `AIDLC_DISABLE_ENSEMBLE_EVIDENCE=1` bypasses this validation " +
-            "and is appropriate ONLY when legitimate evidence was lost — it must " +
-            "never be automated.",
+            "collaborator(s) to write their contribution, then re-report.",
           safeToAutomate: false,
         });
       }
@@ -611,8 +615,12 @@ export function runDiagnosis(input: DiagnosisInput): DoctorFinding[] {
   }
 
   // Rule 3 — state / audit disagreement. Audit says the workflow completed but
-  // the state file does not (a torn write). Mirrors doctor's live drift check.
-  if (audit.includes("**Event**: WORKFLOW_COMPLETED") && stateContent) {
+  // the state file does not (a torn write). Scoped to the LATEST run via
+  // timeline.workflowCompleted — a whole-buffer scan would match an old
+  // WORKFLOW_COMPLETED left by a completed-then-restarted workflow and
+  // false-error a run that is legitimately still in progress (the exact case
+  // reconstructTimeline's latest-run scoping guards against).
+  if (timeline.workflowCompleted && stateContent) {
     const status = extractStatus(stateContent);
     if (status !== "Completed" && status !== UNKNOWN) {
       findings.push({
@@ -719,27 +727,12 @@ export function runDiagnosis(input: DiagnosisInput): DoctorFinding[] {
     });
   }
 
-  // Rule 7 — reviewer loop exhausted or incomplete. A stage that recorded a
-  // NOT-READY as its last reviewer signal but never reached a resolved gate.
-  for (const s of timeline.stages) {
-    if (s.reviewerOutcome === "NOT-READY" && s.gate !== "approved") {
-      findings.push({
-        id: "reviewer-loop-incomplete",
-        severity: "warning",
-        summary: `Stage "${hashSlugForDisplay(s.slug)}" last reviewer verdict was NOT-READY and the gate is ${s.gate}.`,
-        evidence: {
-          stage: hashSlugForDisplay(s.slug),
-          reviewerOutcome: s.reviewerOutcome,
-          reviewerIterations: s.reviewerIterations,
-          gate: s.gate,
-        },
-        remedy:
-          "The reviewer left findings unresolved. Re-invoke the stage lead to address " +
-          "the findings, or approve at the gate with the findings noted.",
-        safeToAutomate: false,
-      });
-    }
-  }
+  // NOTE: a reviewer-loop-incomplete rule was intentionally dropped here. It
+  // depended on **Review** / **Review Iterations** audit fields that no emitter
+  // on this base writes (the reviewer verdict lives in a `## Review` section on
+  // the primary artifact and the iteration counter lives only in conductor
+  // context — see stage-protocol.md), so the rule was unreachable dead code.
+  // Reinstate it only alongside a real audit emission for the reviewer verdict.
 
   return findings;
 }
@@ -830,7 +823,7 @@ const AUDIT_EVENT_ALLOWLIST = new Set([
 
 // Audit block fields kept per event (structural only — no Details/Request/
 // Reason free text, which can carry paths or decisions).
-const AUDIT_FIELD_ALLOWLIST = ["Event", "Timestamp", "Stage", "Slug", "Phase", "Review", "Review Iterations"];
+const AUDIT_FIELD_ALLOWLIST = ["Event", "Timestamp", "Stage", "Slug", "Phase"];
 
 export interface NormalizedEvidence {
   state: Record<string, string>;
@@ -929,9 +922,13 @@ function seedCustomIdentifiers(
   } catch {
     /* registry read best-effort */
   }
-  // Custom stage slugs + non-core support agents seen in the graph.
+  // Custom stage slugs + non-core lead/support agents seen in the graph. A
+  // plugin- or adaptive-workflow-supplied lead_agent is non-core and would
+  // otherwise serialize raw into evidence/normalized.json (seed() keeps core
+  // agents readable since they are in coreAgents).
   for (const s of graphStages) {
     seed(s.slug);
+    seed(s.lead_agent);
     for (const a of s.support_agents) seed(a);
   }
   // Any stage slug the timeline surfaced (covers audit-only slugs not in graph).
@@ -943,6 +940,9 @@ function seedCustomIdentifiers(
 // evidence. Pure of any file WRITE — buildBundle does the writing.
 export function runDoctorAnalysis(projectDir: string): DoctorAnalysis {
   const ctx = newRedactionContext(projectDir);
+  // Anchor the realpath'd project root so every safeRead rejects an input whose
+  // real location escapes the tree through a symlinked parent directory.
+  setBundleRoot(projectDir);
 
   const relRec = relativeRecordDir(projectDir);
   const intentSlug = relRec ? basename(relRec) : null;
@@ -1056,15 +1056,25 @@ export function buildBundle(
 
 // --- staging + redaction + budget ------------------------------------------
 
+// Replace an over-budget file's content with a size-recording placeholder that
+// PRESERVES the file's format. A `.json` file must stay parseable, so it becomes
+// a valid JSON object carrying the truncation reason (a byte-sliced JSON blob is
+// useless to a maintainer's tooling); a `.md`/other file gets a prose notice.
+// The manifest independently records the truncation (buildManifest reads
+// `truncated`), so the placeholder is the whole surviving content.
+function truncatePlaceholder(relPath: string, originalBytes: number, reason: string): string {
+  if (relPath.endsWith(".json")) {
+    return JSON.stringify({ truncated: true, reason, originalBytes }, null, 2);
+  }
+  return `[TRUNCATED: ${reason} — original ${originalBytes} bytes]\n`;
+}
+
 function stage(relPath: string, rawContent: string, ctx: RedactionContext): StagedFile {
   let content = redactString(rawContent, ctx);
   let truncated = false;
   const bytes = Buffer.byteLength(content, "utf-8");
   if (bytes > MAX_EVIDENCE_FILE_BYTES) {
-    // Truncate on a char boundary and append a recorded notice.
-    content =
-      content.slice(0, MAX_EVIDENCE_FILE_BYTES) +
-      `\n\n[TRUNCATED: file exceeded ${MAX_EVIDENCE_FILE_BYTES} bytes]\n`;
+    content = truncatePlaceholder(relPath, bytes, `file exceeded ${MAX_EVIDENCE_FILE_BYTES} bytes`);
     truncated = true;
   }
   return { relPath, content, truncated };
@@ -1072,7 +1082,9 @@ function stage(relPath: string, rawContent: string, ctx: RedactionContext): Stag
 
 // Trim staged files from the largest down until the total fits the budget,
 // recording each truncation. report.md/manifest are never dropped (they carry
-// the notices), so only oversized evidence content is trimmed.
+// the notices), so only oversized evidence content is trimmed. A trimmed file
+// is replaced by a format-preserving placeholder (valid JSON for .json), never
+// a byte slice, so the machine-readable artifacts always parse.
 function enforceTotalBudget(staged: StagedFile[]): void {
   const total = () => staged.reduce((n, f) => n + Buffer.byteLength(f.content, "utf-8"), 0);
   if (total() <= MAX_BUNDLE_BYTES) return;
@@ -1082,8 +1094,8 @@ function enforceTotalBudget(staged: StagedFile[]): void {
   for (const f of bySize) {
     if (total() <= MAX_BUNDLE_BYTES) break;
     if (f.relPath === "report.md") continue;
-    const target = Math.max(1024, Math.floor(Buffer.byteLength(f.content, "utf-8") / 2));
-    f.content = f.content.slice(0, target) + `\n[TRUNCATED: total-bundle budget]\n`;
+    const bytes = Buffer.byteLength(f.content, "utf-8");
+    f.content = truncatePlaceholder(f.relPath, bytes, "total-bundle budget exceeded");
     f.truncated = true;
   }
 }
@@ -1106,7 +1118,7 @@ function buildManifest(staged: StagedFile[], ctx: RedactionContext, intentHash: 
   return {
     bundleSchemaVersion: BUNDLE_SCHEMA_VERSION,
     aidlcVersion: AIDLC_VERSION,
-    harness: harnessTree(),
+    harness: harnessDir(),
     createdAt: safeIso(),
     intentIdHash: intentHash,
     files: staged.map((f) => ({
@@ -1188,7 +1200,7 @@ function renderReportMd(timeline: Timeline, findings: DoctorFinding[], intentHas
   L.push("");
   L.push(`- Bundle schema: ${BUNDLE_SCHEMA_VERSION}`);
   L.push(`- AI-DLC version: ${AIDLC_VERSION}`);
-  L.push(`- Harness: ${harnessTree()}`);
+  L.push(`- Harness: ${harnessDir()}`);
   L.push(`- Intent (hashed): ${intentHash}`);
   L.push(`- Workflow status: ${timeline.workflowStatus}`);
   L.push(`- Workflow started: ${timeline.workflowStartedRaw}`);
@@ -1221,11 +1233,11 @@ function renderReportMd(timeline: Timeline, findings: DoctorFinding[], intentHas
   if (timeline.stages.length === 0) {
     L.push(`No stages recorded.`);
   } else {
-    L.push(`| Stage | Started | Completed | Duration | Gate | Rev | Reviewer | Gap | Flags |`);
-    L.push(`|---|---|---|---|---|---|---|---|---|`);
+    L.push(`| Stage | Started | Completed | Duration | Gate | Rev | Gap | Flags |`);
+    L.push(`|---|---|---|---|---|---|---|---|`);
     for (const s of timeline.stages) {
       L.push(
-        `| ${hashSlugForDisplay(s.slug)} | ${s.startedRaw} | ${s.completedRaw} | ${fmtMs(s.durationMs)} | ${s.gate} | ${s.revisionCount ?? UNKNOWN} | ${s.reviewerOutcome}${s.reviewerIterations !== null ? `(${s.reviewerIterations})` : ""} | ${fmtMs(s.gapFromPrevMs)} | ${s.abnormal.join(",") || "-"} |`,
+        `| ${hashSlugForDisplay(s.slug)} | ${s.startedRaw} | ${s.completedRaw} | ${fmtMs(s.durationMs)} | ${s.gate} | ${s.revisionCount ?? UNKNOWN} | ${fmtMs(s.gapFromPrevMs)} | ${s.abnormal.join(",") || "-"} |`,
       );
     }
   }
@@ -1270,7 +1282,7 @@ export function mergeFindings(live: DoctorFinding[], diagnosis: DoctorFinding[])
 // tools/data/stage-graph.json). Used to seed the core-slug allowlist and as
 // the ensemble-mode source when the per-intent runtime graph is absent.
 function readShippedStageGraph(projectDir: string): GraphStageLite[] {
-  const p = join(projectDir, harnessTree(), "tools", "data", "stage-graph.json");
+  const p = join(projectDir, harnessDir(), "tools", "data", "stage-graph.json");
   if (!existsSync(p)) return [];
   return readGraphStages(p);
 }
@@ -1298,7 +1310,7 @@ function readGraphStages(rgPath: string): GraphStageLite[] {
 // Newest mtime across the authored stage source (aidlc-common/stages/**.md) —
 // the "authored inputs" the runtime graph is compiled from.
 function newestStageSourceMtime(projectDir: string): number | null {
-  const root = join(projectDir, harnessTree(), "aidlc-common", "stages");
+  const root = join(projectDir, harnessDir(), "aidlc-common", "stages");
   let newest: number | null = null;
   const walk = (dir: string): void => {
     let entries: string[];
@@ -1386,14 +1398,43 @@ function newestAuditMs(audit: string): number | null {
 
 // --- small safe helpers -----------------------------------------------------
 
-// Read a bundle INPUT, refusing to follow a symlink. Every source the exporter
-// reads (state, runtime graph, plan, markers, hook health) goes through here,
-// so a symlink planted at any input path — e.g. aidlc-state.md → /etc/passwd —
-// is rejected rather than read and (partially) copied into the report. lstat
-// does not traverse the link; a symlink (or any read error) yields "".
+// The realpath'd project root for the active analysis. Set once at the top of
+// runDoctorAnalysis; used to reject inputs whose REAL location escapes the
+// project tree via a symlinked PARENT directory (not just a symlinked leaf).
+let bundleRealRoot: string | null = null;
+function setBundleRoot(projectDir: string): void {
+  try {
+    bundleRealRoot = realpathSync(projectDir);
+  } catch {
+    bundleRealRoot = null;
+  }
+}
+
+// True when `path`'s real (symlink-resolved) location is inside the project
+// root — i.e. no component along the way is a symlink pointing outside the tree.
+// realpathSync resolves EVERY component, so a symlinked parent dir is caught,
+// not only a symlinked leaf. Unresolvable path (missing / broken link) → false.
+function withinProjectRoot(path: string): boolean {
+  if (!bundleRealRoot) return true; // root unknown → fall back to leaf-only guard
+  try {
+    const real = realpathSync(path);
+    return real === bundleRealRoot || real.startsWith(`${bundleRealRoot}/`);
+  } catch {
+    return false;
+  }
+}
+
+// Read a bundle INPUT, refusing to follow a symlink at the leaf OR any parent
+// component. Every source the exporter reads (state, runtime graph, plan,
+// markers, hook health) goes through here, so a symlink planted at any input
+// path — e.g. aidlc-state.md → /etc/passwd, or a symlinked audit/ dir — is
+// rejected rather than read and (partially) copied into the report. lstat
+// catches a leaf symlink; withinProjectRoot (realpath) catches a symlinked
+// parent that escapes the tree. A symlink (or any read error) yields "".
 function safeRead(path: string): string {
   try {
     if (lstatSync(path).isSymbolicLink()) return "";
+    if (!withinProjectRoot(path)) return "";
     return readFileSync(path, "utf-8");
   } catch {
     return "";
@@ -1424,6 +1465,10 @@ function isSymlink(path: string): boolean {
 function readAuditSafely(projectDir: string): string {
   const dir = auditShardDir(projectDir);
   if (dir && existsSync(dir)) {
+    // Refuse a symlinked audit/ dir itself (existsSync/readdirSync traverse a
+    // symlinked directory happily) or a real dir that escapes the project root,
+    // then refuse any symlinked shard file inside it.
+    if (isSymlink(dir) || !withinProjectRoot(dir)) return "";
     try {
       for (const e of readdirSync(dir)) {
         if (isSymlink(join(dir, e))) return "";
@@ -1451,15 +1496,4 @@ function safeIso(): string {
   } catch {
     return "unknown";
   }
-}
-
-// The harness tree dir (".claude"/".kiro"/".codex"). harnessTree resolves the
-// same value harnessDir() does but is spelled here to avoid importing the
-// display-only helper set; kept minimal.
-function harnessTree(): string {
-  // aidlc-lib's harnessDir() is the source of truth; re-derive via the tools
-  // dir this module ships in. Fallback ".claude" matches the lib's default.
-  const dir = import.meta.dir; // .../<harness>/tools
-  const m = dir.match(/(\.[a-z]+)[/\\]tools[/\\]?$/);
-  return m ? m[1] : ".claude";
 }

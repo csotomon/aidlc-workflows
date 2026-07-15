@@ -306,15 +306,14 @@ The report contains:
 | `evidence/normalized.json` | Allowlisted, normalized fields only — never raw files |
 
 **What it diagnoses:** the report reconstructs the workflow **timeline** from the
-audit trail (stage durations, gates, revisions, reviewer iterations, gaps, and
-abnormal/incomplete flags), then runs **deterministic** condition→remedy rules
-(no LLM) for the common "it will not advance" causes: unresolved approval gates,
-missing or malformed ensemble collaborator evidence, state/audit drift, a
-stale or missing runtime graph, cold or frozen hook heartbeats, and incomplete
-reviewer loops. Findings come from the same shared `DoctorFinding` model the
+audit trail (stage durations, gates, revisions, gaps, and abnormal/incomplete
+flags), then runs **deterministic** condition→remedy rules (no LLM) for the
+common "it will not advance" causes: unresolved approval gates, state/audit
+drift, and a stale or missing runtime graph / cold or frozen hook heartbeats.
+Findings come from the same shared `DoctorFinding` model the
 live `--doctor` uses, so the command and the report can never diverge. A remedy
-that names a recovery bypass (for example `AIDLC_DISABLE_ENSEMBLE_EVIDENCE=1`)
-is always flagged as not safe to automate.
+that names a recovery bypass (for example an `AIDLC_DISABLE_*` env var or an
+"archive your workspace" instruction) is always flagged as not safe to automate.
 
 **Safety.** The report never includes workspace source, raw state/audit/
 runtime-graph files, artifact/contribution/question/memory bodies, environment
