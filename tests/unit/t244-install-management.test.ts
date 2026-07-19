@@ -487,6 +487,112 @@ describe("t244 management lifecycle", () => {
     expect(existsSync(join(machine, "versions", version))).toBe(true);
   });
 
+  test("doctor reports quarantined transaction recovery with manual cleanup", () => {
+    const release = fixture();
+    const sandbox = temp("aidlc-t244-doctor-recovery-");
+    const machine = join(sandbox, "home", ".local", "share", "aidlc");
+    const project = temp("aidlc-t244-doctor-recovery-project-");
+    const env = {
+      AIDLC_INSTALL_ROOT: machine,
+      AIDLC_BIN_DIR: join(sandbox, "home", ".local", "bin"),
+    };
+    mkdirSync(join(project, ".git"));
+    const installed = run(LIFECYCLE, [
+      "upgrade", "--version", AIDLC_VERSION, "--harness", "claude", "--from", release,
+    ], project, env);
+    expect(installed.status, installed.stdout + installed.stderr).toBe(0);
+
+    const quarantine = join(
+      machine,
+      `.aidlc-recovery-${Date.now()}-${randomUUID()}`,
+    );
+    mkdirSync(quarantine);
+    writeFileSync(join(quarantine, "candidate.txt"), "recovery evidence\n");
+
+    const doctor = run(
+      DISPATCHER,
+      ["doctor", "--json", "--project-dir", project],
+      project,
+      env,
+    );
+    expect(doctor.status).toBe(1);
+    const checks = (JSON.parse(doctor.stdout) as {
+      data: { checks: Array<{ pass: boolean; label: string; fix?: string }> };
+    }).data.checks;
+    expect(checks).toContainEqual(expect.objectContaining({
+      pass: true,
+      label: "Transaction staging: no abandoned directories",
+    }));
+    expect(checks).toContainEqual(expect.objectContaining({
+      pass: false,
+      label: expect.stringContaining(
+        `Transaction recovery: 1 quarantined path(s): ${quarantine}`,
+      ),
+      fix: expect.stringContaining(
+        "recover any needed files, then remove the directory manually",
+      ),
+    }));
+
+    rmSync(quarantine, { recursive: true });
+    const clean = run(
+      DISPATCHER,
+      ["doctor", "--json", "--project-dir", project],
+      project,
+      env,
+    );
+    const cleanChecks = (JSON.parse(clean.stdout) as {
+      data: { checks: Array<{ pass: boolean; label: string }> };
+    }).data.checks;
+    expect(cleanChecks).toContainEqual(expect.objectContaining({
+      pass: true,
+      label: "Transaction recovery: no quarantined directories",
+    }));
+
+    // Project-domain transactions (init, plugin sync) quarantine into the
+    // project root; doctor must see those on every channel, machine install
+    // or not.
+    const projectQuarantine = join(
+      project,
+      `.aidlc-recovery-${Date.now()}-${randomUUID()}`,
+    );
+    mkdirSync(projectQuarantine);
+    writeFileSync(join(projectQuarantine, "candidate.txt"), "recovery evidence\n");
+    const projectDoctor = run(
+      DISPATCHER,
+      ["doctor", "--json", "--project-dir", project],
+      project,
+      env,
+    );
+    const projectChecks = (JSON.parse(projectDoctor.stdout) as {
+      data: { checks: Array<{ pass: boolean; label: string }> };
+    }).data.checks;
+    expect(projectChecks).toContainEqual(expect.objectContaining({
+      pass: false,
+      label: expect.stringContaining(
+        `Transaction recovery: 1 quarantined path(s): ${projectQuarantine}`,
+      ),
+    }));
+
+    const sourceChannelDoctor = run(
+      DISPATCHER,
+      ["doctor", "--json", "--project-dir", project],
+      project,
+      {
+        AIDLC_INSTALL_ROOT: join(sandbox, "absent", "share", "aidlc"),
+        AIDLC_BIN_DIR: join(sandbox, "absent", "bin"),
+      },
+    );
+    const sourceChecks = (JSON.parse(sourceChannelDoctor.stdout) as {
+      data: { checks: Array<{ pass: boolean; label: string }> };
+    }).data.checks;
+    expect(sourceChecks).toContainEqual(expect.objectContaining({
+      pass: false,
+      label: expect.stringContaining(
+        `Transaction recovery: 1 quarantined path(s): ${projectQuarantine}`,
+      ),
+    }));
+  }, 60_000);
+
   test("harness add/list/default/remove stays on the active release", () => {
     const release = fixture();
     const nextRelease = fixture(NEXT_VERSION);

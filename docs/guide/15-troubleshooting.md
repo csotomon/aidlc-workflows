@@ -42,13 +42,15 @@ This chapter covers common issues and their solutions, organized by symptom.
 | `project runtime <version> is incompatible with selected engine <version>` | Install and select a compatible retained version with `aidlc versions install <version>` and `aidlc use <version>`, or refresh the project intentionally with `aidlc init`. |
 | An upgrade was interrupted and `aidlc version` still shows the prior release | This is the safe pre-pointer state: the old command remains active. Run `aidlc doctor`, then rerun the same `aidlc upgrade --version <version>` command. A complete unused retained version may remain and is reported by `aidlc versions list`. |
 | `another AI-DLC mutation holds .../.aidlc-transaction.lock` | Let the active init/lifecycle command finish. If its process no longer exists, rerun the command; stale owner-private staging is swept only after the lock is safely reclaimed. |
+| `Transaction recovery: ... quarantined path(s)` from `aidlc doctor` | Stop AI-DLC mutations, inspect every listed `.aidlc-recovery-*` directory, and recover any needed files. Remove only those listed directories manually after the evidence is no longer needed; automatic staging cleanup intentionally preserves them. |
 | `existing aidlc is managed by Homebrew` / `Nix`, or the destination command is `not owned by the AI-DLC installer` | Upgrade through the reported package manager. To keep a separate native install, set `AIDLC_BIN_DIR` explicitly to an empty user-owned directory. Never replace a mixed-ownership command in place. |
 | `update cache is invalid` or machine config is rejected | Run `aidlc config global list`. Repair or remove only the named `%LOCALAPPDATA%\aidlc\config.json` (Windows) or `~/.local/share/aidlc/config.json` (macOS/Linux); unknown keys and stored credentials are rejected. |
 | `versions prune`, `harness remove`, or `uninstall` requires `--yes` | The command is running without an interactive stdin. Review the listed removals, then rerun with `--yes`; integrity refusals cannot be bypassed. |
 
 Native `aidlc doctor` also checks the active command pointer, rollback
 eligibility, retained pin completeness, stale pin registrations, abandoned
-transaction staging, project version skew, and whether native host
+transaction staging, quarantined transaction recovery, project version skew,
+and whether native host
 hooks and permission/trust entries consistently select the native command.
 
 ---

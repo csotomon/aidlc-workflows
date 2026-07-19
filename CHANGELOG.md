@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.5.5] - 2026-07-19
+
+AI-DLC now makes transaction recovery quarantines visible through `aidlc doctor` instead of leaving preserved crash evidence undiscoverable. **Upgrade:** update the native command, run `aidlc doctor`, inspect any listed `.aidlc-recovery-*` directories, recover needed files, and then remove only those listed quarantines manually.
+
+* `aidlc doctor` reports quarantined transaction evidence in a distinct failing row, lists every recovery path, and keeps live transaction staging separate from manual recovery cleanup.
+
 ## [2.5.4] - 2026-07-19
 
 The AI-DLC install mechanism is now generally available through the self-contained `aidlc` command, while the established `dist/<harness>/` copy channel remains Bun-invoked until the native release path is field-proven. Release trust is based on authenticated SHA-256 checksums, TLS, and published SLSA provenance attestations. **Upgrade:** install or upgrade the native command, then run `aidlc init --dry-run` and `aidlc init` in each project; copy-channel users may continue copying `dist/<harness>/` and invoking it through Bun.

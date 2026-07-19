@@ -22,7 +22,7 @@
 // The known-answer label strings are READ from the shipped doctor handler
 // (dist/claude/.claude/tools/aidlc-utility.ts handleDoctor), NOT guessed:
 //   - header literal:     "AI-DLC Health Check"               (utility.ts:1355)
-//   - runtime label:      "Self-contained binary runtime ..." (utility.ts)
+//   - runtime label:      "Source execution runtime: bun is available" (utility.ts)
 //   - hook check label:   "<hook>.ts present"                 (utility.ts:356)
 //   - settings label:     "settings.json present"            (utility.ts:365)
 //   - shell-ready label:  "workspace shell ready"            (utility.ts:597; P4: the
@@ -64,7 +64,7 @@ const DRIVE_TIMEOUT_MS = Math.max(120_000, TEST_TIMEOUT_MS - 15_000);
 
 // Known-answer doctor strings, read from the shipped handler (see header).
 const DOCTOR_HEADER = "AI-DLC Health Check";
-const DOCTOR_RUNTIME_LABEL = "Self-contained binary runtime (bun is not required)";
+const DOCTOR_RUNTIME_LABEL = "Source execution runtime: bun is available";
 const DOCTOR_HOOK_LABEL = "aidlc-audit-logger.ts present";
 // handleDoctor emits a separate `${h}.ts present` line per hook (utility.ts:356);
 // the .sh checked BOTH audit-logger (tests 1,4) AND session-start (tests 2,5),

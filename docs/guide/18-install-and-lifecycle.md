@@ -281,6 +281,12 @@ pointer and uninstall cleanup use a recoverable continuation.
 trust, installed-versus-composed plugins, transaction staging, stale pin
 registrations, update cache, and the project health checks. Follow a named
 leftover-staging remediation; do not delete a live transaction directory.
+Interrupted transaction evidence that cannot be swept safely is retained in a
+listed `.aidlc-recovery-*` quarantine, under the machine install root for
+lifecycle operations and under the project root for init and plugin
+synchronization. Inspect each quarantine and recover any
+needed files, then, with no AI-DLC mutation running, remove only the listed
+directory manually; the automatic staging sweep never deletes quarantines.
 The complete representative transcript is in
 [CLI Commands](12-cli-commands.md#aidlc---doctor--health-check).
 
