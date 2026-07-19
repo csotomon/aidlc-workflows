@@ -51,7 +51,12 @@ export function defaultHarnessPath(): string {
 function validReleaseUrl(value: string): boolean {
   try {
     const parsed = new URL(value);
-    if (parsed.username || parsed.password) return false;
+    if (
+      parsed.username ||
+      parsed.password ||
+      parsed.search ||
+      parsed.hash
+    ) return false;
     return parsed.protocol === "https:" ||
       (parsed.protocol === "http:" &&
         (parsed.hostname === "127.0.0.1" || parsed.hostname === "localhost"));
@@ -84,7 +89,7 @@ function validateMachineConfig(value: unknown): MachineConfig {
       !validReleaseUrl(record["release-base-url"]))
   ) {
     throw new Error(
-      "machine config release-base-url must be HTTPS without credentials",
+      "machine config release-base-url must be HTTPS without credentials, query, or fragment",
     );
   }
   if (
@@ -166,7 +171,9 @@ function parseValue(key: MachineConfigKey, value: string): string | boolean {
   }
   if (key === "release-base-url") {
     if (!validReleaseUrl(value)) {
-      throw new Error("release-base-url must be HTTPS without credentials");
+      throw new Error(
+        "release-base-url must be HTTPS without credentials, query, or fragment",
+      );
     }
     return value.replace(/\/+$/, "");
   }

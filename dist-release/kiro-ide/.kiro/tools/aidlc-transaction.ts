@@ -22,6 +22,10 @@ import {
 } from "node:fs";
 import { basename, dirname, isAbsolute, join, posix, relative, resolve, sep } from "node:path";
 import { sha256Bytes } from "./aidlc-distribution.ts";
+import {
+  machineTransactionRoot,
+  windowsUninstallFencePath,
+} from "./aidlc-install-paths.ts";
 
 export type TransactionOperation =
   | { kind: "write"; path: string; data: string; mode?: number; expected?: string | "absent" }
@@ -52,6 +56,7 @@ export type TransactionPlan = {
 export type TransactionOptions = {
   failAfter?: number;
   failAt?: string;
+  allowPendingWindowsUninstall?: boolean;
   validateCandidates?: (candidateRoot: string) => void;
   validateCommitted?: () => void;
 };
@@ -92,6 +97,15 @@ function pathExists(path: string): boolean {
   try {
     lstatSync(path);
     return true;
+  } catch {
+    return false;
+  }
+}
+
+function pendingWindowsUninstallBlocks(root: string): boolean {
+  try {
+    return root === canonicalRoot(machineTransactionRoot()) &&
+      pathExists(windowsUninstallFencePath());
   } catch {
     return false;
   }
@@ -388,6 +402,14 @@ export function executePlan(
   try {
     lock = acquireLock(root, lockPath, staging);
     failpoint(options, "after-lock");
+    if (
+      !options.allowPendingWindowsUninstall &&
+      pendingWindowsUninstallBlocks(root)
+    ) {
+      throw new Error(
+        "a pending Windows uninstall blocks machine mutation; run aidlc doctor",
+      );
+    }
     sweepOrphanStaging(root, staging);
     failpoint(options, "before-plan-validation");
     verifyPlan(plan, root);

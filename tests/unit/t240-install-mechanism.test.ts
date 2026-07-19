@@ -29,9 +29,11 @@ import {
 } from "../../core/tools/aidlc-archive.ts";
 import { sha256Bytes, walkFiles } from "../../core/tools/aidlc-distribution.ts";
 import {
+  machineTransactionRoot,
   packageManagerForExecutable,
   projectDirFrom,
   targetTriple,
+  windowsUninstallFencePath,
 } from "../../core/tools/aidlc-install-paths.ts";
 import { activate } from "../../core/tools/aidlc-lifecycle.ts";
 import { acquireRelease, digest, verifyReleaseDirectory } from "../../core/tools/aidlc-release.ts";
@@ -347,6 +349,39 @@ describe("t240 archive and transaction safety", () => {
     })).toThrow("another AI-DLC mutation holds");
     expect(existsSync(join(root, "blocked.txt"))).toBe(false);
     expect(existsSync(join(root, ".aidlc-transaction.lock"))).toBe(true);
+  });
+
+  test("pending Windows uninstall fence blocks machine mutation under the shared lock", () => {
+    const machine = temp("aidlc-t239-uninstall-fence-");
+    const saved = {
+      root: process.env.AIDLC_INSTALL_ROOT,
+      bin: process.env.AIDLC_BIN_DIR,
+    };
+    process.env.AIDLC_INSTALL_ROOT = machine;
+    process.env.AIDLC_BIN_DIR = join(machine, "bin");
+    try {
+      const root = machineTransactionRoot();
+      const fence = windowsUninstallFencePath();
+      writeFileSync(fence, "{}\n");
+      expect(() => executePlan({
+        schemaVersion: 1,
+        root,
+        operations: [writeOperation("blocked.txt", "no\n", "absent")],
+      })).toThrow("pending Windows uninstall blocks machine mutation");
+      expect(existsSync(join(root, "blocked.txt"))).toBe(false);
+
+      executePlan({
+        schemaVersion: 1,
+        root,
+        operations: [writeOperation("allowed.txt", "yes\n", "absent")],
+      }, { allowPendingWindowsUninstall: true });
+      expect(readFileSync(join(root, "allowed.txt"), "utf-8")).toBe("yes\n");
+    } finally {
+      if (saved.root === undefined) delete process.env.AIDLC_INSTALL_ROOT;
+      else process.env.AIDLC_INSTALL_ROOT = saved.root;
+      if (saved.bin === undefined) delete process.env.AIDLC_BIN_DIR;
+      else process.env.AIDLC_BIN_DIR = saved.bin;
+    }
   });
 
   test("transaction release never unlinks a replacement lock it does not own", () => {
@@ -1289,6 +1324,21 @@ describe("t240 release lifecycle", () => {
         urlMessage = error instanceof Error ? error.message : String(error);
       }
       expect(urlMessage).not.toContain("url-secret");
+
+      let queryMessage = "";
+      try {
+        await acquireRelease({
+          version: manifest.version,
+          names: [binary],
+          baseUrl:
+            `http://127.0.0.1:${ignoredMirror.port}?token=query-secret#fragment-secret`,
+        });
+      } catch (error) {
+        queryMessage = error instanceof Error ? error.message : String(error);
+      }
+      expect(queryMessage).toContain("must not include a query or fragment");
+      expect(queryMessage).not.toContain("query-secret");
+      expect(queryMessage).not.toContain("fragment-secret");
     } finally {
       origin.stop(true);
       proxy.stop(true);

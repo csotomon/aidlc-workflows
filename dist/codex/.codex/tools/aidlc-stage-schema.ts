@@ -1,7 +1,7 @@
 // Stage frontmatter schema — machine-checkable realisation of the spec in
 // dist/claude/.claude/aidlc-common/protocols/stage-definition.md. Consumed by
 // parseStageFrontmatter (lib.ts), aidlc-graph compile, and the doctor
-// schema-lint check (aidlc-utility.ts handleDoctor). Hand-rolled,
+// schema-lint check (aidlc-utility.ts collectDoctorReport). Hand-rolled,
 // zero-dep — matches parseAgentFrontmatter precedent in lib.ts. Pure
 // validator: no I/O, no YAML parsing, no mutation — callers pass an
 // already-parsed object.

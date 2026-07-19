@@ -7,12 +7,18 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, join, resolve, sep } from "node:path";
+import { basename, join, relative, resolve, sep } from "node:path";
 import {
   activeExecutablePath,
   commandPath,
   installRoot,
+  machineTransactionRoot,
+  windowsUninstallFencePath,
 } from "./aidlc-install-paths.ts";
+import {
+  executePlan,
+  writeOperation,
+} from "./aidlc-transaction.ts";
 
 export type WindowsUninstallJournal = {
   schemaVersion: 1;
@@ -24,6 +30,7 @@ export type WindowsUninstallJournal = {
   commandPath: string;
   pointerPath: string;
   cleanupPath: string;
+  fencePath: string;
   purge: boolean;
   preserved: string[];
 };
@@ -42,11 +49,16 @@ function cleanupScript(journal: WindowsUninstallJournal): string {
     `$expectedCommand = [IO.Path]::GetFullPath('${quoted(journal.commandPath)}')`,
     `$expectedPointer = [IO.Path]::GetFullPath('${quoted(journal.pointerPath)}')`,
     `$expectedCleanup = [IO.Path]::GetFullPath('${quoted(journal.cleanupPath)}')`,
+    `$expectedFence = [IO.Path]::GetFullPath('${quoted(journal.fencePath)}')`,
     "$root = [IO.Path]::GetFullPath([string]$journal.installRoot)",
     "$command = [IO.Path]::GetFullPath([string]$journal.commandPath)",
     "$pointer = [IO.Path]::GetFullPath([string]$journal.pointerPath)",
     "$cleanup = [IO.Path]::GetFullPath([string]$journal.cleanupPath)",
-    "if ($root -ne $expectedRoot -or $command -ne $expectedCommand -or $pointer -ne $expectedPointer -or $cleanup -ne $expectedCleanup -or $cleanup -ne [IO.Path]::GetFullPath($PSCommandPath)) { exit 4 }",
+    "$fence = [IO.Path]::GetFullPath([string]$journal.fencePath)",
+    "if ($root -ne $expectedRoot -or $command -ne $expectedCommand -or $pointer -ne $expectedPointer -or $cleanup -ne $expectedCleanup -or $fence -ne $expectedFence -or $cleanup -ne [IO.Path]::GetFullPath($PSCommandPath)) { exit 4 }",
+    "if (-not (Test-Path -LiteralPath $fence -PathType Leaf)) { exit 4 }",
+    "$fenceRecord = Get-Content -Raw -LiteralPath $fence | ConvertFrom-Json",
+    "if ($fenceRecord.schemaVersion -ne 1 -or $fenceRecord.operation -ne 'windows-uninstall-continuation' -or [IO.Path]::GetFullPath([string]$fenceRecord.journalPath) -ne [IO.Path]::GetFullPath($JournalPath)) { exit 4 }",
     "function Wait-ForExit([int]$TargetPid) {",
     "  if ($TargetPid -le 0) { return }",
     "  for ($i = 0; $i -lt 600; $i++) {",
@@ -67,7 +79,14 @@ function cleanupScript(journal: WindowsUninstallJournal): string {
     "}",
     "if (Test-Path -LiteralPath $command) { Remove-Item -LiteralPath $command -Force -ErrorAction Stop }",
     "if (Test-Path -LiteralPath $pointer) { Remove-Item -LiteralPath $pointer -Force -ErrorAction Stop }",
-    "if (Test-Path -LiteralPath $root) { Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction Stop }",
+    "$fenceInsideRoot = $fence.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)",
+    "if (Test-Path -LiteralPath $root) {",
+    "  if ($fenceInsideRoot) {",
+    "    Get-ChildItem -Force -LiteralPath $root | Where-Object { [IO.Path]::GetFullPath($_.FullName) -ne $fence } | Remove-Item -Recurse -Force -ErrorAction Stop",
+    "  } else {",
+    "    Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction Stop",
+    "  }",
+    "}",
     "foreach ($entry in $saved.GetEnumerator()) {",
     "  [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($entry.Key)) | Out-Null",
     "  [IO.File]::WriteAllBytes($entry.Key, $entry.Value)",
@@ -75,10 +94,28 @@ function cleanupScript(journal: WindowsUninstallJournal): string {
     "$journal.status = 'completed'",
     "$journal.completedAt = [DateTime]::UtcNow.ToString('o')",
     "$journal | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $JournalPath",
+    "Remove-Item -LiteralPath $fence -Force -ErrorAction Stop",
+    "if ($fenceInsideRoot -and $saved.Count -eq 0) { Remove-Item -LiteralPath $root -Force -ErrorAction SilentlyContinue }",
     "Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue",
     "Remove-Item -LiteralPath $JournalPath -Force -ErrorAction SilentlyContinue",
     "",
   ].join("\r\n");
+}
+
+function fenceReferencesJournal(fencePath: string, journalPath: string): boolean {
+  try {
+    const value = JSON.parse(readFileSync(fencePath, "utf-8")) as {
+      schemaVersion?: unknown;
+      operation?: unknown;
+      journalPath?: unknown;
+    };
+    return value.schemaVersion === 1 &&
+      value.operation === "windows-uninstall-continuation" &&
+      typeof value.journalPath === "string" &&
+      resolve(value.journalPath) === resolve(journalPath);
+  } catch {
+    return false;
+  }
 }
 
 function readJournal(path: string): WindowsUninstallJournal | null {
@@ -97,6 +134,7 @@ function readJournal(path: string): WindowsUninstallJournal | null {
       typeof value.commandPath !== "string" ||
       typeof value.pointerPath !== "string" ||
       typeof value.cleanupPath !== "string" ||
+      typeof value.fencePath !== "string" ||
       typeof value.purge !== "boolean" ||
       !Array.isArray(value.preserved) ||
       value.preserved.some((entry) => typeof entry !== "string") ||
@@ -104,6 +142,8 @@ function readJournal(path: string): WindowsUninstallJournal | null {
       resolve(value.commandPath) !== resolve(commandPath()) ||
       resolve(value.pointerPath) !== resolve(activeExecutablePath()) ||
       resolve(value.cleanupPath) !== resolve(cleanupPath) ||
+      resolve(value.fencePath) !== resolve(windowsUninstallFencePath()) ||
+      !fenceReferencesJournal(value.fencePath, path) ||
       !existsSync(cleanupPath)
     ) {
       return null;
@@ -165,6 +205,13 @@ export function scanWindowsUninstallJournals(): {
   } catch {
     // An unreadable temp directory has no actionable per-install evidence.
   }
+  const fencePath = windowsUninstallFencePath();
+  if (
+    existsSync(fencePath) &&
+    !pending.some(({ path }) => fenceReferencesJournal(fencePath, path))
+  ) {
+    invalid.push(fencePath);
+  }
   return { pending, invalid };
 }
 
@@ -205,6 +252,12 @@ export function scheduleWindowsUninstall(
   purge: boolean,
   preserved: readonly string[],
 ): void {
+  const fencePath = windowsUninstallFencePath();
+  if (existsSync(fencePath)) {
+    throw new Error(
+      `pending Windows uninstall fence requires recovery: ${fencePath}`,
+    );
+  }
   const id = randomUUID();
   const journalPath = join(tmpdir(), `aidlc-uninstall-${id}.json`);
   const cleanupPath = join(tmpdir(), `aidlc-uninstall-${id}.ps1`);
@@ -218,6 +271,7 @@ export function scheduleWindowsUninstall(
     commandPath: resolve(commandPath()),
     pointerPath: resolve(activeExecutablePath()),
     cleanupPath: resolve(cleanupPath),
+    fencePath: resolve(fencePath),
     purge,
     preserved: purge ? [] : preserved.map((path) => resolve(path)),
   };
@@ -227,9 +281,28 @@ export function scheduleWindowsUninstall(
       flag: "wx",
       mode: 0o600,
     });
+    executePlan({
+      schemaVersion: 1,
+      root: machineTransactionRoot(),
+      operations: [writeOperation(
+        relative(machineTransactionRoot(), journal.fencePath),
+        `${JSON.stringify({
+          schemaVersion: 1,
+          operation: journal.operation,
+          journalPath,
+        }, null, 2)}\n`,
+        "absent",
+        0o600,
+      )],
+    }, {
+      allowPendingWindowsUninstall: true,
+    });
     launch(journalPath, journal);
   } catch (error) {
-    if (!existsSync(journalPath)) rmSync(cleanupPath, { force: true });
+    if (!existsSync(journal.fencePath)) {
+      rmSync(journalPath, { force: true });
+      rmSync(cleanupPath, { force: true });
+    }
     throw error;
   }
 }

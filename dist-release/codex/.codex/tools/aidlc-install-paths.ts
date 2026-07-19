@@ -94,6 +94,14 @@ export function activeExecutablePath(): string {
   return join(installRoot(), "active-executable");
 }
 
+export function windowsUninstallFencePath(): string {
+  const key = createHash("sha256")
+    .update(resolve(installRoot()))
+    .digest("hex")
+    .slice(0, 16);
+  return join(machineTransactionRoot(), `.aidlc-uninstall-${key}.json`);
+}
+
 export function rollbackVersionPath(): string {
   return join(installRoot(), "rollback-version");
 }
@@ -244,9 +252,6 @@ export function inspectInstalledVersion(
       distributions,
       reason: error instanceof Error ? error.message : String(error),
     };
-  }
-  if (distributions.length === 0) {
-    return { complete: false, distributions, reason: "no harness runtime is installed" };
   }
   if (requiredDistribution && !distributions.includes(requiredDistribution)) {
     return {

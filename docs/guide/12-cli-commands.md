@@ -107,6 +107,9 @@ aidlc package verify ./aidlc-offline
 removal, version pruning, and uninstall prompt on a TTY and require `--yes`
 when stdin is not interactive. Active, rollback, and registered pinned
 versions are never pruned; stale pin paths are reported for explicit cleanup.
+Removing the final harness leaves the native command available for lifecycle
+management; doctor reports the missing runtime, upgrades carry the empty set
+forward, and `aidlc harness add <name>` restores project operations.
 `aidlc uninstall` leaves project trees untouched and preserves machine config,
 cache, pins, and the harness default unless `--purge` is supplied.
 
@@ -118,7 +121,9 @@ management listings never use the network: they read only a valid 24-hour
 cache. Interactive human `aidlc doctor` may refresh stale data within 750 ms;
 non-TTY, JSON, and quiet doctor runs remain network-free unless
 `--check-updates` is explicit. `doctor --check-updates` and
-`upgrade --check` use a 15-second budget.
+`upgrade --check` use a 15-second budget. Doctor refreshes accept
+`--release-base-url <url>` and `--ca-bundle <absolute-path>`; release URLs
+cannot contain credentials, a query, or a fragment.
 
 All lifecycle commands support human output and `--json`; mutating commands
 also support `--dry-run` where listed by `aidlc help --all`.

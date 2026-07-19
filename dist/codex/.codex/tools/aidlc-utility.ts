@@ -131,13 +131,6 @@ import {
   rollbackVersionPath,
   versionRoot as installedVersionRoot,
 } from "./aidlc-install-paths.ts";
-import {
-  cachedUpdateState,
-  refreshUpdateState,
-} from "./aidlc-update.ts";
-import {
-  scanWindowsUninstallJournals,
-} from "./aidlc-windows-uninstall.ts";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -1192,16 +1185,25 @@ function codexNativeTrustHashes(hooksPath: string): string[] {
   return hashes;
 }
 
-async function handleDoctor(
+export type DoctorCheck = {
+  pass: boolean;
+  severity?: "warn";
+  label: string;
+  fix?: string;
+};
+
+export type DoctorReport = {
+  checks: DoctorCheck[];
+  passed: number;
+  warnings: number;
+  failed: number;
+};
+
+export async function collectDoctorReport(
   projectDir: string,
-  flags: Record<string, string | boolean> = {},
-): Promise<void> {
-  const results: Array<{
-    pass: boolean;
-    severity?: "warn";
-    label: string;
-    fix?: string;
-  }> = [];
+  extraChecks: readonly DoctorCheck[] = [],
+): Promise<DoctorReport> {
+  const results: DoctorCheck[] = [];
   const isWindows = process.platform === "win32";
 
   // 1. bun installed — check PATH (Bun.which handles Windows .exe suffix automatically)
@@ -1224,14 +1226,19 @@ async function handleDoctor(
       ? inspectInstalledVersion(installedVersion)
       : { complete: false, distributions: [], reason: "active version marker unavailable" };
     const distributions = installedState.distributions;
+    const runtimeReady = installedState.complete && distributions.length > 0;
     results.push({
-      pass: installedVersion !== null && installedState.complete,
-      label: installedVersion && installedState.complete
+      pass: installedVersion !== null && runtimeReady,
+      label: installedVersion && runtimeReady
         ? `Installed runtime: ${installedVersion} [${distributions.join(", ")}]`
+        : installedVersion && installedState.complete
+        ? `Installed runtime ${installedVersion} has no harness installed`
         : installedVersion
         ? `Installed runtime ${installedVersion} is incomplete: ${installedState.reason ?? "unknown reason"}`
         : "Installed runtime: active version marker unavailable",
-      fix: "re-run the installer with --harness <name>",
+      fix: installedState.complete
+        ? "run `aidlc harness add <name>`"
+        : "re-run the installer with --harness <name>",
     });
     const command = commandPath();
     const expectedExecutable = installedVersion
@@ -1300,26 +1307,6 @@ async function handleDoctor(
         : `Transaction staging: ${abandoned.length} abandoned path(s): ${abandoned.join(", ")}`,
       fix: "finish any active AI-DLC command, then rerun the command to trigger the safe staging sweep",
     });
-
-    if (isWindows) {
-      const uninstallRecovery = scanWindowsUninstallJournals();
-      results.push({
-        pass: uninstallRecovery.pending.length === 0 &&
-          uninstallRecovery.invalid.length === 0,
-        label: uninstallRecovery.pending.length === 0 &&
-            uninstallRecovery.invalid.length === 0
-          ? "Windows uninstall recovery: no pending continuations"
-          : `Windows uninstall recovery: ${
-            uninstallRecovery.pending.length
-          } pending and ${uninstallRecovery.invalid.length} invalid continuation(s): ${
-            [
-              ...uninstallRecovery.pending.map((item) => item.path),
-              ...uninstallRecovery.invalid,
-            ].join(", ")
-          }`,
-        fix: "finish active AI-DLC commands, then run `aidlc version` to resume cleanup",
-      });
-    }
 
     const pinsPath = join(installRoot(), "pins.json");
     let stalePins: string[] = [];
@@ -3148,31 +3135,7 @@ async function handleDoctor(
     // Advisory only; a scan failure must not hide the main doctor report.
   }
 
-  const explicitUpdateCheck = flags["check-updates"] === "true";
-  const interactiveUpdateCheck =
-    process.stdin.isTTY &&
-    process.stdout.isTTY &&
-    flags.json !== "true" &&
-    flags.quiet !== "true";
-  let update = cachedUpdateState();
-  if (
-    explicitUpdateCheck ||
-    (interactiveUpdateCheck &&
-      (update.stale === true ||
-        ["stale", "absent", "unavailable"].includes(update.state)))
-  ) {
-    update = await refreshUpdateState(explicitUpdateCheck ? 15_000 : 750, {
-      offline: flags.offline === "true" ? true : undefined,
-    });
-  }
-  results.push({
-    pass: update.state === "current",
-    severity: update.state === "current" || update.state === "invalid-config"
-      ? undefined
-      : "warn",
-    label: `Update: ${update.message}`,
-    fix: update.state === "behind" ? "run `aidlc upgrade`" : undefined,
-  });
+  results.push(...extraChecks);
 
   // Cold-safe gate: only emit audit when an audit trail already exists. On a
   // pristine project (no audit shard / flat audit.md) doctor prints its health
@@ -3188,50 +3151,17 @@ async function handleDoctor(
     });
   }
 
-  // Print report
-  let output = "AI-DLC Health Check\n";
-  output += `${"\u2500".repeat(37)}\n`;
   let passed = 0;
   let warnings = 0;
   let failed = 0;
   for (const r of results) {
     if (r.severity === "warn") {
-      output += `!  ${r.label}`;
-      if (r.fix) output += ` — ${r.fix}`;
-      output += "\n";
       warnings++;
     } else if (r.pass) {
-      output += `\u2713  ${r.label}\n`;
       passed++;
     } else {
-      output += `\u2717  ${r.label}`;
-      if (r.fix) output += ` — ${r.fix}`;
-      output += "\n";
       failed++;
     }
-  }
-  output += `${"\u2500".repeat(37)}\n`;
-  output += `${passed} passed, ${warnings} warnings, ${failed} failed\n`;
-
-  if (flags.json) {
-    const code = update.state === "invalid-config" ? 2 : failed > 0 ? 1 : 0;
-    process.stdout.write(`${JSON.stringify({
-      schemaVersion: 1,
-      ok: code === 0,
-      code,
-      status: failed > 0 ? "failed" : warnings > 0 ? "warning" : "ok",
-      message: `${passed} passed, ${warnings} warnings, ${failed} failed`,
-      data: {
-        passed,
-        warnings,
-        failed,
-        checks: results,
-      },
-    })}\n`);
-  } else if (flags.quiet) {
-    process.stdout.write(`${passed} passed, ${warnings} warnings, ${failed} failed\n`);
-  } else {
-    process.stdout.write(output);
   }
 
   // Audit only if audit.md already existed when doctor started (cold-safe —
@@ -3244,11 +3174,7 @@ async function handleDoctor(
     });
   }
 
-  // Exit non-zero on any check failure so CI and scripts get a clear
-  // signal. Doctor's stdout carries the diagnostic regardless of exit
-  // code — the orchestrator's tool-failure handler was updated in this
-  // same change to print stdout (not stderr) for doctor.
-  process.exit(update.state === "invalid-config" ? 2 : failed > 0 ? 1 : 0);
+  return { checks: results, passed, warnings, failed };
 }
 
 // ---------------------------------------------------------------------------
@@ -5687,7 +5613,7 @@ export async function main(argv: string[]): Promise<void> {
       handleStatus(projectDir, flags);
       break;
     case "doctor":
-      await handleDoctor(projectDir, flags);
+      await (await import("./aidlc-doctor.ts")).main(rawArgs);
       break;
     case "intent-birth":
       handleIntentBirth(projectDir, flags);

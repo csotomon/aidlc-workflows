@@ -20,8 +20,11 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   activeExecutablePath,
+  commandPath,
   readActiveExecutable,
+  windowsUninstallFencePath,
 } from "../../core/tools/aidlc-install-paths.ts";
+import { doctorUpdateState } from "../../core/tools/aidlc-doctor.ts";
 import { activate } from "../../core/tools/aidlc-lifecycle.ts";
 import {
   readMachineConfig,
@@ -73,6 +76,26 @@ function run(
     stdout: result.stdout ?? "",
     stderr: result.stderr ?? "",
   };
+}
+
+async function runAsync(
+  tool: string,
+  args: string[],
+  cwd: string,
+  env: NodeJS.ProcessEnv = {},
+): Promise<{ status: number; stdout: string; stderr: string }> {
+  const child = Bun.spawn([process.execPath, tool, ...args], {
+    cwd,
+    env: { ...process.env, ...env },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [status, stdout, stderr] = await Promise.all([
+    child.exited,
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
+  ]);
+  return { status, stdout, stderr };
 }
 
 function fixture(version = AIDLC_VERSION): string {
@@ -151,6 +174,139 @@ describe("t241 machine configuration and update discovery", () => {
       }
     }
   });
+
+  test("machine config rejects release URLs with secrets in query or fragment", () => {
+    const machine = temp("aidlc-t240-config-url-");
+    const cwd = temp("aidlc-t240-config-url-cwd-");
+    const env = envFor(machine);
+    const rejected = run(DISPATCHER, [
+      "config",
+      "global",
+      "set",
+      "release-base-url",
+      "https://mirror.example/releases?token=secret#private",
+    ], cwd, env);
+    expect(rejected.status).toBe(2);
+    expect(rejected.stdout + rejected.stderr).not.toContain("token=secret");
+    expect(rejected.stdout + rejected.stderr).not.toContain("private");
+    expect(existsSync(join(machine, "config.json"))).toBe(false);
+  });
+
+  test("doctor explicit refresh honors its mirror and quiet modes stay network-free", async () => {
+    const release = fixture("2.5.2");
+    const server = serveReleaseFixture(release);
+    const machine = temp("aidlc-t240-doctor-update-");
+    const keys = [
+      "AIDLC_INSTALL_ROOT",
+      "AIDLC_BIN_DIR",
+      "AIDLC_RELEASE_BASE_URL",
+      "AIDLC_OFFLINE",
+      "NO_PROXY",
+    ] as const;
+    const saved = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+    Object.assign(process.env, {
+      ...envFor(machine),
+      AIDLC_RELEASE_BASE_URL: "https://ignored.example/releases",
+      AIDLC_OFFLINE: "0",
+      NO_PROXY: "127.0.0.1",
+    });
+    try {
+      const state = await doctorUpdateState({
+        "check-updates": "true",
+        "release-base-url": server.baseUrl,
+      }, false);
+      expect(state.state).toBe("behind");
+      expect(server.requests.filter((path) => path.endsWith("/version.json")))
+        .toHaveLength(1);
+      expect(server.requests.filter((path) => path.endsWith("/checksums.txt")))
+        .toHaveLength(1);
+
+      server.requests.length = 0;
+      const routed = await runAsync(DISPATCHER, [
+        "doctor",
+        "--check-updates",
+        "--release-base-url",
+        server.baseUrl,
+        "--json",
+        "--project-dir",
+        REPO_ROOT,
+      ], REPO_ROOT, {
+        ...envFor(machine),
+        AIDLC_OFFLINE: "0",
+        NO_PROXY: "127.0.0.1",
+      });
+      expect([0, 1]).toContain(routed.status);
+      expect(JSON.parse(routed.stdout).data.checks).toContainEqual(
+        expect.objectContaining({
+          label: expect.stringContaining("latest 2.5.2"),
+        }),
+      );
+      expect(server.requests.filter((path) => path.endsWith("/version.json")))
+        .toHaveLength(1);
+      expect(server.requests.filter((path) => path.endsWith("/checksums.txt")))
+        .toHaveLength(1);
+
+      rmSync(join(machine, "update-check.json"), { force: true });
+      server.requests.length = 0;
+      await doctorUpdateState({ "release-base-url": server.baseUrl }, false);
+      await doctorUpdateState({
+        json: "true",
+        "release-base-url": server.baseUrl,
+      }, true);
+      await doctorUpdateState({
+        quiet: "true",
+        "release-base-url": server.baseUrl,
+      }, true);
+      expect(server.requests).toHaveLength(0);
+    } finally {
+      server.stop();
+      for (const key of keys) {
+        const value = saved[key];
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  }, 10_000);
+
+  test("interactive doctor bounds a missing-cache refresh to 750 milliseconds", async () => {
+    const release = fixture("2.5.2");
+    const server = serveReleaseFixture(release, {
+      kind: "delay",
+      asset: "version.json",
+      milliseconds: 2_000,
+    });
+    const machine = temp("aidlc-t240-doctor-timeout-");
+    const keys = [
+      "AIDLC_INSTALL_ROOT",
+      "AIDLC_BIN_DIR",
+      "AIDLC_RELEASE_BASE_URL",
+      "AIDLC_OFFLINE",
+      "NO_PROXY",
+    ] as const;
+    const saved = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+    Object.assign(process.env, {
+      ...envFor(machine),
+      AIDLC_OFFLINE: "0",
+      NO_PROXY: "127.0.0.1",
+    });
+    try {
+      const started = performance.now();
+      const state = await doctorUpdateState({
+        "release-base-url": server.baseUrl,
+      }, true);
+      const elapsed = performance.now() - started;
+      expect(state.state).toBe("unavailable");
+      expect(elapsed).toBeGreaterThanOrEqual(500);
+      expect(elapsed).toBeLessThan(1_500);
+    } finally {
+      server.stop();
+      for (const key of keys) {
+        const value = saved[key];
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  }, 5_000);
 
   test("authenticated refresh replaces the cache and every failed refresh preserves it", async () => {
     const release = fixture("2.5.2");
@@ -252,6 +408,7 @@ describe("t241 machine configuration and update discovery", () => {
 describe("t241 management lifecycle", () => {
   test("harness add/list/default/remove stays on the active release", () => {
     const release = fixture();
+    const nextRelease = fixture("2.5.2");
     const machine = temp("aidlc-t241-harness-");
     const project = temp("aidlc-t241-harness-project-");
     mkdirSync(join(project, ".git"));
@@ -315,6 +472,43 @@ describe("t241 management lifecycle", () => {
       "configured default harness kiro is unavailable",
     );
     expect(existsSync(join(staleDefaultProject, ".claude"))).toBe(false);
+
+    rmSync(join(machine, "default-harness"), { force: true });
+    expect(run(LIFECYCLE, [
+      "harness", "remove", "claude", "--yes",
+    ], project, env).status).toBe(0);
+    const empty = run(LIFECYCLE, ["harness", "list", "--json"], project, env);
+    expect(empty.status, empty.stdout + empty.stderr).toBe(0);
+    expect(JSON.parse(empty.stdout).data.harnesses).toEqual([]);
+    const doctor = run(
+      DISPATCHER,
+      ["doctor", "--json", "--project-dir", project],
+      project,
+      env,
+    );
+    expect(doctor.status).toBe(1);
+    expect(JSON.parse(doctor.stdout).data.checks).toContainEqual(
+      expect.objectContaining({
+        pass: false,
+        label: expect.stringContaining("has no harness installed"),
+      }),
+    );
+    const upgraded = run(LIFECYCLE, [
+      "upgrade", "--version", "2.5.2", "--from", nextRelease,
+    ], project, env);
+    expect(upgraded.status, upgraded.stdout + upgraded.stderr).toBe(0);
+    expect(readFileSync(join(machine, "active-version"), "utf-8").trim())
+      .toBe("2.5.2");
+    expect(JSON.parse(
+      run(LIFECYCLE, ["harness", "list", "--json"], project, env).stdout,
+    ).data.harnesses).toEqual([]);
+    expect(run(LIFECYCLE, [
+      "harness", "add", "kiro", "--from", nextRelease,
+    ], project, env).status).toBe(0);
+    const recovered = run(LIFECYCLE, ["harness", "list", "--json"], project, env);
+    expect(JSON.parse(recovered.stdout).data.harnesses).toEqual([
+      expect.objectContaining({ name: "kiro", productName: "Kiro CLI" }),
+    ]);
   }, 60_000);
 
   test("prune protects active, rollback, live pins, and stale pins", () => {
@@ -457,6 +651,11 @@ describe("t241 Windows and completion release surfaces", () => {
           'import { basename, dirname } from "node:path";',
           'if (process.argv[2] === "version") {',
           '  process.stdout.write("aidlc " + basename(dirname(process.execPath)) + "\\n");',
+          '  process.exit(0);',
+          "}",
+          'if (process.argv[2] === "probe") {',
+          '  process.stdout.write(JSON.stringify(process.argv.slice(3)) + "\\n");',
+          "  process.exit(23);",
           "}",
           "",
         ].join("\n"),
@@ -521,6 +720,21 @@ describe("t241 Windows and completion release surfaces", () => {
       process.env.AIDLC_BIN_DIR = join(machine, "bin");
       try {
         activate("1.0.0");
+        const forwarded = spawnSync(
+          "cmd.exe",
+          [
+            "/d",
+            "/s",
+            "/c",
+            `""${commandPath()}" probe "value with spaces" plain"`,
+          ],
+          { encoding: "utf-8", timeout: 60_000 },
+        );
+        expect(forwarded.status, forwarded.stderr ?? "").toBe(23);
+        expect(JSON.parse((forwarded.stdout ?? "").trim())).toEqual([
+          "value with spaces",
+          "plain",
+        ]);
         writeFileSync(activeExecutablePath(), "C:\\outside\\aidlc.exe\r\n");
         activate("1.1.0");
         const rollback = run(
@@ -576,6 +790,26 @@ describe("t241 Windows and completion release surfaces", () => {
     }
   });
 
+  test("orphan Windows uninstall fences are reported as invalid recovery state", () => {
+    const machine = temp("aidlc-t240-uninstall-orphan-fence-");
+    const saved = {
+      root: process.env.AIDLC_INSTALL_ROOT,
+      bin: process.env.AIDLC_BIN_DIR,
+    };
+    process.env.AIDLC_INSTALL_ROOT = machine;
+    process.env.AIDLC_BIN_DIR = join(machine, "bin");
+    try {
+      const fence = windowsUninstallFencePath();
+      writeFileSync(fence, "{}\n");
+      expect(scanWindowsUninstallJournals().invalid).toContain(fence);
+    } finally {
+      if (saved.root === undefined) delete process.env.AIDLC_INSTALL_ROOT;
+      else process.env.AIDLC_INSTALL_ROOT = saved.root;
+      if (saved.bin === undefined) delete process.env.AIDLC_BIN_DIR;
+      else process.env.AIDLC_BIN_DIR = saved.bin;
+    }
+  });
+
   test("four completion shells derive public commands from route metadata", () => {
     for (const shell of ["bash", "zsh", "fish", "powershell"]) {
       const first = run(DISPATCHER, ["completions", shell], REPO_ROOT);
@@ -619,7 +853,11 @@ describe("t241 Windows and completion release surfaces", () => {
     expect(script).toContain("'install-apply'");
     expect(script).toContain("Get-FileHash -Algorithm SHA256");
     expect(script).toContain("Unblock-File");
-    expect(script).toContain("$PSCommandPath -and");
+    expect(script).toContain("$env:AIDLC_OFFLINE");
+    expect(script).toContain("$verifiedInstaller");
+    expect(script).toContain("$releaseUri.Query");
+    expect(script).toContain("$releaseUri.Fragment");
+    expect(script).toContain("installer validation failed:");
     expect(script).toContain("$env:Path = \"$binDir;$env:Path\"");
     expect(script).toContain("exceeds the 1 MiB metadata limit");
     const release = fixture();

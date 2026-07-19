@@ -426,11 +426,12 @@ async function installVersion(options: {
   offline?: boolean;
   activate: boolean;
   dryRun: boolean;
+  allowNoDistributions?: boolean;
   baseUrl?: string;
   caBundle?: string;
 }): Promise<{ version: string; distributions: string[] }> {
   const wantedVersion = options.version ? requestedVersion(options.version) : undefined;
-  if (options.distributions.length === 0) {
+  if (options.distributions.length === 0 && !options.allowNoDistributions) {
     commandError("at least one --harness is required", EXIT.usage);
   }
   const target = targetTriple();
@@ -788,9 +789,6 @@ async function harnessCommand(argv: string[]): Promise<CommandResult> {
   if (!installed.includes(distribution)) {
     return failure(`${distribution} is not installed in active version ${version}`, EXIT.unavailable);
   }
-  if (installed.length === 1) {
-    return failure("cannot remove the active version's last harness", EXIT.integrity);
-  }
   requireConfirmation(
     argv,
     `Remove ${productName(manifest, distribution)} from active aidlc ${version}? Existing projects will not be changed.`,
@@ -985,6 +983,7 @@ async function upgradeCommand(argv: string[]): Promise<CommandResult> {
     offline: offline(argv),
     activate: true,
     dryRun,
+    allowNoDistributions: current !== null,
     baseUrl: valueAfter(argv, "--release-base-url"),
     caBundle: valueAfter(argv, "--ca-bundle"),
   });

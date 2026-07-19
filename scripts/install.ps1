@@ -129,6 +129,9 @@ function Confirm-NotAdministrator {
 
 Confirm-NotAdministrator
 
+if ($env:AIDLC_OFFLINE -eq '1') {
+  $Offline = $true
+}
 if ($Offline -and -not $From) {
   Stop-Install 3 'unavailable' '--Offline requires --From <release-directory>'
 }
@@ -148,8 +151,8 @@ if (-not $From) {
   } catch {
     Stop-Install 2 'usage' 'release URL is invalid'
   }
-  if ($releaseUri.UserInfo) {
-    Stop-Install 4 'failed' 'release URL must not include credentials'
+  if ($releaseUri.UserInfo -or $releaseUri.Query -or $releaseUri.Fragment) {
+    Stop-Install 4 'failed' 'release URL must not include credentials, a query, or a fragment'
   }
   if ($releaseUri.Scheme -ne 'https' -and
     -not ($releaseUri.Scheme -eq 'http' -and $releaseUri.IsLoopback)) {
@@ -210,18 +213,13 @@ try {
   if ($manifestHash -ne (Get-ExpectedHash $checksumsPath 'version.json')) {
     Stop-Install 4 'failed' 'checksum mismatch for version.json'
   }
-  $installerPath = if ($PSCommandPath -and (Test-Path -LiteralPath $PSCommandPath -PathType Leaf)) {
-    $PSCommandPath
+  $verifiedInstaller = Join-Path $temporary 'install.ps1'
+  if ($From) {
+    Copy-Item -LiteralPath (Join-Path $From 'install.ps1') -Destination $verifiedInstaller
   } else {
-    $verifiedInstaller = Join-Path $temporary 'install.ps1'
-    if ($From) {
-      Copy-Item -LiteralPath (Join-Path $From 'install.ps1') -Destination $verifiedInstaller
-    } else {
-      Get-ReleaseFile "$($ReleaseBaseUrl.TrimEnd('/'))/$metadataSegment/install.ps1" $verifiedInstaller
-    }
-    $verifiedInstaller
+    Get-ReleaseFile "$($ReleaseBaseUrl.TrimEnd('/'))/$metadataSegment/install.ps1" $verifiedInstaller
   }
-  $installerHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $installerPath).Hash.ToLowerInvariant()
+  $installerHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $verifiedInstaller).Hash.ToLowerInvariant()
   if ($installerHash -ne (Get-ExpectedHash $checksumsPath 'install.ps1')) {
     Stop-Install 4 'failed' 'checksum mismatch for install.ps1'
   }
@@ -320,6 +318,8 @@ try {
   $message = "installed AI-DLC $Version; command: $command"
   if ($pathCommand -and $Quiet) { $message = "$message; run $pathCommand in a new session" }
   Write-Result $true 0 'ok' $message
+} catch {
+  Stop-Install 4 'failed' "installer validation failed: $($_.Exception.Message)"
 } finally {
   Remove-Item -LiteralPath $temporary -Recurse -Force -ErrorAction SilentlyContinue
 }

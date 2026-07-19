@@ -192,8 +192,10 @@ The installer places a stable `aidlc.cmd` under
 `%LOCALAPPDATA%\aidlc\bin`, verifies the same release checksums, and supports
 `-From <release-directory> -Offline` for an air-gapped package. It adds that
 directory to the current PowerShell session and prints the exact command needed
-in a new session when the directory is not already on `PATH`. Copy-install
-instructions remain supported on every platform.
+in a new session when the directory is not already on `PATH`.
+`AIDLC_OFFLINE=1` has the same effect as `-Offline` and requires `-From`, so it
+cannot silently open a network connection. Copy-install instructions remain
+supported on every platform.
 
 ---
 

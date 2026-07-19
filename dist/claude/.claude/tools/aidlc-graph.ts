@@ -1,5 +1,5 @@
 // Stage-graph library + CLI. Exports the 8-function API consumed by
-// the doctor handler (see aidlc-utility.ts handleDoctor) and the
+// the doctor collector (see aidlc-utility.ts collectDoctorReport) and the
 // runtime resolution layer (lib.ts's nextInScopeStage,
 // firstInScopeStageOfPhase, stagesInScope delegate here via lazy
 // require).

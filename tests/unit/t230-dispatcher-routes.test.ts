@@ -633,7 +633,11 @@ describe("t230 dispatcher route completeness", () => {
       expect(route.outputModes.length).toBeGreaterThan(0);
     }
     expect(ROUTES.find((route) => route.id === "top-doctor"))
-      .toEqual(expect.objectContaining({ pinPolicy: "inspect", mutationScope: "project-and-machine" }));
+      .toEqual(expect.objectContaining({
+        tool: "aidlc-doctor.ts",
+        pinPolicy: "inspect",
+        mutationScope: "project-and-machine",
+      }));
     expect(ROUTES.find((route) => route.id === "top-use"))
       .toEqual(expect.objectContaining({ pinPolicy: "inspect", mutationScope: "project-and-machine" }));
     const publicPolicy = new Map(

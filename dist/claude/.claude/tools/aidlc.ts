@@ -92,6 +92,7 @@ export const TOOLS = {
   audit: "aidlc-audit.ts",
   bolt: "aidlc-bolt.ts",
   graph: "aidlc-graph.ts",
+  doctor: "aidlc-doctor.ts",
   init: "aidlc-init.ts",
   jump: "aidlc-jump.ts",
   learnings: "aidlc-learnings.ts",
@@ -188,7 +189,7 @@ export const ROUTES: readonly Route[] = [
     kind: "top-passthrough",
     classification: "passthrough",
     verbs: ["doctor"],
-    tool: TOOLS.utility,
+    tool: TOOLS.doctor,
     visibility: "public",
     projectRequirement: "optional",
     pinPolicy: "inspect",
@@ -198,7 +199,9 @@ export const ROUTES: readonly Route[] = [
     human: [
       { command: "doctor [--check-updates]", summary: "run environment diagnostics" },
     ],
-    all: ["doctor [--verbose] [--json] [--quiet] [--check-updates]"],
+    all: [
+      "doctor [--verbose] [--json] [--quiet] [--check-updates] [--release-base-url <url>] [--ca-bundle <path>]",
+    ],
   },
   {
     id: "top-version",
@@ -1026,6 +1029,7 @@ function handleRouteOnly(route: Route, argv: string[]): Action {
       audit: TOOLS.audit,
       bolt: TOOLS.bolt,
       graph: TOOLS.graph,
+      doctor: TOOLS.doctor,
       init: TOOLS.init,
       jump: TOOLS.jump,
       learnings: TOOLS.learnings,
@@ -1107,7 +1111,7 @@ function resolveAlias(argv: string[]): Action | undefined {
       : topLevelError(argv.slice(0, 2).join(" "));
   }
   if (head === "--status") return { type: "delegate", tool: TOOLS.utility, args: ["status", ...argv.slice(1)] };
-  if (head === "--doctor") return { type: "delegate", tool: TOOLS.utility, args: ["doctor", ...argv.slice(1)] };
+  if (head === "--doctor") return { type: "delegate", tool: TOOLS.doctor, args: ["doctor", ...argv.slice(1)] };
   if (head === "--version") return { type: "version" };
   if (head === "--resume") return { type: "delegate", tool: TOOLS.orchestrate, args: ["next", "--resume", ...argv.slice(1)] };
   if (head === "--scope") return { type: "delegate", tool: TOOLS.orchestrate, args: ["next", "--scope", ...argv.slice(1)] };
@@ -1295,6 +1299,8 @@ async function loadDelegate(tool: string): Promise<DelegateModule | null> {
       return import("./aidlc-bolt.ts");
     case TOOLS.graph:
       return import("./aidlc-graph.ts");
+    case TOOLS.doctor:
+      return import("./aidlc-doctor.ts");
     case TOOLS.init:
       return import("./aidlc-init.ts");
     case TOOLS.jump:

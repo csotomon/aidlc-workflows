@@ -204,6 +204,8 @@ function redact(url: string): string {
       parsed.username = "***";
       parsed.password = "***";
     }
+    if (parsed.search) parsed.search = "?<redacted>";
+    if (parsed.hash) parsed.hash = "#<redacted>";
     return parsed.toString();
   } catch {
     return "<invalid-url>";
@@ -222,6 +224,11 @@ function assertReleaseUrl(url: string): URL {
   const parsed = new URL(url);
   if (parsed.username || parsed.password) {
     throw new Error(`release URL must not include credentials: ${redact(url)}`);
+  }
+  if (parsed.search || parsed.hash) {
+    throw new Error(
+      `release URL must not include a query or fragment: ${redact(url)}`,
+    );
   }
   if (
     parsed.protocol !== "https:" &&
