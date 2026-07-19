@@ -4,7 +4,7 @@
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -294,7 +294,7 @@ describe("t231 init and upgrade lifecycle routing", () => {
 });
 
 describe("t231 emitted plugin hook command", () => {
-  test("packaged hook probes aidlc first, bun second, and keeps graceful skip", () => {
+  test("packaged hook probes aidlc first, propagates sync failures, and keeps graceful skip", () => {
     const outDir = join(tempDir("aidlc-t231-package-"), "plugin");
     const build = run([BUN, PACKAGE_TS, "plugin", "build", "test-pro", "claude", outDir], REPO_ROOT);
     expect(build.status).toBe(0);
@@ -308,10 +308,29 @@ describe("t231 emitted plugin hook command", () => {
 
     expect(aidlcIdx).toBeGreaterThanOrEqual(0);
     expect(bunIdx).toBeGreaterThan(aidlcIdx);
-    expect(command).toContain("\"$AIDLC\" plugin sync && exit 0");
-    expect(command).not.toContain("plugin sync; exit $?");
+    expect(command).toContain("\"$AIDLC\" plugin sync; exit $?");
+    expect(command).toContain("\"$PLUGIN_TOOL\" sync; exit $?");
     expect(command).toContain("tools/aidlc-plugin.ts");
     expect(command).toContain(`"$BUN" "\${CLAUDE_PLUGIN_ROOT}/hooks/compose.ts"`);
     expect(command).toContain("aidlc and bun not found, skipping");
+
+    const binDir = tempDir("aidlc-t231-hook-bin-");
+    const fallbackMarker = join(binDir, "fallback-ran");
+    writeFileSync(join(binDir, "aidlc"), "#!/bin/sh\nexit 23\n");
+    writeFileSync(join(binDir, "bun"), `#!/bin/sh\ntouch "${fallbackMarker}"\nexit 0\n`);
+    chmodSync(join(binDir, "aidlc"), 0o755);
+    chmodSync(join(binDir, "bun"), 0o755);
+    const invoked = spawnSync("/bin/sh", ["-c", command], {
+      cwd: outDir,
+      encoding: "utf-8",
+      env: {
+        ...process.env,
+        PATH: `${binDir}:/bin:/usr/bin`,
+        CLAUDE_PLUGIN_ROOT: outDir,
+        CLAUDE_PROJECT_DIR: outDir,
+      },
+    });
+    expect(invoked.status).toBe(23);
+    expect(existsSync(fallbackMarker)).toBe(false);
   });
 });

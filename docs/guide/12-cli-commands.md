@@ -616,8 +616,11 @@ each plugin's manifest version and deterministic source hash with the project's
 composition stamp. Its default status column is `current`,
 `run: aidlc plugin sync`, or `needs attention: <remediation>`.
 `--verbose` and `--json` retain the exact internal state. Claude and Codex use
-their host registries; Kiro reports `host inventory unavailable` outside a hook
-that supplies the current plugin root. The check is always offline.
+their host registries. Claude falls back to current-root-only when its enablement
+settings are malformed instead of assuming every installed plugin is enabled;
+both hosts fall back when their proved registry source disappears. Kiro reports
+`host inventory unavailable` outside a hook that supplies the current plugin
+root. The check is always offline.
 `select-plugins` is a **direct utility invocation**, not an `/aidlc select-plugins` command.
 `bun .claude/tools/aidlc-utility.ts select-plugins` prints the current selection
 (`all enabled (no selection)` when the `plugins` key is absent) and the known

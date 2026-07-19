@@ -16,6 +16,7 @@ import { homedir, tmpdir } from "node:os";
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { spawnSync } from "node:child_process";
+import { createInterface } from "node:readline/promises";
 import {
   errorMessage,
   parseArgs,
@@ -352,16 +353,25 @@ function claudeInventory(): PluginInventory {
       invalid: [{ paths: [registryPath], message: `invalid Claude plugin registry: ${errorMessage(error)}` }],
     };
   }
-  const enabledPlugins = (() => {
+  let enabledPlugins: Record<string, unknown> = {};
+  if (existsSync(settingsPath)) {
+    let settings: unknown;
     try {
-      const settings = readJson(settingsPath) as { enabledPlugins?: unknown };
-      return settings && typeof settings.enabledPlugins === "object" && settings.enabledPlugins !== null
-        ? settings.enabledPlugins as Record<string, unknown>
-        : {};
+      settings = readJson(settingsPath);
     } catch {
-      return {};
+      return currentRootInventory("claude");
     }
-  })();
+    if (!settings || typeof settings !== "object" || Array.isArray(settings)) {
+      return currentRootInventory("claude");
+    }
+    const rawEnabled = (settings as Record<string, unknown>).enabledPlugins;
+    if (rawEnabled !== undefined) {
+      if (!rawEnabled || typeof rawEnabled !== "object" || Array.isArray(rawEnabled)) {
+        return currentRootInventory("claude");
+      }
+      enabledPlugins = rawEnabled as Record<string, unknown>;
+    }
+  }
   const plugins = registry && typeof registry === "object" &&
       !Array.isArray(registry) &&
       (registry as Record<string, unknown>).version === 2 &&
@@ -458,15 +468,20 @@ function codexInventory(): PluginInventory {
     }
     const versions = readdirSync(cacheRoot).filter((entry) => {
       const path = join(cacheRoot, entry);
-      return STRICT_SEMVER.test(entry) && statSync(path).isDirectory();
+      return (entry === "local" || STRICT_SEMVER.test(entry)) && statSync(path).isDirectory();
     }).sort();
     if (versions.length === 0) {
-      invalid.push({ paths: [cacheRoot], message: `Codex plugin "${id}" has no versioned installed tree` });
+      invalid.push({ paths: [cacheRoot], message: `Codex plugin "${id}" has no installed tree` });
       continue;
     }
-    for (const version of versions) {
-      const root = join(cacheRoot, version);
-      const normalized = invalidFromRoot(root, "codex", enabled, version);
+    for (const cacheVersion of versions) {
+      const root = join(cacheRoot, cacheVersion);
+      const normalized = invalidFromRoot(
+        root,
+        "codex",
+        enabled,
+        cacheVersion === "local" ? undefined : cacheVersion,
+      );
       if ("root" in normalized) installed.push(normalized);
       else invalid.push({ ...normalized, key: pluginName.slice("aidlc-".length) });
     }
@@ -843,16 +858,17 @@ function copyProjectSurfaces(projectDir: string, stagedProject: string, harnessD
 function composeEnvironment(
   projectDir: string,
   harnessDir: string,
-  pluginRoot: string,
+  plugin: InstalledPlugin,
 ): NodeJS.ProcessEnv {
   return {
     ...process.env,
     AIDLC_PROJECT_DIR: projectDir,
     CLAUDE_PROJECT_DIR: projectDir,
     AIDLC_HARNESS_DIR: harnessDir,
-    AIDLC_PLUGIN_ROOT: pluginRoot,
-    CLAUDE_PLUGIN_ROOT: pluginRoot,
-    PLUGIN_ROOT: pluginRoot,
+    AIDLC_PLUGIN_KEY: plugin.key,
+    AIDLC_PLUGIN_ROOT: plugin.root,
+    CLAUDE_PLUGIN_ROOT: plugin.root,
+    PLUGIN_ROOT: plugin.root,
   };
 }
 
@@ -866,12 +882,13 @@ async function runComposer(
     throw new Error(`${composePath}: installed plugin has no compose hook`);
   }
   const executable = compiledExecutable();
-  const env = composeEnvironment(stagedProject, harnessDir, plugin.root);
+  const env = composeEnvironment(stagedProject, harnessDir, plugin);
   if (executable) {
     const keys = [
       "AIDLC_PROJECT_DIR",
       "CLAUDE_PROJECT_DIR",
       "AIDLC_HARNESS_DIR",
+      "AIDLC_PLUGIN_KEY",
       "AIDLC_PLUGIN_ROOT",
       "CLAUDE_PLUGIN_ROOT",
       "PLUGIN_ROOT",
@@ -1209,13 +1226,26 @@ function projectDiffPlan(
   return { schemaVersion: 1, root: projectDir, operations };
 }
 
-async function confirmPrune(argv: string[], keys: string[]): Promise<void> {
+export async function confirmPrune(
+  argv: string[],
+  keys: string[],
+  input: NodeJS.ReadableStream & { isTTY?: boolean } = process.stdin,
+  output: NodeJS.WritableStream = process.stdout,
+): Promise<void> {
   if (keys.length === 0 || argv.includes("--yes")) return;
-  if (!process.stdin.isTTY) {
+  if (!input.isTTY) {
     throw new Error("plugin sync --prune-missing requires --yes in non-interactive mode");
   }
-  process.stdout.write(`Prune composed content for missing plugin(s) ${keys.join(", ")}? [y/N] `);
-  const response = (await Bun.stdin.text()).trim().toLowerCase();
+  const lines = createInterface({ input, output });
+  let response: string;
+  try {
+    response = await lines.question(
+      `Prune composed content for missing plugin(s) ${keys.join(", ")}? [y/N] `,
+    );
+  } finally {
+    lines.close();
+  }
+  response = response.trim().toLowerCase();
   if (response !== "y" && response !== "yes") throw new Error("plugin prune cancelled");
 }
 

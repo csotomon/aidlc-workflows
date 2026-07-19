@@ -509,7 +509,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     cpSync(join(pluginBuilt, "hooks"), join(root, "hooks"), { recursive: true });
     // rewrite the manifest name so the synthetic plugin has its own identity
     const mf = join(root, ".claude-plugin", "plugin.json");
-    const m = JSON.parse(readFileSync(mf, "utf-8")); m.name = name; writeFileSync(mf, JSON.stringify(m));
+    const m = JSON.parse(readFileSync(mf, "utf-8")); m.name = `aidlc-${name}`; writeFileSync(mf, JSON.stringify(m));
     for (const [rel, body] of Object.entries(files)) {
       const p = join(root, rel);
       cpSync(join(pluginBuilt, "hooks", "compose.ts"), join(root, "hooks", "compose.ts")); // ensure hook present

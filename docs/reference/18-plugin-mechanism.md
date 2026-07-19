@@ -161,8 +161,8 @@ state with project-local composition state, entirely offline:
 - Claude reads schema-v2 `~/.claude/plugins/installed_plugins.json` and
   `enabledPlugins` from `~/.claude/settings.json`.
 - Codex reads only plugin IDs declared in `~/.codex/config.toml`, then inspects
-  their exact versioned paths under
-  `~/.codex/plugins/cache/<marketplace>/<plugin>/<version>/`.
+  their exact cache paths under
+  `~/.codex/plugins/cache/<marketplace>/<plugin>/<version-or-local>/`.
 - Kiro has no proved host store. It accepts only the plugin root injected into
   the current hook and reports aggregate inventory unavailable outside that
   invocation. Claude and Codex use the same fallback if their registry source
@@ -367,9 +367,10 @@ Independent authors who never coordinate are kept safe by:
 The emitted SessionStart command probes for `aidlc` on `PATH` first and runs
 `aidlc plugin sync` when it is available. If no binary is found, it invokes the
 project's Bun `aidlc-plugin.ts` so copy installs use the same transactional
-implementation. Direct `hooks/compose.ts` remains only as a compatibility
-fallback for an older project runtime; the hook exits 0 when neither executable
-is available.
+implementation. A discovered sync entrypoint is authoritative: its failure is
+propagated without falling through to another composer. Direct `hooks/compose.ts`
+remains only as a compatibility fallback for an older project runtime; the hook
+exits 0 when neither executable is available.
 
 **Install, per host:**
 

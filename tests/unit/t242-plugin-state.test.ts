@@ -12,9 +12,11 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { PassThrough } from "node:stream";
 import {
   collectPluginStatus,
   comparePluginState,
+  confirmPrune,
   discoverPluginInventory,
   normalizeInstalledPlugin,
   pluginSourceHash,
@@ -210,7 +212,29 @@ describe("t242 fixture-proved host inventories", () => {
     expect(existsSync(root)).toBe(true);
   });
 
-  test("Codex enumerates declared IDs and only their fixed versioned cache path", () => {
+  test("Claude downgrades malformed enablement settings to unavailable inventory", () => {
+    const root = pluginRoot();
+    withClaudeFixture(root);
+    writeFileSync(process.env.AIDLC_CLAUDE_SETTINGS as string, "{not-json");
+    process.env.AIDLC_PLUGIN_ROOT = "";
+    process.env.CLAUDE_PLUGIN_ROOT = "";
+    process.env.PLUGIN_ROOT = "";
+
+    const result = discoverPluginInventory(".claude");
+    expect(result).toEqual(expect.objectContaining({
+      capability: "current-root-only",
+      installed: [],
+      invalid: [],
+    }));
+    expect(comparePluginState(result, evidence(), null)).toEqual([
+      expect.objectContaining({
+        state: "inventory-unavailable",
+        action: "attention",
+      }),
+    ]);
+  });
+
+  test("Codex enumerates declared IDs and their fixed semver cache path", () => {
     const root = pluginRoot("codex");
     const codexHome = temp("aidlc-codex-home-");
     const installedRoot = join(
@@ -232,6 +256,37 @@ describe("t242 fixture-proved host inventories", () => {
     expect(result.installed).toEqual([
       expect.objectContaining({ key: "test-pro", root: installedRoot, enabled: true }),
     ]);
+  });
+
+  test("Codex accepts the documented local marketplace cache leaf", () => {
+    const root = pluginRoot("codex");
+    const codexHome = temp("aidlc-codex-local-");
+    const installedRoot = join(
+      codexHome,
+      "plugins",
+      "cache",
+      "fixture-marketplace",
+      "aidlc-test-pro",
+      "local",
+    );
+    mkdirSync(join(installedRoot, ".."), { recursive: true });
+    cpSync(root, installedRoot, { recursive: true });
+    cpSync(join(FIXTURES, "codex-config.toml"), join(codexHome, "config.toml"));
+    process.env.AIDLC_CODEX_HOME = codexHome;
+    process.env.AIDLC_HARNESS_DIR = ".codex";
+
+    expect(discoverPluginInventory(".codex")).toEqual(expect.objectContaining({
+      capability: "full-inventory",
+      invalid: [],
+      installed: [
+        expect.objectContaining({
+          key: "test-pro",
+          version: "0.1.0",
+          root: installedRoot,
+          enabled: true,
+        }),
+      ],
+    }));
   });
 
   test("Codex uses config disablement and ignores a cache retained after removal", () => {
@@ -471,6 +526,42 @@ describe("t242 transactional sync and ownership-safe prune", () => {
     ))).toBe(false);
   }, 60_000);
 
+  test("sync rejects content whose plugin owner differs from the host manifest key", async () => {
+    const project = installedProject();
+    const root = temp("aidlc-plugin-identity-");
+    cpSync(TEST_PRO, root, { recursive: true });
+    writeFileSync(
+      join(root, ".claude-plugin", "plugin.json"),
+      `${JSON.stringify({ name: "aidlc-renamed", version: "0.1.0" }, null, 2)}\n`,
+    );
+    withClaudeFixture(root);
+
+    await expect(syncPlugins(project, [], ".claude"))
+      .rejects.toThrow("plugin renamed composition reported degraded drops");
+    expect(existsSync(join(
+      project,
+      ".claude",
+      "aidlc-common",
+      "stages",
+      "construction",
+      "test-pro-integration.md",
+    ))).toBe(false);
+    expect(existsSync(join(
+      project,
+      ".claude",
+      "tools",
+      "data",
+      "plugin-compose-renamed.json",
+    ))).toBe(false);
+    expect(existsSync(join(
+      project,
+      ".claude",
+      "tools",
+      "data",
+      "plugin-contrib-test-pro.json",
+    ))).toBe(false);
+  }, 60_000);
+
   test("a version upgrade replaces prior hash-proven primitive files", async () => {
     const project = installedProject();
     const root = temp("aidlc-plugin-upgrade-");
@@ -606,4 +697,22 @@ describe("t242 transactional sync and ownership-safe prune", () => {
       .rejects.toThrow("owned path changed since composition");
     expect(readFileSync(stage, "utf-8")).toContain("local edit");
   }, 60_000);
+
+  test("interactive prune confirmation resolves on a line without waiting for EOF", async () => {
+    const input = new PassThrough() as PassThrough & { isTTY: boolean };
+    const output = new PassThrough();
+    input.isTTY = true;
+    const confirmation = confirmPrune([], ["test-pro"], input, output);
+    input.write("y\n");
+
+    await expect(Promise.race([
+      confirmation,
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("confirmation waited for EOF")), 1_000)
+      ),
+    ])).resolves.toBeUndefined();
+    expect(output.read()?.toString() ?? "").toContain("Prune composed content");
+    input.destroy();
+    output.destroy();
+  });
 });
