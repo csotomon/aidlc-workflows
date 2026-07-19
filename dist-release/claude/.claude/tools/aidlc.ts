@@ -101,6 +101,7 @@ export const TOOLS = {
   machineConfig: "aidlc-machine-config.ts",
   completions: "aidlc-completions.ts",
   orchestrate: "aidlc-orchestrate.ts",
+  plugin: "aidlc-plugin.ts",
   runnerGen: "aidlc-runner-gen.ts",
   runtime: "aidlc-runtime.ts",
   sensor: "aidlc-sensor.ts",
@@ -714,13 +715,13 @@ export const ROUTES: readonly Route[] = [
     verbs: ["select", "sync", "list"],
     custom: "plugin",
     ...PUBLIC_ENGINE,
-    targets: { select: "select-plugins", sync: "plugin-sync", list: "plugin-list" },
+    targets: { select: "select-plugins", sync: "sync", list: "list" },
     human: [
       { command: "plugin select [names]", summary: "set enabled plugins" },
-      { command: "plugin list", summary: "list installed plugin enablement" },
-      { command: "plugin sync", summary: "compose installed plugins" },
+      { command: "plugin list [--verbose|--json]", summary: "compare installed and composed plugins" },
+      { command: "plugin sync [--prune-missing]", summary: "transactionally compose installed plugins" },
     ],
-    all: ["select [names]", "sync", "list"],
+    all: ["select [names]", "sync [--prune-missing] [--yes]", "list [--verbose] [--json]"],
   },
   {
     id: "gen",
@@ -986,7 +987,7 @@ function handlePlugin(route: Route, argv: string[]): Action {
   }
   if (verb === "sync" || verb === "list") {
     const target = route.targets?.[verb];
-    if (target) return { type: "delegate", tool: TOOLS.utility, args: [target, ...argv.slice(2)] };
+    if (target) return { type: "delegate", tool: TOOLS.plugin, args: [target, ...argv.slice(2)] };
   }
   return nounError("plugin", verb);
 }
@@ -1317,6 +1318,8 @@ async function loadDelegate(tool: string): Promise<DelegateModule | null> {
       return import("./aidlc-completions.ts");
     case TOOLS.orchestrate:
       return import("./aidlc-orchestrate.ts");
+    case TOOLS.plugin:
+      return import("./aidlc-plugin.ts");
     case TOOLS.runnerGen:
       return import("./aidlc-runner-gen.ts");
     case TOOLS.runtime:

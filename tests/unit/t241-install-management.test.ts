@@ -47,6 +47,14 @@ const DISPATCHER = join(REPO_ROOT, "core", "tools", "aidlc.ts");
 const LIFECYCLE = join(REPO_ROOT, "core", "tools", "aidlc-lifecycle.ts");
 const INSTALL_PS1 = join(REPO_ROOT, "scripts", "install.ps1");
 const temporary: string[] = [];
+function patchVersion(offset: number): string {
+  const [major, minor, patch] = AIDLC_VERSION.split(".").map(Number);
+  return `${major}.${minor}.${patch + offset}`;
+}
+const NEXT_VERSION = patchVersion(1);
+const LIVE_PIN_VERSION = patchVersion(2);
+const STALE_PIN_VERSION = patchVersion(3);
+const REMOVABLE_VERSION = patchVersion(4);
 
 afterAll(() => {
   for (const path of temporary) rmSync(path, { recursive: true, force: true });
@@ -193,7 +201,7 @@ describe("t241 machine configuration and update discovery", () => {
   });
 
   test("doctor explicit refresh honors its mirror and quiet modes stay network-free", async () => {
-    const release = fixture("2.5.2");
+    const release = fixture(NEXT_VERSION);
     const server = serveReleaseFixture(release);
     const machine = temp("aidlc-t240-doctor-update-");
     const keys = [
@@ -238,7 +246,7 @@ describe("t241 machine configuration and update discovery", () => {
       expect([0, 1]).toContain(routed.status);
       expect(JSON.parse(routed.stdout).data.checks).toContainEqual(
         expect.objectContaining({
-          label: expect.stringContaining("latest 2.5.2"),
+          label: expect.stringContaining(`latest ${NEXT_VERSION}`),
         }),
       );
       expect(server.requests.filter((path) => path.endsWith("/version.json")))
@@ -269,7 +277,7 @@ describe("t241 machine configuration and update discovery", () => {
   }, 10_000);
 
   test("interactive doctor bounds a missing-cache refresh to 750 milliseconds", async () => {
-    const release = fixture("2.5.2");
+    const release = fixture(NEXT_VERSION);
     const server = serveReleaseFixture(release, {
       kind: "delay",
       asset: "version.json",
@@ -309,7 +317,7 @@ describe("t241 machine configuration and update discovery", () => {
   }, 5_000);
 
   test("authenticated refresh replaces the cache and every failed refresh preserves it", async () => {
-    const release = fixture("2.5.2");
+    const release = fixture(NEXT_VERSION);
     const server = serveReleaseFixture(release);
     const machine = temp("aidlc-t241-update-");
     const saved = Object.fromEntries(
@@ -323,8 +331,8 @@ describe("t241 machine configuration and update discovery", () => {
     try {
       const state = await refreshUpdateState(15_000);
       expect(state.state).toBe("behind");
-      expect(readUpdateCache()?.latestVersion).toBe("2.5.2");
-      expect(cachedUpdateNotice()).toContain("aidlc 2.5.2");
+      expect(readUpdateCache()?.latestVersion).toBe(NEXT_VERSION);
+      expect(cachedUpdateNotice()).toContain(`aidlc ${NEXT_VERSION}`);
       expect(server.requests.filter((path) => path.endsWith("version.json"))).toHaveLength(1);
       expect(server.requests.filter((path) => path.endsWith("checksums.txt"))).toHaveLength(1);
 
@@ -349,7 +357,7 @@ describe("t241 machine configuration and update discovery", () => {
   });
 
   test("disabled and offline update checks open no socket", async () => {
-    const release = fixture("2.5.2");
+    const release = fixture(NEXT_VERSION);
     const server = serveReleaseFixture(release);
     const machine = temp("aidlc-t241-no-socket-");
     const env = {
@@ -408,7 +416,7 @@ describe("t241 machine configuration and update discovery", () => {
 describe("t241 management lifecycle", () => {
   test("harness add/list/default/remove stays on the active release", () => {
     const release = fixture();
-    const nextRelease = fixture("2.5.2");
+    const nextRelease = fixture(NEXT_VERSION);
     const machine = temp("aidlc-t241-harness-");
     const project = temp("aidlc-t241-harness-project-");
     mkdirSync(join(project, ".git"));
@@ -494,11 +502,11 @@ describe("t241 management lifecycle", () => {
       }),
     );
     const upgraded = run(LIFECYCLE, [
-      "upgrade", "--version", "2.5.2", "--from", nextRelease,
+      "upgrade", "--version", NEXT_VERSION, "--from", nextRelease,
     ], project, env);
     expect(upgraded.status, upgraded.stdout + upgraded.stderr).toBe(0);
     expect(readFileSync(join(machine, "active-version"), "utf-8").trim())
-      .toBe("2.5.2");
+      .toBe(NEXT_VERSION);
     expect(JSON.parse(
       run(LIFECYCLE, ["harness", "list", "--json"], project, env).stdout,
     ).data.harnesses).toEqual([]);
@@ -513,10 +521,10 @@ describe("t241 management lifecycle", () => {
 
   test("prune protects active, rollback, live pins, and stale pins", () => {
     const release = fixture();
-    const nextRelease = fixture("2.5.2");
-    const livePinRelease = fixture("2.5.3");
-    const stalePinRelease = fixture("2.5.4");
-    const removableRelease = fixture("2.5.5");
+    const nextRelease = fixture(NEXT_VERSION);
+    const livePinRelease = fixture(LIVE_PIN_VERSION);
+    const stalePinRelease = fixture(STALE_PIN_VERSION);
+    const removableRelease = fixture(REMOVABLE_VERSION);
     const machine = temp("aidlc-t241-prune-");
     const project = temp("aidlc-t241-prune-project-");
     const pinnedProject = temp("aidlc-t241-live-pin-");
@@ -527,34 +535,34 @@ describe("t241 management lifecycle", () => {
       "upgrade", "--version", AIDLC_VERSION, "--harness", "claude", "--from", release,
     ], project, env).status).toBe(0);
     expect(run(LIFECYCLE, [
-      "upgrade", "--version", "2.5.2", "--harness", "claude", "--from", nextRelease,
+      "upgrade", "--version", NEXT_VERSION, "--harness", "claude", "--from", nextRelease,
     ], project, env).status).toBe(0);
     expect(run(LIFECYCLE, [
-      "versions", "install", "2.5.3", "--harness", "claude", "--from", livePinRelease,
+      "versions", "install", LIVE_PIN_VERSION, "--harness", "claude", "--from", livePinRelease,
     ], project, env).status).toBe(0);
     expect(run(LIFECYCLE, [
-      "versions", "install", "2.5.4", "--harness", "claude", "--from", stalePinRelease,
+      "versions", "install", STALE_PIN_VERSION, "--harness", "claude", "--from", stalePinRelease,
     ], project, env).status).toBe(0);
     expect(run(LIFECYCLE, [
-      "versions", "install", "2.5.5", "--harness", "claude", "--from", removableRelease,
+      "versions", "install", REMOVABLE_VERSION, "--harness", "claude", "--from", removableRelease,
     ], project, env).status).toBe(0);
     writeFileSync(
       join(machine, "pins.json"),
       `${JSON.stringify({
-        [pinnedProject]: "2.5.3",
-        "/missing/stale-project": "2.5.4",
+        [pinnedProject]: LIVE_PIN_VERSION,
+        "/missing/stale-project": STALE_PIN_VERSION,
       }, null, 2)}\n`,
     );
     const protectedResult = run(LIFECYCLE, ["versions", "prune", "--yes"], project, env);
     expect(protectedResult.status, protectedResult.stdout + protectedResult.stderr).toBe(0);
     expect(protectedResult.stdout).toContain(`${AIDLC_VERSION} (rollback)`);
-    expect(protectedResult.stdout).toContain("2.5.2 (active)");
-    expect(protectedResult.stdout).toContain(`2.5.3 (pinned by ${pinnedProject})`);
+    expect(protectedResult.stdout).toContain(`${NEXT_VERSION} (active)`);
+    expect(protectedResult.stdout).toContain(`${LIVE_PIN_VERSION} (pinned by ${pinnedProject})`);
     expect(protectedResult.stdout).toContain("stale pin /missing/stale-project");
-    for (const version of [AIDLC_VERSION, "2.5.2", "2.5.3", "2.5.4"]) {
+    for (const version of [AIDLC_VERSION, NEXT_VERSION, LIVE_PIN_VERSION, STALE_PIN_VERSION]) {
       expect(existsSync(join(machine, "versions", version))).toBe(true);
     }
-    expect(existsSync(join(machine, "versions", "2.5.5"))).toBe(false);
+    expect(existsSync(join(machine, "versions", REMOVABLE_VERSION))).toBe(false);
   }, 120_000);
 
   test("uninstall removes command and versions while preserving machine state and projects", () => {

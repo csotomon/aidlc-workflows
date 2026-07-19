@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.5.2] - 2026-07-19
+
+AI-DLC now compares host-installed plugins with each project's composed version and source hash, and synchronizes plugin changes through one rollback-safe project transaction. **Upgrade:** update AI-DLC, refresh the project runtime, then run `aidlc plugin sync` once to establish stamps for previously composed plugins.
+
+* `aidlc plugin list [--verbose|--json]` reads proved Claude and Codex host inventories entirely offline, falls back to the current injected root for Kiro or unavailable stores, and reduces drift to `current`, `run: aidlc plugin sync`, or a specific `needs attention` remediation.
+* `aidlc plugin sync` composes every enabled installed plugin in staging, records deterministic version/source-hash stamps and ownership, regenerates shared surfaces, and commits once with full rollback. SessionStart uses the same implementation for its current plugin root.
+* `aidlc plugin sync --prune-missing` removes content only with full host inventory, explicit confirmation, and unchanged ownership hashes; plain sync never deletes content for a missing source.
+
 ## [2.5.1] - 2026-07-18
 
 AI-DLC completes the native install channel on Windows and adds machine lifecycle management and bounded update discovery on every supported platform. **Upgrade:** rerun `install.sh --harness <name>` on macOS/Linux or download and run `install.ps1 -Harness <name>` on Windows; existing project trees are not modified until `aidlc init` is run explicitly.

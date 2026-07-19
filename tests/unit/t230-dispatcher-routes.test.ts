@@ -342,17 +342,17 @@ describe("t230 dispatcher route parity", () => {
       fixture: true,
     },
     {
-      name: "plugin list maps to plugin-list",
+      name: "plugin list maps to dedicated plugin state",
       routerArgs: ["plugin", "list"],
-      tool: "aidlc-utility.ts",
-      toolArgs: ["plugin-list"],
+      tool: "aidlc-plugin.ts",
+      toolArgs: ["list"],
       fixture: true,
     },
     {
-      name: "plugin sync maps to plugin-sync",
+      name: "plugin sync maps to dedicated transactional sync",
       routerArgs: ["plugin", "sync"],
-      tool: "aidlc-utility.ts",
-      toolArgs: ["plugin-sync"],
+      tool: "aidlc-plugin.ts",
+      toolArgs: ["sync"],
       fixture: true,
     },
     {

@@ -37,8 +37,8 @@ All AI-DLC commands start with the orchestrator invocation. This chapter is a co
 | `/aidlc config set <key> <value>` | Change active workflow config (`depth`, `test-strategy`) |
 | `/aidlc config list` | List active workflow config (`--json` for structured output) |
 | `aidlc config global <get\|set\|clear\|list>` | Manage machine update and release settings |
-| `/aidlc plugin list` | List installed plugins and enabled state |
-| `/aidlc plugin sync` | Compose installed plugin roots into the current install |
+| `/aidlc plugin list [--verbose\|--json]` | Compare host-installed plugins with this project's composition stamps |
+| `/aidlc plugin sync [--prune-missing]` | Transactionally compose installed plugins; explicitly prune missing owned content |
 | `aidlc init [options]` | Initialize or refresh a project from an installed or local harness projection |
 | `aidlc upgrade [options]` | Install and activate a complete release |
 | `aidlc rollback [--version <v>]` | Activate a retained complete release without network access |
@@ -379,6 +379,7 @@ Validate that all of this implementation's prerequisites, configuration, and sta
 | Orphan stage files | Every slug in the graph has a matching `<phase>/<slug>.md` on disk |
 | Uncompiled stage files | Surfaces any stage `.md` on disk whose slug is not in the compiled graph, it will not execute until you run `aidlc-graph.ts compile` (advisory, never fails) |
 | Plugin selection | Enabled plugin list, per-plugin enabled-stage counts, full-graph `enabled:false` flag agreement, and torn-selection recovery hints |
+| Plugin composition | Offline installed-versus-composed version/hash state, including sync or repair remediation |
 | Scope validation | All enabled scopes (from `.claude/scopes/*.md` after plugin selection) walk cleanly (advisories for scope-truncation gaps are expected) |
 | Schema validation | Every stage's YAML frontmatter passes `validateStageFrontmatter` |
 | Graph references | Every `consumes[].artifact` and `requires_stage[]` target resolves |
@@ -610,7 +611,13 @@ are never derived by hand.
 
 ### `aidlc-utility select-plugins` - install plugin selection
 
-`/aidlc plugin list` prints installed plugin names and whether each is enabled.
+`/aidlc plugin list` reads the host's installed plugin inventory and compares
+each plugin's manifest version and deterministic source hash with the project's
+composition stamp. Its default status column is `current`,
+`run: aidlc plugin sync`, or `needs attention: <remediation>`.
+`--verbose` and `--json` retain the exact internal state. Claude and Codex use
+their host registries; Kiro reports `host inventory unavailable` outside a hook
+that supplies the current plugin root. The check is always offline.
 `select-plugins` is a **direct utility invocation**, not an `/aidlc select-plugins` command.
 `bun .claude/tools/aidlc-utility.ts select-plugins` prints the current selection
 (`all enabled (no selection)` when the `plugins` key is absent) and the known
@@ -623,7 +630,14 @@ bun .claude/tools/aidlc-utility.ts select-plugins aidlc,test-pro
 
 The command validates names, writes `.claude/tools/data/harness.json`, strips a newly disabled plugin's merged contributions from core stage source (structural adds via the compose-written sidecar, spliced prose via its sentinel markers; re-enabling restores them on the next session start), recompiles the full graph with disabled nodes marked `enabled:false`, prunes/regenerates stage and scope runners, and refreshes the generated SKILL.md scope/stage tables in one transaction. `aidlc` is core; omitting it disables core surfaces except the always-on Initialization stages. A change that would strand an active workflow (its scope, or a pending EXECUTE stage in its plan, owned by a plugin the new selection disables) is refused with each dependency named - complete or park the workflow first, or keep the plugin enabled.
 
-`/aidlc plugin sync` runs installed plugin compose hooks. It is safe to run repeatedly; when no plugin roots are present it exits 0 with `no installed plugins; nothing to sync`.
+`/aidlc plugin sync` stages all enabled installed plugins, composes and
+regenerates their graph/runner surfaces, then commits one rollback-safe project
+transaction with version/hash stamps. SessionStart calls the same implementation
+for its injected current root. Missing installed sources are reported but never
+deleted by plain sync. Use `aidlc plugin sync --prune-missing` only after
+reviewing the missing rows; it requires full inventory, confirmation (or
+`--yes`), and refuses any path whose ownership and unchanged hash cannot be
+proved.
 
 ### `aidlc-utility recompose` - in-flight plan flips
 

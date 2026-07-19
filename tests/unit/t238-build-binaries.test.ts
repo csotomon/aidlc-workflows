@@ -102,7 +102,7 @@ function stampedVersion(stdout: string): string {
 }
 
 describe("t238 build-binaries release builder", () => {
-  test("native build compiles, gates, and runs version plus a delegate from /tmp", () => {
+  test("native build compiles, gates, and runs version plus a delegate from an isolated project", () => {
     const result = runBuild();
     expect(result.error).toBeUndefined();
     expect(result.status, result.stdout + result.stderr).toBe(0);
@@ -139,7 +139,7 @@ describe("t238 build-binaries release builder", () => {
 
     const delegatePluginSync = gate(native, "delegate-plugin-sync");
     expect(delegatePluginSync.ok).toBe(true);
-    expect(delegatePluginSync.actual).toBe("no installed plugins; nothing to sync");
+    expect(delegatePluginSync.actual).toBe("plugin sync complete: 0 plugin(s)");
     expect(delegatePluginSync.stderr).not.toContain("Cannot find module");
     expect(delegatePluginSync.stderr).not.toContain("/$bunfs/");
 
@@ -192,15 +192,31 @@ describe("t238 build-binaries release builder", () => {
     expect(rerun.status).toBe(0);
     expect(stampedVersion(rerun.stdout ?? "")).toBe(AIDLC_VERSION);
 
-    const pluginSync = spawnSync(native.artifact, ["plugin", "sync"], {
-      cwd: tmpdir(),
-      encoding: "utf-8",
-      timeout: 30_000,
-    });
-    expect(pluginSync.status).toBe(0);
-    expect(pluginSync.stdout ?? "").toBe("no installed plugins; nothing to sync\n");
-    expect(`${pluginSync.stdout ?? ""}${pluginSync.stderr ?? ""}`).not.toContain("Cannot find module");
-    expect(`${pluginSync.stdout ?? ""}${pluginSync.stderr ?? ""}`).not.toContain("/$bunfs/");
+    const pluginFixture = mkdtempSync(join(tmpdir(), "aidlc-t238-plugin-empty-"));
+    try {
+      const registry = join(pluginFixture, "installed_plugins.json");
+      const settings = join(pluginFixture, "settings.json");
+      writeFileSync(join(pluginFixture, "package.json"), "{}\n");
+      writeFileSync(registry, '{"version":2,"plugins":{}}\n');
+      writeFileSync(settings, '{"enabledPlugins":{}}\n');
+      const pluginSync = spawnSync(native.artifact, ["plugin", "sync"], {
+        cwd: pluginFixture,
+        encoding: "utf-8",
+        env: {
+          ...process.env,
+          AIDLC_HARNESS_DIR: ".claude",
+          AIDLC_CLAUDE_PLUGIN_REGISTRY: registry,
+          AIDLC_CLAUDE_SETTINGS: settings,
+        },
+        timeout: 30_000,
+      });
+      expect(pluginSync.status).toBe(0);
+      expect(pluginSync.stdout ?? "").toBe("plugin sync complete: 0 plugin(s)\n");
+      expect(`${pluginSync.stdout ?? ""}${pluginSync.stderr ?? ""}`).not.toContain("Cannot find module");
+      expect(`${pluginSync.stdout ?? ""}${pluginSync.stderr ?? ""}`).not.toContain("/$bunfs/");
+    } finally {
+      rmSync(pluginFixture, { recursive: true, force: true });
+    }
 
     const doctor = spawnSync(native.artifact, ["doctor"], {
       cwd: tmpdir(),

@@ -459,8 +459,8 @@ bun .claude/tools/aidlc-utility.ts <subcommand>
 | `scope-change` | Atomic scope updates mid-workflow (recalculate stage inclusion). Re-plans which stages are EXECUTE/SKIP. | `SCOPE_CHANGED` |
 | `config-get`, `config-list` | Read active workflow config (`depth`, `test-strategy`); `config-list --json` emits the structured shape. | none |
 | `config-change` | Write active workflow config. Dispatcher form: `/aidlc config set depth <value>` or `/aidlc config set test-strategy <value>`. | `DEPTH_CHANGED`, `TEST_STRATEGY_CHANGED` |
-| `plugin-list` | List installed plugins with enabled/disabled state; `--json` emits `plugins` plus `selectionActive`. | none |
-| `plugin-sync` | Compose installed plugin roots by running each plugin's `hooks/compose.ts`; no roots is a clean no-op. | none |
+| `plugin-list` | Legacy direct utility view of project selection; the public `aidlc plugin list` route uses `aidlc-plugin.ts`. | none |
+| `plugin-sync` | Legacy injected-root composer retained for direct compatibility; the public route uses `aidlc-plugin.ts`. | none |
 | `set-status` | Low-level state-field sync (called by `sync-statusline.ts` hook on TaskUpdate) | — |
 | `detect-scope` | Record a scope-detection event during freeform handling. Two modes: `--scope <s> --input <text> [--source freeform\|keyword\|env\|cli]` (explicit), or `--from-text --input <text>` (inference via `inferScopeFromText` — reads each scope's `keywords` from its `.claude/scopes/*.md` frontmatter with word-boundary matching, alphabetical tie-break, `>5`-word fallback to `feature`). Modes are mutually exclusive. Audit event includes optional `Matched keywords` field when a keyword fires. | `SCOPE_DETECTED` |
 | `detect` | Read-only composer scan (the dispatched composer's first call): prints the stock scope registry, the compiled stage graph summary, and the paths a composed scope's two files must land at, as JSON (`--json`). Mutates nothing. | — |
@@ -475,6 +475,17 @@ The user-facing `intent`, `space`, and `space-create` forms are covered in
 `select-plugins` are intentionally invoked directly as
 `bun <harness-dir>/tools/aidlc-utility.ts <verb>`; neither is an orchestrator
 command.
+
+## Plugin State Tool
+
+`<harness-dir>/tools/aidlc-plugin.ts` owns the public `aidlc plugin list` and
+`aidlc plugin sync` routes. It normalizes the proved Claude/Codex host
+inventories (or one injected current root), validates host manifests, hashes
+compose inputs, compares project stamps, and renders the three-action status
+surface. Sync composes in staging and applies one `aidlc-transaction.ts` plan;
+`--prune-missing` additionally requires full inventory, confirmation, and a
+hash-valid `plugin-owned-<key>.json` record. These paths never open a network
+connection.
 
 ### Design Rationale
 

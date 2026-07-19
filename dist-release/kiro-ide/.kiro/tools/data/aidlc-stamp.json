@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "frameworkVersion": "2.5.1",
+  "frameworkVersion": "2.5.2",
   "distribution": "kiro-ide",
   "harnessDir": ".kiro"
 }

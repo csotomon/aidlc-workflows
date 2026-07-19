@@ -223,8 +223,8 @@ Utilities:
   config get <key>  Show active workflow config (depth, test-strategy)
   config set <key> <value>  Change active workflow config (depth, test-strategy)
   config list       List active workflow config (--json for structured output)
-  plugin list       List installed plugins and enabled state (--json for structured output)
-  plugin sync       Compose installed plugins into the current install
+  plugin list       Legacy direct selection view (public route uses aidlc-plugin.ts)
+  plugin sync       Legacy injected-root compose (public route uses aidlc-plugin.ts)
   --doctor          Run health check on hooks, settings, and directory structure
   --stage <id>      Jump to a specific stage (by slug or number, e.g., code-generation or 3.5)
   --phase <name>    Jump to the first in-scope stage of a phase (e.g., construction or 3)
@@ -243,7 +243,7 @@ Examples:
   /aidlc Fix the login timeout bug              Auto-detected as bugfix scope
   /aidlc compose "harden the deploy pipeline"   Composer proposes a tailored plan
   /aidlc config list                         Show depth and test strategy
-  /aidlc plugin list                         Show installed plugin selection
+  /aidlc plugin list                         Compare installed and composed plugin state
   /aidlc                                        Resume or begin
   /aidlc --stage code-generation                Jump to code-generation stage
   /aidlc --phase construction --scope bugfix    Jump to construction with bugfix scope

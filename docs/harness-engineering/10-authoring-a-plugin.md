@@ -264,11 +264,13 @@ codex plugin marketplace add <your-org>/<your-plugin-repo>   # Codex
 codex plugin add test-pro@<marketplace>                      # Codex
 ```
 
-A **SessionStart hook** (bundled in the emitted plugin) composes automatically —
-merges all chosen plugins' subtrees and contributions, validates the merged set,
-compiles the stage graph + scope grid, and projects the result. The orchestrator
-routes entirely off that compiled graph, so a plugin stage runs the moment it is
-composed in — no prose or skill file to edit.
+A **SessionStart hook** (bundled in the emitted plugin) calls the same
+transactional sync implementation as `aidlc plugin sync` for its injected
+current root. It merges the plugin's subtrees and contributions, validates the
+result, compiles the stage graph + scope grid, and writes a version/source-hash
+composition stamp. The orchestrator routes entirely off that compiled graph, so
+a plugin stage runs the moment it is composed in - no prose or skill file to
+edit.
 
 ### Kiro (no store — folder-drop, then run the composer explicitly)
 

@@ -1250,7 +1250,12 @@ function buildPluginProjection(pluginName: string, harnessName: string, outDir: 
     'BUN=$(command -v bun 2>/dev/null || true); ' +
     '[ -z "$BUN" ] && [ -x "$HOME/.bun/bin/bun" ] && BUN="$HOME/.bun/bin/bun"; ' +
     '[ -z "$BUN" ] && { echo "aidlc plugin compose: aidlc and bun not found, skipping" >&2; exit 0; }';
-  const command = `sh -c '${aidlcExpr}${bunExpr}; AIDLC_HARNESS_DIR=${harnessLeaf} "$BUN" "${rootExpr}/hooks/compose.ts"'`;
+  const sharedToolExpr =
+    `PROJECT_ROOT="\${CLAUDE_PROJECT_DIR:-\${AIDLC_PROJECT_DIR:-$PWD}}"; ` +
+    `PLUGIN_TOOL="$PROJECT_ROOT/${harnessLeaf}/tools/aidlc-plugin.ts"; ` +
+    `[ -f "$PLUGIN_TOOL" ] && { AIDLC_HARNESS_DIR=${harnessLeaf} "$BUN" "$PLUGIN_TOOL" sync && exit 0; }; `;
+  const command =
+    `sh -c '${aidlcExpr}${bunExpr}; ${sharedToolExpr}AIDLC_HARNESS_DIR=${harnessLeaf} "$BUN" "${rootExpr}/hooks/compose.ts"'`;
 
   if (kind === "kiro") {
     writeFileSync(
