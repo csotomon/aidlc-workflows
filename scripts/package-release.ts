@@ -99,6 +99,7 @@ function build(argv: string[]): void {
       "linux-arm64-musl",
       "linux-x64",
       "linux-x64-musl",
+      "windows-x64",
     ];
     const actual = new Set(
       assets.filter((asset) => asset.kind === "binary").map((asset) => asset.target),
@@ -116,6 +117,15 @@ function build(argv: string[]): void {
     name: "install.sh",
     sha256: digest(installer),
     bytes: statSync(installer).size,
+    kind: "installer",
+  });
+
+  const powershellInstaller = join(output, "install.ps1");
+  copyFileSync(join(REPO_ROOT, "scripts", "install.ps1"), powershellInstaller);
+  assets.push({
+    name: "install.ps1",
+    sha256: digest(powershellInstaller),
+    bytes: statSync(powershellInstaller).size,
     kind: "installer",
   });
 

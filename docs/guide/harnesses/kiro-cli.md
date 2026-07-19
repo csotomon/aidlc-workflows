@@ -35,7 +35,7 @@ The `aidlc/` directory is the workspace shell — it ships the pre-built
 of `.kiro/`, so copy it separately (or copy the whole `dist/kiro/` tree at once).
 `/aidlc --doctor` fails its "workspace shell ready" check if it is missing.
 
-### Native macOS/Linux channel
+### Native channel
 
 ```bash
 curl -fsSL https://github.com/awslabs/aidlc-workflows/releases/latest/download/install.sh \
@@ -49,6 +49,9 @@ This channel verifies release checksums and does not require Bun, Node.js, or
 git for AI-DLC itself. `aidlc init` projects the Kiro shell before the first
 chat session. Use `--from <release-directory> --offline` with the installer
 for an air-gapped package.
+On Windows, download the matching release `install.ps1` and run
+`install.ps1 -Harness kiro`; `-From <release-directory> -Offline` consumes the
+same flat package.
 
 Then start a session in your project:
 

@@ -66,7 +66,7 @@ must target an installed project harness. Any failed gate fails the build.
 
 After the target binaries are present, `bun scripts/package-release.ts`
 packages the committed `dist-release/` projections into per-harness archives
-and emits `version.json`, `checksums.txt`, and `install.sh`. The generated flat
+and emits `version.json`, `checksums.txt`, `install.sh`, and `install.ps1`. The generated flat
 directory is the contract consumed by the installer and `aidlc package`.
 
 ## Testing

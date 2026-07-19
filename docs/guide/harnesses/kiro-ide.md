@@ -46,7 +46,7 @@ The `aidlc/` directory is the workspace shell — it ships the pre-built
 of `.kiro/`, so copy it separately (or copy the whole `dist/kiro-ide/` tree at
 once). `/aidlc --doctor` fails its "workspace shell ready" check if it is missing.
 
-### Native macOS/Linux channel
+### Native channel
 
 ```bash
 curl -fsSL https://github.com/awslabs/aidlc-workflows/releases/latest/download/install.sh \
@@ -62,6 +62,9 @@ is opened and merges the native `aidlc *` trust entry into
 `.vscode/settings.json` without replacing user-owned settings. Use
 `--from <release-directory> --offline` with the installer for an air-gapped
 package.
+On Windows, download the matching release `install.ps1` and run
+`install.ps1 -Harness kiro-ide`; `-From <release-directory> -Offline` consumes
+the same flat package.
 
 Open `your-project/` in Kiro IDE. The install ships:
 

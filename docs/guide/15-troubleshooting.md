@@ -34,6 +34,7 @@ This chapter covers common issues and their solutions, organized by symptom.
 |------------------|------------|
 | `Checksum mismatch for <asset>.` or `<asset>: checksum mismatch` | Stop. Do not reuse the downloaded directory. Download the release assets and `checksums.txt` again from the same version, or have the owner of an offline package recreate it with `aidlc package create`. |
 | `command not found: aidlc` after `install.sh` | Add the installer-reported bin directory to `PATH` (normally `export PATH="$HOME/.local/bin:$PATH"`), open a new shell, and run `aidlc doctor`. |
+| `aidlc.cmd` exits 4 or the Windows active pointer is invalid | Do not edit `%LOCALAPPDATA%\aidlc\active-executable`. Rerun the same verified `install.ps1 -Harness <name>` or use `aidlc rollback --version <retained-version>` from a retained executable. |
 | `locally modified or unowned` or `managed block was locally modified` from `aidlc init` | Run `aidlc init --dry-run --verbose` and review every conflict. Use `--force` only to replace framework-owned bytes; it never authorizes deletion of unrelated project content. |
 | `legacy root integration ambiguous; move or delete the unmarked AI-DLC content` | Move or delete the old unmarked AI-DLC block in the named root file, preserve any project-owned text elsewhere, then rerun `aidlc init`. This release intentionally refuses to guess ownership. |
 | `managed markers are missing, duplicated, or malformed` | Repair the named root file so it has exactly one matching `BEGIN AI-DLC` / `END AI-DLC` pair, or remove the broken AI-DLC block and rerun `aidlc init`. |
@@ -41,6 +42,8 @@ This chapter covers common issues and their solutions, organized by symptom.
 | An upgrade was interrupted and `aidlc version` still shows the prior release | This is the safe pre-pointer state: the old command remains active. Run `aidlc doctor`, then rerun the same `aidlc upgrade --version <version>` command. A complete unused retained version may remain and is reported by `aidlc versions list`. |
 | `another AI-DLC mutation holds .../.aidlc-transaction.lock` | Let the active init/lifecycle command finish. If its process no longer exists, rerun the command; stale owner-private staging is swept only after the lock is safely reclaimed. |
 | `existing aidlc is managed by Homebrew` / `Nix`, or the destination command is `not owned by the AI-DLC installer` | Upgrade through the reported package manager. To keep a separate native install, set `AIDLC_BIN_DIR` explicitly to an empty user-owned directory. Never replace a mixed-ownership command in place. |
+| `update cache is invalid` or machine config is rejected | Run `aidlc config global list`. Repair or remove only the named `%LOCALAPPDATA%\aidlc\config.json` (Windows) or `~/.local/share/aidlc/config.json` (macOS/Linux); unknown keys and stored credentials are rejected. |
+| `versions prune`, `harness remove`, or `uninstall` requires `--yes` | The command is running without an interactive stdin. Review the listed removals, then rerun with `--yes`; integrity refusals cannot be bypassed. |
 
 Native `aidlc doctor` also checks the active command pointer, rollback
 eligibility, retained pin completeness, stale pin registrations, abandoned

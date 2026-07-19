@@ -12,7 +12,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import {
@@ -127,9 +127,17 @@ import {
   commandPath,
   inspectInstalledVersion,
   installRoot,
+  readActiveExecutable,
   rollbackVersionPath,
   versionRoot as installedVersionRoot,
 } from "./aidlc-install-paths.ts";
+import {
+  cachedUpdateState,
+  refreshUpdateState,
+} from "./aidlc-update.ts";
+import {
+  scanWindowsUninstallJournals,
+} from "./aidlc-windows-uninstall.ts";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -1184,7 +1192,10 @@ function codexNativeTrustHashes(hooksPath: string): string[] {
   return hashes;
 }
 
-function handleDoctor(projectDir: string, flags: Record<string, string | boolean> = {}): void {
+async function handleDoctor(
+  projectDir: string,
+  flags: Record<string, string | boolean> = {},
+): Promise<void> {
   const results: Array<{
     pass: boolean;
     severity?: "warn";
@@ -1229,7 +1240,10 @@ function handleDoctor(projectDir: string, flags: Record<string, string | boolean
     let pointerValid = false;
     try {
       pointerValid = Boolean(expectedExecutable) &&
-        realpathSync(command) === realpathSync(expectedExecutable);
+        (isWindows
+          ? existsSync(command) &&
+            readActiveExecutable() === resolve(expectedExecutable)
+          : realpathSync(command) === realpathSync(expectedExecutable));
     } catch {
       pointerValid = false;
     }
@@ -1286,6 +1300,26 @@ function handleDoctor(projectDir: string, flags: Record<string, string | boolean
         : `Transaction staging: ${abandoned.length} abandoned path(s): ${abandoned.join(", ")}`,
       fix: "finish any active AI-DLC command, then rerun the command to trigger the safe staging sweep",
     });
+
+    if (isWindows) {
+      const uninstallRecovery = scanWindowsUninstallJournals();
+      results.push({
+        pass: uninstallRecovery.pending.length === 0 &&
+          uninstallRecovery.invalid.length === 0,
+        label: uninstallRecovery.pending.length === 0 &&
+            uninstallRecovery.invalid.length === 0
+          ? "Windows uninstall recovery: no pending continuations"
+          : `Windows uninstall recovery: ${
+            uninstallRecovery.pending.length
+          } pending and ${uninstallRecovery.invalid.length} invalid continuation(s): ${
+            [
+              ...uninstallRecovery.pending.map((item) => item.path),
+              ...uninstallRecovery.invalid,
+            ].join(", ")
+          }`,
+        fix: "finish active AI-DLC commands, then run `aidlc version` to resume cleanup",
+      });
+    }
 
     const pinsPath = join(installRoot(), "pins.json");
     let stalePins: string[] = [];
@@ -3114,6 +3148,32 @@ function handleDoctor(projectDir: string, flags: Record<string, string | boolean
     // Advisory only; a scan failure must not hide the main doctor report.
   }
 
+  const explicitUpdateCheck = flags["check-updates"] === "true";
+  const interactiveUpdateCheck =
+    process.stdin.isTTY &&
+    process.stdout.isTTY &&
+    flags.json !== "true" &&
+    flags.quiet !== "true";
+  let update = cachedUpdateState();
+  if (
+    explicitUpdateCheck ||
+    (interactiveUpdateCheck &&
+      (update.stale === true ||
+        ["stale", "absent", "unavailable"].includes(update.state)))
+  ) {
+    update = await refreshUpdateState(explicitUpdateCheck ? 15_000 : 750, {
+      offline: flags.offline === "true" ? true : undefined,
+    });
+  }
+  results.push({
+    pass: update.state === "current",
+    severity: update.state === "current" || update.state === "invalid-config"
+      ? undefined
+      : "warn",
+    label: `Update: ${update.message}`,
+    fix: update.state === "behind" ? "run `aidlc upgrade`" : undefined,
+  });
+
   // Cold-safe gate: only emit audit when an audit trail already exists. On a
   // pristine project (no audit shard / flat audit.md) doctor prints its health
   // report and creates NOTHING — it stays a pure read-only diagnostic. On an
@@ -3154,7 +3214,7 @@ function handleDoctor(projectDir: string, flags: Record<string, string | boolean
   output += `${passed} passed, ${warnings} warnings, ${failed} failed\n`;
 
   if (flags.json) {
-    const code = failed > 0 ? 1 : 0;
+    const code = update.state === "invalid-config" ? 2 : failed > 0 ? 1 : 0;
     process.stdout.write(`${JSON.stringify({
       schemaVersion: 1,
       ok: code === 0,
@@ -3188,7 +3248,7 @@ function handleDoctor(projectDir: string, flags: Record<string, string | boolean
   // signal. Doctor's stdout carries the diagnostic regardless of exit
   // code — the orchestrator's tool-failure handler was updated in this
   // same change to print stdout (not stderr) for doctor.
-  process.exit(failed > 0 ? 1 : 0);
+  process.exit(update.state === "invalid-config" ? 2 : failed > 0 ? 1 : 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -5627,7 +5687,7 @@ export async function main(argv: string[]): Promise<void> {
       handleStatus(projectDir, flags);
       break;
     case "doctor":
-      handleDoctor(projectDir, flags);
+      await handleDoctor(projectDir, flags);
       break;
     case "intent-birth":
       handleIntentBirth(projectDir, flags);

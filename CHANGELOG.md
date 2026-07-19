@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.5.1] - 2026-07-18
+
+AI-DLC completes the native install channel on Windows and adds machine lifecycle management and bounded update discovery on every supported platform. **Upgrade:** rerun `install.sh --harness <name>` on macOS/Linux or download and run `install.ps1 -Harness <name>` on Windows; existing project trees are not modified until `aidlc init` is run explicitly.
+
+* `aidlc harness add|remove|list|default`, `aidlc versions prune`, and `aidlc uninstall [--purge]` manage the active machine install transactionally. Destructive non-interactive calls require `--yes`; uninstall preserves global configuration, update cache, pins, and the harness default unless `--purge` is explicit.
+* Windows releases now include `aidlc-windows-x64.exe` and authenticated `install.ps1`. A stable per-user `aidlc.cmd` forwards to a strictly validated version pointer, rollback changes only that pointer, verified files are unblocked, and journaled uninstall cleanup waits for both the binary and shim and resumes safely after interruption.
+* Machine-global `update-check`, `offline`, `release-base-url`, and `ca-bundle` settings are available through `aidlc config global ...` or project-style config commands with `--global`; release settings resolve in flag, environment, machine config, default order.
+* Update discovery uses an authenticated 24-hour cache. Bare help and management listings are cache-only; interactive doctor refreshes stale data within 750 ms, while `doctor --check-updates` and `upgrade --check` use a 15-second explicit budget and preserve the previous valid cache on every malformed or unavailable response.
+* `aidlc completions bash|zsh|fish|powershell` emits deterministic command and option definitions from the dispatcher route registry, including bounded retained-version and installed-harness helper calls.
+* Release CI now builds and executes the Windows target on a native Windows runner, and flat offline packages include both `install.sh` and `install.ps1`.
+
 ## [2.5.0] - 2026-07-17
 
 AI-DLC now has a checksum-verified, self-contained macOS/Linux install channel with project initialization, retained versions, project pins, upgrade, rollback, and offline packages. Existing copy installs remain supported and unchanged in how they are invoked. **Upgrade:** binary users run `install.sh --harness <name>` and then `aidlc init`; copy-install users may continue copying `dist/<harness>/` and running through bun.

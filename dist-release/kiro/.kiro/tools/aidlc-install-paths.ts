@@ -90,6 +90,10 @@ export function activeVersionPath(): string {
   return join(installRoot(), "active-version");
 }
 
+export function activeExecutablePath(): string {
+  return join(installRoot(), "active-executable");
+}
+
 export function rollbackVersionPath(): string {
   return join(installRoot(), "rollback-version");
 }
@@ -101,6 +105,14 @@ export function readVersionMarker(path: string): string | null {
 }
 
 export function activeVersion(): string | null {
+  if (platform() === "win32") {
+    try {
+      const executable = readActiveExecutable();
+      if (executable) return basename(dirname(executable));
+    } catch {
+      // The marker fallback lets doctor report a damaged pointer.
+    }
+  }
   for (const candidatePath of [process.execPath, commandPath()]) {
     try {
       const executable = realpathSync(candidatePath);
@@ -114,6 +126,34 @@ export function activeVersion(): string | null {
     }
   }
   return readVersionMarker(activeVersionPath());
+}
+
+export function readActiveExecutable(): string | null {
+  const path = activeExecutablePath();
+  if (!existsSync(path)) return null;
+  const raw = readFileSync(path, "utf-8");
+  if (!/^[^\r\n]+\r?\n?$/.test(raw)) {
+    throw new Error(`${path} must contain exactly one executable path`);
+  }
+  const executable = raw.endsWith("\r\n")
+    ? raw.slice(0, -2)
+    : raw.endsWith("\n")
+    ? raw.slice(0, -1)
+    : raw;
+  if (!isAbsolute(executable)) {
+    throw new Error(`${path} must contain an absolute executable path`);
+  }
+  const normalized = resolve(executable);
+  const parent = dirname(normalized);
+  const version = basename(parent);
+  if (
+    basename(normalized).toLowerCase() !== "aidlc.exe" ||
+    dirname(parent) !== resolve(versionsRoot()) ||
+    !STRICT_SEMVER.test(version)
+  ) {
+    throw new Error(`${path} points outside the installed versions root`);
+  }
+  return normalized;
 }
 
 function realpathOrResolved(path: string): string {

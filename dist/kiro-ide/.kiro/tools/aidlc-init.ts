@@ -31,6 +31,7 @@ import {
   walkFiles,
 } from "./aidlc-distribution.ts";
 import { activeVersion, projectDirFrom, runtimeRoot } from "./aidlc-install-paths.ts";
+import { defaultHarnessPath } from "./aidlc-machine-config.ts";
 import {
   type TransactionOperation,
   type TransactionPlan,
@@ -652,6 +653,18 @@ function materializeSource(path: string): { root: string; cleanup?: string } {
   return { root: temporary, cleanup: temporary };
 }
 
+function configuredDefaultHarness(): string | undefined {
+  const path = defaultHarnessPath();
+  if (!existsSync(path)) return undefined;
+  const value = readFileSync(path, "utf-8").trim();
+  if (!/^[a-z0-9][a-z0-9-]*$/.test(value)) {
+    throw new Error(
+      `${path} contains an invalid harness name; run aidlc harness default clear`,
+    );
+  }
+  return value;
+}
+
 function selectSource(
   requested: string | undefined,
   from: string | undefined,
@@ -680,24 +693,47 @@ function selectSource(
     }
   });
   const selectedName = existingDistribution || requested;
-  const filtered = selectedName
-    ? candidates.filter((candidate) => candidate.stamp.distribution === selectedName)
-    : candidates;
   const versionFiltered = requiredVersion
-    ? filtered.filter((candidate) => candidate.stamp.frameworkVersion === requiredVersion)
-    : filtered;
+    ? candidates.filter((candidate) =>
+        candidate.stamp.frameworkVersion === requiredVersion
+      )
+    : candidates;
+  if (selectedName) {
+    const selected = versionFiltered.filter((candidate) =>
+      candidate.stamp.distribution === selectedName
+    );
+    if (selected.length === 1) return { root: selected[0].root };
+    throw new Error(
+      requiredVersion && versionFiltered.length === 0
+        ? `project requires ${requiredVersion}, which is not installed; run aidlc versions install ${requiredVersion}`
+        : requiredVersion
+        ? `harness ${selectedName} is not installed in ${requiredVersion}; run aidlc versions install ${requiredVersion} --harness ${selectedName}`
+        : `harness ${selectedName} is not installed`,
+    );
+  }
+  const configuredDefault = configuredDefaultHarness();
+  if (configuredDefault) {
+    const selected = versionFiltered.filter((candidate) =>
+      candidate.stamp.distribution === configuredDefault
+    );
+    if (selected.length === 1) return { root: selected[0].root };
+    if (versionFiltered.length > 0) {
+      throw new Error(
+        requiredVersion
+          ? `configured default harness ${configuredDefault} is not installed in ${requiredVersion}; run aidlc versions install ${requiredVersion} --harness ${configuredDefault} or aidlc harness default clear`
+          : `configured default harness ${configuredDefault} is unavailable; install it or run aidlc harness default clear`,
+      );
+    }
+  }
   if (versionFiltered.length === 1) return { root: versionFiltered[0].root };
   if (versionFiltered.length === 0) {
     throw new Error(
       requiredVersion
         ? `project requires ${requiredVersion}, which is not installed; run aidlc versions install ${requiredVersion}`
-        :
-      selectedName
-        ? `harness ${selectedName} is not installed`
         : "no installed harness runtime is available",
     );
   }
-  if (!selectedName && process.stdin.isTTY) {
+  if (process.stdin.isTTY) {
     process.stdout.write("Select a harness for this project:\n");
     for (const [index, candidate] of versionFiltered.entries()) {
       process.stdout.write(
@@ -711,7 +747,11 @@ function selectSource(
     if (selected) return { root: selected.root };
     throw new Error("harness selection cancelled; pass --harness <name>");
   }
-  throw new Error(`multiple harnesses are installed; pass --harness <${versionFiltered.map((item) => item.stamp.distribution).join("|")}>`);
+  throw new Error(
+    `multiple harnesses are installed; pass --harness <${
+      versionFiltered.map((item) => item.stamp.distribution).join("|")
+    }>`,
+  );
 }
 
 function existingProject(projectDir: string): {

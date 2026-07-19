@@ -18,6 +18,10 @@ import {
 } from "./aidlc-install-paths.ts";
 import { executePlan, transactionState, writeOperation } from "./aidlc-transaction.ts";
 import { packagedDistributionRoot, runtimeHarnessDir } from "./aidlc-runtime-paths.ts";
+import { cachedUpdateNotice } from "./aidlc-update.ts";
+import {
+  recoverWindowsUninstallContinuations,
+} from "./aidlc-windows-uninstall.ts";
 
 type Classification = "passthrough" | "translation" | "stub" | "routing-only" | "help";
 type RouteKind =
@@ -93,6 +97,8 @@ export const TOOLS = {
   learnings: "aidlc-learnings.ts",
   log: "aidlc-log.ts",
   lifecycle: "aidlc-lifecycle.ts",
+  machineConfig: "aidlc-machine-config.ts",
+  completions: "aidlc-completions.ts",
   orchestrate: "aidlc-orchestrate.ts",
   runnerGen: "aidlc-runner-gen.ts",
   runtime: "aidlc-runtime.ts",
@@ -187,12 +193,12 @@ export const ROUTES: readonly Route[] = [
     projectRequirement: "optional",
     pinPolicy: "inspect",
     networkPolicy: "interactive-bounded",
-    mutationScope: "project",
+    mutationScope: "project-and-machine",
     outputModes: ["human", "quiet", "json"],
     human: [
-      { command: "doctor [args]", summary: "run environment diagnostics" },
+      { command: "doctor [--check-updates]", summary: "run environment diagnostics" },
     ],
-    all: ["doctor [args]"],
+    all: ["doctor [--verbose] [--json] [--quiet] [--check-updates]"],
   },
   {
     id: "top-version",
@@ -256,7 +262,10 @@ export const ROUTES: readonly Route[] = [
     human: [
       { command: "upgrade [args]", summary: "install and activate a framework release" },
     ],
-    all: ["upgrade [--version <version>] [--from <dir>] [--check|--dry-run]", "update [args]"],
+    all: [
+      "upgrade [--version <version>] [--from <dir>] [--release-base-url <url>] [--ca-bundle <path>] [--check|--dry-run]",
+      "update [--version <version>] [--from <dir>] [--release-base-url <url>] [--ca-bundle <path>] [--check|--dry-run]",
+    ],
   },
   {
     id: "top-rollback",
@@ -291,32 +300,36 @@ export const ROUTES: readonly Route[] = [
     all: ["use <version|current>"],
   },
   {
-    id: "top-uninstall-later-release",
+    id: "top-uninstall",
     group: "top",
-    kind: "top-stub",
-    classification: "stub",
+    kind: "top-passthrough",
+    classification: "passthrough",
     verbs: ["uninstall"],
+    tool: TOOLS.lifecycle,
     visibility: "public",
     projectRequirement: "none",
     pinPolicy: "active",
     networkPolicy: "forbidden",
     mutationScope: "machine",
-    outputModes: ["human"],
-    all: ["uninstall"],
+    outputModes: ["human", "quiet", "json"],
+    human: [{ command: "uninstall [--purge]", summary: "remove the machine installation" }],
+    all: ["uninstall [--purge] [--yes]"],
   },
   {
-    id: "top-completions-later-release",
+    id: "top-completions",
     group: "top",
-    kind: "top-stub",
-    classification: "stub",
+    kind: "top-passthrough",
+    classification: "passthrough",
     verbs: ["completions"],
+    tool: TOOLS.completions,
     visibility: "public",
     projectRequirement: "none",
     pinPolicy: "active",
     networkPolicy: "forbidden",
     mutationScope: "none",
     outputModes: ["human"],
-    all: ["completions <shell>"],
+    human: [{ command: "completions <shell>", summary: "emit shell completion definitions" }],
+    all: ["completions <bash|zsh|fish|powershell>"],
   },
   {
     id: "versions-list",
@@ -350,21 +363,25 @@ export const ROUTES: readonly Route[] = [
     mutationScope: "machine",
     outputModes: ["human", "quiet", "json"],
     human: [{ command: "versions install", summary: "install a retained release" }],
-    all: ["install <version> [--harness <name>] [--from <dir>]"],
+    all: [
+      "install <version> [--harness <name>] [--from <dir>] [--release-base-url <url>] [--ca-bundle <path>]",
+    ],
   },
   {
-    id: "versions-later-release",
+    id: "versions-prune",
     group: "versions",
-    kind: "top-stub",
-    classification: "stub",
+    kind: "noun-passthrough",
+    classification: "passthrough",
     verbs: ["prune"],
+    tool: TOOLS.lifecycle,
+    prefix: ["versions"],
     visibility: "public",
     projectRequirement: "none",
     pinPolicy: "active",
     networkPolicy: "forbidden",
     mutationScope: "machine",
-    outputModes: ["human"],
-    all: ["prune"],
+    outputModes: ["human", "quiet", "json"],
+    all: ["prune [--yes]"],
   },
   {
     id: "package-create",
@@ -381,7 +398,9 @@ export const ROUTES: readonly Route[] = [
     mutationScope: "machine",
     outputModes: ["human", "quiet", "json"],
     human: [{ command: "package create", summary: "create an offline release set" }],
-    all: ["create [args]"],
+    all: [
+      "create [--version <version>] --harness <name> --target <triple> --output <directory> [--from <dir>] [--release-base-url <url>] [--ca-bundle <path>]",
+    ],
   },
   {
     id: "package-verify",
@@ -401,45 +420,54 @@ export const ROUTES: readonly Route[] = [
     all: ["verify <directory>"],
   },
   {
-    id: "harness-add-later-release",
+    id: "harness-add",
     group: "harness",
-    kind: "top-stub",
-    classification: "stub",
+    kind: "noun-passthrough",
+    classification: "passthrough",
     verbs: ["add"],
+    tool: TOOLS.lifecycle,
+    prefix: ["harness"],
     visibility: "public",
     projectRequirement: "none",
     pinPolicy: "active",
     networkPolicy: "explicit-only",
     mutationScope: "machine",
-    outputModes: ["human"],
-    all: ["add <name>"],
+    outputModes: ["human", "quiet", "json"],
+    all: [
+      "add <name> [--from <dir>] [--release-base-url <url>] [--ca-bundle <path>]",
+    ],
   },
   {
-    id: "harness-mutate-later-release",
+    id: "harness-mutate",
     group: "harness",
-    kind: "top-stub",
-    classification: "stub",
+    kind: "noun-passthrough",
+    classification: "passthrough",
     verbs: ["remove", "default"],
+    tool: TOOLS.lifecycle,
+    prefix: ["harness"],
     visibility: "public",
     projectRequirement: "none",
     pinPolicy: "active",
     networkPolicy: "forbidden",
     mutationScope: "machine",
-    outputModes: ["human"],
-    all: ["remove <name>", "default <name|clear>"],
+    outputModes: ["human", "quiet", "json"],
+    all: ["remove <name> [--yes]", "default <name|clear>"],
   },
   {
-    id: "harness-list-later-release",
+    id: "harness-list",
     group: "harness",
-    kind: "top-stub",
-    classification: "stub",
+    kind: "noun-passthrough",
+    classification: "passthrough",
     verbs: ["list"],
+    tool: TOOLS.lifecycle,
+    prefix: ["harness"],
     visibility: "public",
     projectRequirement: "none",
     pinPolicy: "active",
     networkPolicy: "forbidden",
     mutationScope: "none",
-    outputModes: ["human"],
+    outputModes: ["human", "quiet", "json"],
+    human: [{ command: "harness <add|remove|list|default>", summary: "manage installed harnesses" }],
     all: ["list"],
   },
   {
@@ -638,6 +666,21 @@ export const ROUTES: readonly Route[] = [
     tool: TOOLS.utility,
     ...PUBLIC_ENGINE,
     targets: { change: "scope-change", detect: "detect-scope", "resolve-env": "resolve-env-scope" },
+  },
+  {
+    id: "config-global",
+    group: "config",
+    kind: "noun-passthrough",
+    classification: "passthrough",
+    verbs: ["global"],
+    tool: TOOLS.machineConfig,
+    visibility: "public",
+    projectRequirement: "none",
+    pinPolicy: "active",
+    networkPolicy: "forbidden",
+    mutationScope: "machine",
+    outputModes: ["human", "quiet", "json"],
+    all: ["global <get|set|clear|list>"],
   },
   {
     id: "config",
@@ -901,6 +944,16 @@ function handleWorkspace(argv: string[]): Action {
 
 function handleConfig(route: Route, argv: string[]): Action {
   const verb = argv[1];
+  if (argv.includes("--global")) {
+    const args = argv.filter((value) => value !== "--global");
+    if (["get", "set", "clear", "list"].includes(verb ?? "")) {
+      return {
+        type: "delegate",
+        tool: TOOLS.machineConfig,
+        args: ["global", verb, ...args.slice(2)],
+      };
+    }
+  }
   if (verb === "get" || verb === "list") {
     const target = route.targets?.[verb];
     if (target) return { type: "delegate", tool: TOOLS.utility, args: [target, ...argv.slice(2)] };
@@ -977,6 +1030,8 @@ function handleRouteOnly(route: Route, argv: string[]): Action {
       jump: TOOLS.jump,
       learnings: TOOLS.learnings,
       lifecycle: TOOLS.lifecycle,
+      "machine-config": TOOLS.machineConfig,
+      completions: TOOLS.completions,
       log: TOOLS.log,
       orchestrate: TOOLS.orchestrate,
       "runner-gen": TOOLS.runnerGen,
@@ -1094,7 +1149,6 @@ function resolveNoun(argv: string[]): Action | undefined {
   if (routes.length === 0) return undefined;
 
   for (const route of routes) {
-    if (route.kind === "custom") return handleCustom(route, argv);
     if (route.kind === "routing-only") return handleRouteOnly(route, argv);
 
     const verb = argv[1];
@@ -1119,6 +1173,8 @@ function resolveNoun(argv: string[]): Action | undefined {
     }
   }
 
+  const custom = routes.find((route) => route.kind === "custom");
+  if (custom) return handleCustom(custom, argv);
   return nounError(noun, argv[1]);
 }
 
@@ -1249,6 +1305,10 @@ async function loadDelegate(tool: string): Promise<DelegateModule | null> {
       return import("./aidlc-log.ts");
     case TOOLS.lifecycle:
       return import("./aidlc-lifecycle.ts");
+    case TOOLS.machineConfig:
+      return import("./aidlc-machine-config.ts");
+    case TOOLS.completions:
+      return import("./aidlc-completions.ts");
     case TOOLS.orchestrate:
       return import("./aidlc-orchestrate.ts");
     case TOOLS.runnerGen:
@@ -1421,6 +1481,14 @@ async function execute(action: Action): Promise<number> {
   }
   if (action.type === "help") {
     text(1, action.all ? renderAllHelp() : renderHumanHelp());
+    if (!action.all && process.stdout.isTTY) {
+      try {
+        const notice = cachedUpdateNotice();
+        if (notice) text(1, `\n${notice}\n`);
+      } catch {
+        // Ambient discovery never makes help fail.
+      }
+    }
     return 0;
   }
   if (action.type === "version") {
@@ -1495,8 +1563,18 @@ export function routePolicyFor(argv: readonly string[]): Route | null {
       if (command === "rollback") return routeById("top-rollback");
       if (command === "use") return routeById("top-use");
       if (command === "versions") {
-        return routeById(clean[3] === "list" ? "versions-list" : "versions-install");
+        return routeById(
+          clean[3] === "list"
+            ? "versions-list"
+            : clean[3] === "prune"
+            ? "versions-prune"
+            : "versions-install",
+        );
       }
+      if (command === "harness") {
+        return routeById(clean[3] === "list" ? "harness-list" : clean[3] === "add" ? "harness-add" : "harness-mutate");
+      }
+      if (command === "uninstall") return routeById("top-uninstall");
       if (command === "package") {
         return routeById(clean[3] === "verify" ? "package-verify" : "package-create");
       }
@@ -1573,8 +1651,9 @@ export function routePolicyFor(argv: readonly string[]): Route | null {
   const nounRoutes = ROUTES.filter((route) => route.group === head);
   if (nounRoutes.length === 0) return null;
   const verb = clean[1];
-  return nounRoutes.find((route) => route.kind === "custom") ??
-    nounRoutes.find((route) => route.verbs.includes(verb ?? "")) ??
+  if (head === "config" && clean.includes("--global")) return routeById("config-global");
+  return nounRoutes.find((route) => route.verbs.includes(verb ?? "")) ??
+    nounRoutes.find((route) => route.kind === "custom") ??
     null;
 }
 
@@ -1796,6 +1875,30 @@ export async function main(argv: string[]): Promise<void> {
     // delegate and sibling tool reads this env, so pin the probe's answer
     // once here. Falls back to .claude when no install is present.
     process.env.AIDLC_HARNESS_DIR = runtimeHarnessDir();
+  }
+  if (
+    process.platform === "win32" &&
+    !["doctor", "--doctor", "uninstall"].includes(argv[0] ?? "")
+  ) {
+    try {
+      const recovered = recoverWindowsUninstallContinuations();
+      if (recovered > 0) {
+        process.exitCode = renderDispatcherFailure(
+          argv,
+          3,
+          `resumed ${recovered} pending Windows uninstall continuation(s); this command was not run`,
+        );
+        return;
+      }
+    } catch (error) {
+      process.exitCode = renderDispatcherFailure(
+        argv,
+        1,
+        `Windows uninstall recovery failed: ${errorMessage(error)}`,
+        "aidlc doctor",
+      );
+      return;
+    }
   }
   const route = routePolicyFor(argv);
   if (route) {

@@ -26,7 +26,7 @@ All AI-DLC commands start with the orchestrator invocation. This chapter is a co
 | `/aidlc space [name]` | List spaces, or switch to an existing space |
 | `/aidlc space-create <name>` | Create a new space from the framework baseline |
 | `/aidlc --status` | Display a read-only status summary |
-| `/aidlc --doctor` | Run a health check on your setup |
+| `/aidlc --doctor [--check-updates]` | Run a health check; the explicit flag refreshes update metadata |
 | `/aidlc --stage <slug\|#>` | Jump to a specific stage |
 | `/aidlc --stage <slug> --single` | Run one stage in isolation, without advancing your workflow |
 | `/aidlc --phase <name\|#>` | Jump to the start of a phase |
@@ -36,13 +36,17 @@ All AI-DLC commands start with the orchestrator invocation. This chapter is a co
 | `/aidlc config get <key>` | Print active workflow config (`depth`, `test-strategy`) |
 | `/aidlc config set <key> <value>` | Change active workflow config (`depth`, `test-strategy`) |
 | `/aidlc config list` | List active workflow config (`--json` for structured output) |
+| `aidlc config global <get\|set\|clear\|list>` | Manage machine update and release settings |
 | `/aidlc plugin list` | List installed plugins and enabled state |
 | `/aidlc plugin sync` | Compose installed plugin roots into the current install |
 | `aidlc init [options]` | Initialize or refresh a project from an installed or local harness projection |
 | `aidlc upgrade [options]` | Install and activate a complete release |
 | `aidlc rollback [--version <v>]` | Activate a retained complete release without network access |
 | `aidlc use <version\|current>` | Set or clear the project's `.aidlc-version` pin |
-| `aidlc versions list\|install` | Inspect retained versions or install an exact version side-by-side |
+| `aidlc versions list\|install\|prune` | Inspect, install, or remove unprotected retained versions |
+| `aidlc harness add\|remove\|list\|default` | Manage harness runtimes in the active release |
+| `aidlc uninstall [--purge]` | Remove the command and versions; optionally remove machine state |
+| `aidlc completions <shell>` | Emit bash, zsh, fish, or PowerShell completions |
 | `aidlc package create\|verify` | Create or verify a flat offline release set |
 | `/aidlc --version` | Print the framework version |
 | `/aidlc --help` | Display usage information |
@@ -90,10 +94,31 @@ aidlc versions list
 aidlc versions install 2.5.0 --harness claude
 aidlc use 2.5.0
 aidlc upgrade --version 2.5.1
+aidlc upgrade --check
 aidlc rollback
+aidlc harness add kiro
+aidlc harness default kiro
+aidlc versions prune --yes
 aidlc package create --version 2.5.0 --harness claude --target linux-x64 --output ./aidlc-offline
 aidlc package verify ./aidlc-offline
 ```
+
+`harness add` always acquires the running version, never latest. Harness
+removal, version pruning, and uninstall prompt on a TTY and require `--yes`
+when stdin is not interactive. Active, rollback, and registered pinned
+versions are never pruned; stale pin paths are reported for explicit cleanup.
+`aidlc uninstall` leaves project trees untouched and preserves machine config,
+cache, pins, and the harness default unless `--purge` is supplied.
+
+Update settings use `aidlc config global set <key> <value>` (the equivalent
+`aidlc config set <key> <value> --global` form is also accepted). Initial keys
+are `update-check`, `offline`, `release-base-url`, and `ca-bundle`. Flag values
+override environment variables, which override machine config. Bare help and
+management listings never use the network: they read only a valid 24-hour
+cache. Interactive human `aidlc doctor` may refresh stale data within 750 ms;
+non-TTY, JSON, and quiet doctor runs remain network-free unless
+`--check-updates` is explicit. `doctor --check-updates` and
+`upgrade --check` use a 15-second budget.
 
 All lifecycle commands support human output and `--json`; mutating commands
 also support `--dry-run` where listed by `aidlc help --all`.
@@ -103,6 +128,19 @@ quiet and JSON modes suppress download progress.
 It never edits a startup file unless `--profile <absolute-startup-file>` is
 explicit; that opt-in writes one marked PATH block through a separate
 transaction.
+
+Generate shell definitions from the same route registry used by help:
+
+```bash
+aidlc completions bash
+aidlc completions zsh
+aidlc completions fish
+aidlc completions powershell
+```
+
+The definitions complete route options plus locally installed harness names and
+retained versions. Their helper calls are local, network-free, and output
+bounded.
 
 ---
 

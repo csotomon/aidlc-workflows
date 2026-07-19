@@ -633,7 +633,7 @@ describe("t230 dispatcher route completeness", () => {
       expect(route.outputModes.length).toBeGreaterThan(0);
     }
     expect(ROUTES.find((route) => route.id === "top-doctor"))
-      .toEqual(expect.objectContaining({ pinPolicy: "inspect", mutationScope: "project" }));
+      .toEqual(expect.objectContaining({ pinPolicy: "inspect", mutationScope: "project-and-machine" }));
     expect(ROUTES.find((route) => route.id === "top-use"))
       .toEqual(expect.objectContaining({ pinPolicy: "inspect", mutationScope: "project-and-machine" }));
     const publicPolicy = new Map(
@@ -651,8 +651,13 @@ describe("t230 dispatcher route completeness", () => {
       "versions-install": { networkPolicy: "explicit-only", mutationScope: "machine" },
       "package-create": { networkPolicy: "explicit-only", mutationScope: "machine" },
       "package-verify": { networkPolicy: "forbidden", mutationScope: "none" },
-      "harness-add-later-release": { networkPolicy: "explicit-only", mutationScope: "machine" },
-      "harness-list-later-release": { networkPolicy: "forbidden", mutationScope: "none" },
+      "harness-add": { networkPolicy: "explicit-only", mutationScope: "machine" },
+      "harness-list": { networkPolicy: "forbidden", mutationScope: "none" },
+      "harness-mutate": { networkPolicy: "forbidden", mutationScope: "machine" },
+      "versions-prune": { networkPolicy: "forbidden", mutationScope: "machine" },
+      "top-uninstall": { networkPolicy: "forbidden", mutationScope: "machine" },
+      "top-completions": { networkPolicy: "forbidden", mutationScope: "none" },
+      "config-global": { networkPolicy: "forbidden", mutationScope: "machine" },
     }));
     for (const noun of ["state", "audit", "graph", "runtime", "sensor", "plugin"]) {
       expect(ROUTES.filter((route) => route.group === noun).every((route) => route.pinPolicy === "pinned"))

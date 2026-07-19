@@ -92,6 +92,10 @@ export function writeReleaseFixture(options: ReleaseFixtureOptions): ReleaseFixt
     readFileSync(join(repoRoot, "scripts", "install.sh")),
     { mode: 0o755 },
   );
+  writeFileSync(
+    join(options.root, "install.ps1"),
+    readFileSync(join(repoRoot, "scripts", "install.ps1")),
+  );
 
   const distributionRows: Array<{ name: string; productName: string }> = [];
   const scratch = mkdtempSync(join(tmpdir(), "aidlc-release-fixture-"));
@@ -124,6 +128,7 @@ export function writeReleaseFixture(options: ReleaseFixtureOptions): ReleaseFixt
     binaryName,
     ...distributions.map((distribution) => `aidlc-data-${distribution}.tgz`),
     "install.sh",
+    "install.ps1",
   ];
   const assets = names.map((name) => ({
     name,
@@ -131,12 +136,12 @@ export function writeReleaseFixture(options: ReleaseFixtureOptions): ReleaseFixt
     bytes: statSync(join(options.root, name)).size,
     kind: name.endsWith(".tgz")
       ? "data" as const
-      : name === "install.sh"
+      : name === "install.sh" || name === "install.ps1"
       ? "installer" as const
       : "binary" as const,
     ...(name.endsWith(".tgz")
       ? { distribution: name.slice("aidlc-data-".length, -".tgz".length) }
-      : name === "install.sh"
+      : name === "install.sh" || name === "install.ps1"
       ? {}
       : { target }),
   }));
@@ -282,6 +287,7 @@ export async function checkLiveReleaseContract(
   const assetNames = manifest.assets.map((asset) => asset.name).sort();
   const expected = [
     "install.sh",
+    "install.ps1",
     ...manifest.distributions.map((distribution) => `aidlc-data-${distribution.name}.tgz`),
   ];
   for (const name of expected) {
@@ -289,6 +295,9 @@ export async function checkLiveReleaseContract(
   }
   if (!assetNames.some((name) => /^aidlc-(?:darwin|linux)-/.test(name))) {
     throw new Error("live release has no macOS/Linux binary asset");
+  }
+  if (!assetNames.includes("aidlc-windows-x64.exe")) {
+    throw new Error("live release has no Windows binary asset");
   }
   const checksumNames = new Set<string>();
   for (const line of checksumsText.trim().split(/\r?\n/)) {

@@ -12,6 +12,7 @@ import {
 import { tmpdir } from "node:os";
 import { basename, isAbsolute, join, resolve } from "node:path";
 import { requireVersion } from "./aidlc-install-paths.ts";
+import { resolvedReleaseSettings } from "./aidlc-machine-config.ts";
 
 export type ReleaseAsset = {
   name: string;
@@ -144,7 +145,9 @@ export function readReleaseManifest(directory: string): ReleaseManifest {
         (!asset.distribution ||
           !distributions.has(asset.distribution) ||
           asset.name !== `aidlc-data-${asset.distribution}.tgz`)) ||
-      (asset.kind === "installer" && asset.name !== "install.sh")
+      (asset.kind === "installer" &&
+        asset.name !== "install.sh" &&
+        asset.name !== "install.ps1")
     ) {
       throw new Error(`${asset.name}: invalid asset metadata`);
     }
@@ -268,6 +271,7 @@ async function download(
   timeoutMs: number,
   caBundle?: string,
   maxBytes = MAX_ASSET_BYTES,
+  contentTypes: readonly string[] = [],
 ): Promise<void> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -311,6 +315,13 @@ async function download(
     if (!response.ok) {
       throw new ReleaseUnavailableError(`${redact(url)} returned HTTP ${response.status}`);
     }
+    const contentType = response.headers.get("content-type")?.split(";", 1)[0]
+      .trim().toLowerCase() ?? "";
+    if (contentTypes.length > 0 && !contentTypes.includes(contentType)) {
+      throw new Error(
+        `${redact(url)} returned unexpected content type ${contentType || "<missing>"}`,
+      );
+    }
     const length = Number(response.headers.get("content-length") || 0);
     if (Number.isFinite(length) && length > maxBytes) {
       throw new Error(`${redact(url)} exceeds the ${maxBytes} byte download limit`);
@@ -352,6 +363,59 @@ async function download(
   }
 }
 
+export async function fetchReleaseMetadata(options: {
+  version?: string;
+  offline?: boolean;
+  baseUrl?: string;
+  caBundle?: string;
+  metadataTimeoutMs?: number;
+} = {}): Promise<{
+  directory: string;
+  manifest: ReleaseManifest;
+  cleanup: string;
+}> {
+  if (process.env.AIDLC_ROUTE_NETWORK_POLICY === "forbidden") {
+    throw new Error(`route ${process.env.AIDLC_ROUTE_ID ?? "unknown"} forbids network access`);
+  }
+  const settings = resolvedReleaseSettings(options);
+  if (settings.offline) {
+    throw new ReleaseUnavailableError("update metadata is unavailable while offline");
+  }
+  const version = options.version ? requireVersion(options.version) : undefined;
+  const baseUrl = settings.baseUrl ||
+    "https://github.com/awslabs/aidlc-workflows/releases";
+  const metadataTimeoutMs = options.metadataTimeoutMs ?? 15_000;
+  const metadataDeadline = Date.now() + metadataTimeoutMs;
+  const temporary = mkdtempSync(join(tmpdir(), "aidlc-release-metadata-"));
+  try {
+    await download(
+      releaseUrl(baseUrl, version, "version.json"),
+      join(temporary, "version.json"),
+      remainingTimeout(metadataDeadline, "release metadata"),
+      settings.caBundle,
+      MAX_METADATA_BYTES,
+      ["application/json", "text/json", "application/octet-stream", "binary/octet-stream", "text/plain"],
+    );
+    await download(
+      releaseUrl(baseUrl, version, "checksums.txt"),
+      join(temporary, "checksums.txt"),
+      remainingTimeout(metadataDeadline, "release metadata"),
+      settings.caBundle,
+      MAX_METADATA_BYTES,
+      ["text/plain", "application/octet-stream", "binary/octet-stream"],
+    );
+    verifiedChecksums(temporary);
+    const manifest = readReleaseManifest(temporary);
+    if (version && manifest.version !== version) {
+      throw new Error(`release endpoint returned ${manifest.version}, not requested ${version}`);
+    }
+    return { directory: temporary, manifest, cleanup: temporary };
+  } catch (error) {
+    rmSync(temporary, { recursive: true, force: true });
+    throw error;
+  }
+}
+
 export async function acquireRelease(options: {
   version?: string;
   from?: string;
@@ -372,36 +436,22 @@ export async function acquireRelease(options: {
   if (process.env.AIDLC_ROUTE_NETWORK_POLICY === "forbidden") {
     throw new Error(`route ${process.env.AIDLC_ROUTE_ID ?? "unknown"} forbids network access`);
   }
-  if (options.offline) {
+  const settings = resolvedReleaseSettings(options);
+  if (settings.offline) {
     throw new ReleaseUnavailableError("--offline requires --from <release-directory>");
   }
   const version = options.version ? requireVersion(options.version) : undefined;
-  const baseUrl = options.baseUrl || process.env.AIDLC_RELEASE_BASE_URL ||
-    "https://github.com/awslabs/aidlc-workflows/releases";
-  const caBundle = options.caBundle || process.env.AIDLC_CA_BUNDLE;
-  const metadataTimeoutMs = options.metadataTimeoutMs ?? 15_000;
-  const metadataDeadline = Date.now() + metadataTimeoutMs;
-  const temporary = mkdtempSync(join(tmpdir(), "aidlc-release-"));
+  const metadata = await fetchReleaseMetadata({
+    version,
+    offline: settings.offline,
+    baseUrl: settings.baseUrl,
+    caBundle: settings.caBundle,
+    metadataTimeoutMs: options.metadataTimeoutMs,
+  });
+  const temporary = metadata.directory;
   try {
-    await download(
-      releaseUrl(baseUrl, version, "version.json"),
-      join(temporary, "version.json"),
-      remainingTimeout(metadataDeadline, "release metadata"),
-      caBundle,
-      MAX_METADATA_BYTES,
-    );
-    await download(
-      releaseUrl(baseUrl, version, "checksums.txt"),
-      join(temporary, "checksums.txt"),
-      remainingTimeout(metadataDeadline, "release metadata"),
-      caBundle,
-      MAX_METADATA_BYTES,
-    );
     const releasedChecksums = verifiedChecksums(temporary);
-    const manifest = readReleaseManifest(temporary);
-    if (version && manifest.version !== version) {
-      throw new Error(`release endpoint returned ${manifest.version}, not requested ${version}`);
-    }
+    const manifest = metadata.manifest;
     const selected = options.names?.length
       ? manifest.assets.filter((asset) => options.names?.includes(asset.name))
       : manifest.assets;
@@ -414,10 +464,15 @@ export async function acquireRelease(options: {
         throw new Error(`${asset.name}: released checksum does not match version.json`);
       }
       await download(
-        releaseUrl(baseUrl, version || manifest.version, asset.name),
+        releaseUrl(
+          settings.baseUrl ||
+            "https://github.com/awslabs/aidlc-workflows/releases",
+          version || manifest.version,
+          asset.name,
+        ),
         join(temporary, asset.name),
         Math.max(60_000, Math.ceil(asset.bytes / (128 * 1024)) * 1000),
-        caBundle,
+        settings.caBundle,
       );
     }
     const subset: ReleaseManifest = { ...manifest, assets: selected };

@@ -1384,7 +1384,7 @@ describe("t240 release lifecycle", () => {
 
   test("activation fault rolls pointer, active marker, and rollback marker back together", () => {
     const currentRelease = fixtureRelease();
-    const nextVersion = "2.5.1";
+    const nextVersion = "2.5.2";
     const nextRelease = fixtureRelease(nextVersion);
     const machine = temp("aidlc-t240-activation-machine-");
     const bin = join(machine, "bin");
@@ -1430,7 +1430,7 @@ describe("t240 release lifecycle", () => {
 
   test("failed post-flip version validation restores the prior active install", () => {
     const currentRelease = fixtureRelease();
-    const badVersion = "2.5.1";
+    const badVersion = "2.5.2";
     const badRelease = fixtureRelease(badVersion, "9.9.9");
     const machine = temp("aidlc-t240-validation-machine-");
     const bin = join(machine, "bin");

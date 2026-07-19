@@ -11,7 +11,7 @@ This implementation requires two tools on your system:
 | Prerequisite | Purpose | Install |
 |-------------|---------|---------|
 | **Claude Code** | This implementation runs as a Claude Code command. The orchestrator, agents, and hooks all execute within Claude Code. | Native install (recommended, auto-updates): macOS/Linux/WSL `curl -fsSL https://claude.ai/install.sh \| bash`; Windows PowerShell `irm https://claude.ai/install.ps1 \| iex`. Or `brew install --cask claude-code`. ([docs](https://code.claude.com/docs/en/quickstart)) |
-| **bun** | Required by the documented copy-install channel. The self-contained macOS/Linux binary installer does not require bun. | `curl -fsSL https://bun.sh/install \| bash` ([docs](https://bun.sh)). On Windows: `npm install -g bun` or `powershell -c "irm bun.sh/install.ps1 \| iex"` |
+| **bun** | Required by the documented copy-install channel. Self-contained native installs do not require bun. | `curl -fsSL https://bun.sh/install \| bash` ([docs](https://bun.sh)). On Windows: `npm install -g bun` or `powershell -c "irm bun.sh/install.ps1 \| iex"` |
 
 > **Important**: `bun` must be on your `PATH` for non-interactive shells. Claude Code runs your shell non-interactively, so it sources `~/.zshenv` (zsh) or `~/.bashrc` (bash) — NOT `~/.zshrc`. On Windows with Git Bash, `~/.bashrc` is the correct file. If `which bun` fails inside Claude Code, add the bun PATH export to the appropriate file.
 
@@ -158,7 +158,7 @@ cd your-project
 
 All `/aidlc` commands run relative to the project root.
 
-### Alternative: self-contained macOS/Linux channel
+### Alternative: self-contained native channel
 
 Published releases also carry a native installer. It installs a checksum-
 verified binary and the selected harness runtime without bun, Node.js, or git:
@@ -176,8 +176,24 @@ Use `--harness kiro`, `kiro-ide`, or `codex` for another distribution.
 `install.sh --from <release-directory> --offline --harness <name>` installs an
 air-gapped package. Pass `--profile "$HOME/.profile"` only when the installer
 should add its marked PATH block; profiles are never edited by default.
-Windows self-install arrives in the next lifecycle release; the copy-install
-instructions above remain supported on every platform.
+
+On Windows PowerShell:
+
+```powershell
+$installer = Join-Path $env:TEMP install-aidlc.ps1
+irm https://github.com/awslabs/aidlc-workflows/releases/latest/download/install.ps1 -OutFile $installer
+& $installer -Harness claude
+cd your-project
+aidlc init --mcp none
+aidlc doctor
+```
+
+The installer places a stable `aidlc.cmd` under
+`%LOCALAPPDATA%\aidlc\bin`, verifies the same release checksums, and supports
+`-From <release-directory> -Offline` for an air-gapped package. It adds that
+directory to the current PowerShell session and prints the exact command needed
+in a new session when the directory is not already on `PATH`. Copy-install
+instructions remain supported on every platform.
 
 ---
 

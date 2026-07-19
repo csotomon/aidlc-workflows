@@ -37,7 +37,7 @@ jobs:
     needs: verify
     strategy:
       matrix:
-        runner: [ubuntu-latest, ubuntu-24.04-arm, macos-13, macos-14]
+        runner: [ubuntu-latest, ubuntu-24.04-arm, macos-13, macos-14, windows-latest]
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
@@ -48,6 +48,8 @@ jobs:
           bun-version: 1.3.14
       - run: bun install --frozen-lockfile
       - run: bun test tests/unit/t238-build-binaries.test.ts
+      - if: runner.os == 'Windows'
+        run: bun test tests/unit/t241-install-management.test.ts -t "native Windows rollback"
 
   build:
     needs: native-smoke
@@ -66,6 +68,8 @@ jobs:
             target: bun-darwin-x64
           - runner: macos-14
             target: bun-darwin-arm64
+          - runner: windows-latest
+            target: bun-windows-x64
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
@@ -106,8 +110,109 @@ jobs:
         env:
           TARGET_DIR: ${{ matrix.directory }}
 
+  stage-release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - run: bun install --frozen-lockfile
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: binary-*
+          path: build/binaries
+          merge-multiple: true
+      - run: bun scripts/package-release.ts --require-release-matrix
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-candidate
+          path: build/release
+
+  windows-lifecycle:
+    needs: stage-release
+    runs-on: windows-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-candidate
+          path: build/release
+      - name: Install, route through stable shim, and uninstall
+        shell: pwsh
+        run: |
+          $env:AIDLC_INSTALL_ROOT = Join-Path $env:RUNNER_TEMP 'aidlc-machine'
+          $env:AIDLC_BIN_DIR = Join-Path $env:AIDLC_INSTALL_ROOT 'bin'
+          $env:AIDLC_ALLOW_ADMIN_INSTALL = '1'
+          $releaseRoot = (Resolve-Path ./build/release).Path
+          $probe = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
+          $probe.Start()
+          $port = ([Net.IPEndPoint]$probe.LocalEndpoint).Port
+          $probe.Stop()
+          $server = Start-Job -ArgumentList $releaseRoot, $port -ScriptBlock {
+            param($Root, $Port)
+            $listener = [Net.HttpListener]::new()
+            $listener.Prefixes.Add("http://localhost:$Port/")
+            $listener.Start()
+            try {
+              while ($listener.IsListening) {
+                $context = $listener.GetContext()
+                $name = [IO.Path]::GetFileName($context.Request.Url.AbsolutePath)
+                $path = Join-Path $Root $name
+                if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+                  $context.Response.StatusCode = 404
+                  $context.Response.Close()
+                  continue
+                }
+                $bytes = [IO.File]::ReadAllBytes($path)
+                $context.Response.StatusCode = 200
+                $context.Response.ContentLength64 = $bytes.Length
+                $context.Response.OutputStream.Write($bytes, 0, $bytes.Length)
+                $context.Response.Close()
+              }
+            } finally {
+              $listener.Close()
+            }
+          }
+          Start-Sleep -Milliseconds 500
+          try {
+            & ./build/release/install.ps1 -ReleaseBaseUrl "http://localhost:$port" -Harness claude -Quiet
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          } finally {
+            Stop-Job $server -ErrorAction SilentlyContinue
+            Remove-Job $server -Force -ErrorAction SilentlyContinue
+          }
+          $command = Join-Path $env:AIDLC_BIN_DIR 'aidlc.cmd'
+          & $command version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $command harness add kiro --from $releaseRoot --quiet
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $command harness default kiro --quiet
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $command harness list --json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $command harness remove kiro --yes --quiet
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $command completions powershell | Out-Null
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & ./build/release/install.ps1 -From $releaseRoot -Offline -Harness claude -Quiet
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $pointer = Get-Content -Raw (Join-Path $env:AIDLC_INSTALL_ROOT 'active-executable')
+          if ($pointer.Trim() -notmatch '\\versions\\[0-9]+\.[0-9]+\.[0-9]+\\aidlc\.exe$') {
+            throw "invalid active executable pointer: $pointer"
+          }
+          & $command uninstall --purge --yes --quiet
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          for ($i = 0; $i -lt 100 -and (Test-Path -LiteralPath $command); $i++) {
+            Start-Sleep -Milliseconds 100
+          }
+          if (Test-Path -LiteralPath $command) { throw 'aidlc.cmd survived uninstall' }
+          if (Test-Path -LiteralPath $env:AIDLC_INSTALL_ROOT) { throw 'install root survived purge uninstall' }
+
   publish:
-    needs: [build, musl-smoke]
+    needs: [build, musl-smoke, windows-lifecycle]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

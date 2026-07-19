@@ -743,6 +743,7 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "unit/t238-build-binaries.test.ts",
     "unit/t240-install-mechanism.test.ts",
     "unit/t240-opencode-packaging.test.ts",
+    "unit/t241-install-management.test.ts",
     "integration/t102.test.ts",
     "integration/t104.test.ts",
     "integration/t105.test.ts",
