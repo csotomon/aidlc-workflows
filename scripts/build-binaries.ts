@@ -486,7 +486,8 @@ function harnessProbeGate(artifact: string): GateResult {
       "harness-probe-kiro",
       result,
       result.status === 0 &&
-        result.stdout.includes(".kiro/tools/aidlc-sensor-linter.ts") &&
+        result.stdout.includes("command: aidlc __delegate sensor-linter") &&
+        result.stdout.includes("path: .kiro/sensors/aidlc-linter.md") &&
         !runtimeCrash(output),
       {
         expected: "unset AIDLC_HARNESS_DIR probes the install and reads .kiro data",
@@ -954,6 +955,7 @@ function pathlessOrchestrateGate(
 function hookGate(artifact: string): GateResult {
   const project = mkdtempSync(join(tmpdir(), "aidlc-binary-hook-"));
   try {
+    mkdirSync(join(project, ".git"));
     const result = run(artifact, ["hook", "validate-state"], {
       cwd: project,
       env: { ...process.env, PATH: "", CLAUDE_PROJECT_DIR: project },
@@ -1199,6 +1201,140 @@ function routedProjectDirGate(artifact: string): GateResult {
   } finally {
     rmSync(cwdProject, { recursive: true, force: true });
     rmSync(targetProject, { recursive: true, force: true });
+  }
+}
+
+function dispatcherParityGate(artifact: string): GateResult {
+  const codexProject = mkdtempSync(join(tmpdir(), "aidlc-binary-parity-codex-"));
+  const kiroProject = mkdtempSync(join(tmpdir(), "aidlc-binary-parity-kiro-"));
+  const kiroIdeProject = mkdtempSync(join(tmpdir(), "aidlc-binary-parity-kiro-ide-"));
+  try {
+    mkdirSync(join(codexProject, ".git"));
+    mkdirSync(join(kiroProject, ".git"));
+    mkdirSync(join(kiroIdeProject, ".git"));
+    cpSync(join(REPO_ROOT, "dist", "codex", ".codex"), join(codexProject, ".codex"), {
+      recursive: true,
+    });
+    cpSync(join(REPO_ROOT, "dist", "kiro", ".kiro"), join(kiroProject, ".kiro"), {
+      recursive: true,
+    });
+    cpSync(join(REPO_ROOT, "dist", "kiro-ide", ".kiro"), join(kiroIdeProject, ".kiro"), {
+      recursive: true,
+    });
+    const baseEnv = {
+      ...process.env,
+      AIDLC_HARNESS_DIR: ".claude",
+      AIDLC_RUNTIME_HARNESS_ROOT: RUNTIME_ASSET_ROOT,
+    };
+    const cases: Array<{
+      name: string;
+      projectDir: string;
+      args: string[];
+      input?: string;
+      env?: NodeJS.ProcessEnv;
+    }> = [
+      {
+        name: "hook",
+        projectDir: codexProject,
+        args: ["hook", "validate-state"],
+        input: "{}",
+      },
+      {
+        name: "statusline",
+        projectDir: codexProject,
+        args: ["statusline"],
+        input: JSON.stringify({
+          workspace: { project_dir: codexProject },
+          model: { id: "claude-parity" },
+          context_window: { used_percentage: 5 },
+        }),
+      },
+      {
+        name: "adapter-codex",
+        projectDir: codexProject,
+        args: ["adapter", "codex", "validate-state"],
+        input: JSON.stringify({
+          hook_event_name: "PreCompact",
+          cwd: codexProject,
+          session_id: "binary-parity",
+        }),
+      },
+      {
+        name: "adapter-kiro",
+        projectDir: kiroProject,
+        args: ["adapter", "kiro", "session-start"],
+        input: JSON.stringify({
+          hook_event_name: "agentSpawn",
+          cwd: kiroProject,
+          session_id: "binary-parity-kiro",
+        }),
+      },
+      {
+        name: "adapter-kiro-ide",
+        projectDir: kiroIdeProject,
+        args: ["adapter", "kiro-ide", "mint"],
+        env: {
+          USER_PROMPT: "{}",
+          VSCODE_PID: "23801",
+          VSCODE_IPC_HOOK: join(kiroIdeProject, "vscode-ipc.sock"),
+        },
+      },
+      {
+        name: "generated-surface",
+        projectDir: codexProject,
+        args: ["gen", "stage-table", "--check"],
+        input: undefined,
+      },
+    ] as const;
+    const differences: string[] = [];
+    for (const item of cases) {
+      const args = [...item.args, "--project-dir", item.projectDir];
+      const env = {
+        ...baseEnv,
+        CLAUDE_PROJECT_DIR: item.projectDir,
+        ...item.env,
+      };
+      const dev = run(process.execPath, [ENTRY, ...args], {
+        cwd: item.projectDir,
+        env,
+        input: item.input,
+        timeoutMs: 30_000,
+      });
+      const compiled = run(artifact, args, {
+        cwd: item.projectDir,
+        env,
+        input: item.input,
+        timeoutMs: 30_000,
+      });
+      if (
+        dev.status !== compiled.status ||
+        dev.signal !== compiled.signal ||
+        dev.stdout !== compiled.stdout ||
+        dev.stderr !== compiled.stderr
+      ) {
+        differences.push(
+          `${item.name}: dev(status=${dev.status},signal=${dev.signal},stdout=${
+            JSON.stringify(dev.stdout)
+          },stderr=${JSON.stringify(dev.stderr)}) compiled(status=${compiled.status},signal=${
+            compiled.signal
+          },stdout=${JSON.stringify(compiled.stdout)},stderr=${JSON.stringify(compiled.stderr)})`,
+        );
+      }
+    }
+    return {
+      name: "bun-compiled-parity",
+      ok: differences.length === 0,
+      kind: "inspection",
+      expected: "identical argv behavior, stdout, stderr, signal, and exit status",
+      actual: differences.length,
+      detail: differences.length === 0
+        ? "hook, statusline, all host adapters, and generated-surface routes match"
+        : differences.join("\n"),
+    };
+  } finally {
+    rmSync(codexProject, { recursive: true, force: true });
+    rmSync(kiroProject, { recursive: true, force: true });
+    rmSync(kiroIdeProject, { recursive: true, force: true });
   }
 }
 
@@ -1461,6 +1597,7 @@ function buildTarget(target: TargetConfig): TargetResult {
     result.gates.push(statuslineGate(actual.artifact));
     result.gates.push(codexAdapterGate(actual.artifact));
     result.gates.push(routedProjectDirGate(actual.artifact));
+    result.gates.push(dispatcherParityGate(actual.artifact));
   } else {
     result.gates.push(sizeGate(result.bytes));
     result.gates.push(fileGate(actual.artifact, target.fileNeedle ?? ""));

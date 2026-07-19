@@ -8,7 +8,7 @@ A native implementation of the **AI-DLC methodology** (AI-Driven Development Lif
 
 The methodology lives once, in a harness-neutral `core/`; each harness adds a thin surface that decides how it shows up on that harness. So you edit the methodology in one place, and every harness distribution is generated from it — no harness gets special treatment. (See [Repository layout](#repository-layout) for how the pieces fit together.)
 
-![version](https://img.shields.io/badge/version-2.5.2-blue)
+![version](https://img.shields.io/badge/version-2.5.3-blue)
 ![license](https://img.shields.io/badge/license-MIT--0-green)
 ![Kiro IDE](https://img.shields.io/badge/harness-Kiro%20IDE-orange)
 ![Kiro CLI](https://img.shields.io/badge/harness-Kiro%20CLI-orange)
@@ -48,21 +48,20 @@ Ad-hoc AI coding works until the project gets real. Then context drifts between 
 
 ## Pick your harness
 
-| Harness | Install (copy into your project) | Invoke | Install & usage guide |
-| --- | --- | --- | --- |
-| **Kiro IDE** | `dist/kiro-ide/.kiro/` + `dist/kiro-ide/aidlc/` → `<project>/` (+ `dist/kiro-ide/AGENTS.md`) | `/aidlc` | [Quick Start](#quick-start) below + [Running AI-DLC on Kiro IDE](docs/guide/harnesses/kiro-ide.md). |
-| **Kiro CLI** (≥ 2.6) | `dist/kiro/.kiro/` + `dist/kiro/aidlc/` → `<project>/` (+ `dist/kiro/AGENTS.md`) | `/aidlc` | [Quick Start](#quick-start) below + [Running AI-DLC on Kiro CLI](docs/guide/harnesses/kiro-cli.md). |
-| **Claude Code** | `dist/claude/.claude/` + `dist/claude/aidlc/` → `<project>/` | `/aidlc` | [Quick Start](#quick-start) below + [Getting Started](docs/guide/01-getting-started.md). |
-| **Codex CLI** (≥ 0.139.0) | `dist/codex/` → `<project>/` (`.codex/` + `.agents/` + `aidlc/` + `AGENTS.md`) | `$aidlc` (or `/skills` → aidlc) | [Quick Start](#quick-start) below + [AI-DLC on Codex CLI](docs/guide/harnesses/codex-cli.md). |
-| **opencode** (≥ 1.17) | `dist/opencode/` → `<project>/` (`.aidlc/` + `.opencode/` + `aidlc/` + `opencode.json` + `AGENTS.md`) | `/aidlc` | [Quick Start](#quick-start) below + [AI-DLC on opencode](docs/guide/harnesses/opencode.md). |
+| Harness | Installer selection | Generated projection | Invoke | Install & usage guide |
+| --- | --- | --- | --- | --- |
+| **Kiro IDE** | `--harness kiro-ide` | `dist/kiro-ide/` | `/aidlc` | [Kiro IDE guide](docs/guide/harnesses/kiro-ide.md) |
+| **Kiro CLI** (≥ 2.6) | `--harness kiro` | `dist/kiro/` | `/aidlc` | [Kiro CLI guide](docs/guide/harnesses/kiro-cli.md) |
+| **Claude Code** | `--harness claude` | `dist/claude/` | `/aidlc` | [Getting Started](docs/guide/01-getting-started.md) |
+| **Codex CLI** (≥ 0.139.0) | `--harness codex` | `dist/codex/` | `$aidlc` (or `/skills` → aidlc) | [Codex CLI guide](docs/guide/harnesses/codex-cli.md) |
+| **opencode** (≥ 1.17) | `--harness opencode` | `dist/opencode/` | `/aidlc` | [opencode guide](docs/guide/harnesses/opencode.md) |
 
-The deterministic engine — state machine, audit log, and the referee that coordinates parallel agents — is byte-identical across every harness; only the shell differs. Each section in the [Quick Start](#quick-start) installs one harness end to end, and its guide above goes deeper on prerequisites and differences.
+The deterministic engine — state machine, audit log, and the referee that coordinates parallel agents — is byte-identical across every harness; only the shell differs. The [Quick Start](#quick-start) installs one harness end to end, and the guides above cover prerequisites and differences.
 
-> [!NOTE]
-> Release assets support self-contained macOS, Linux, and Windows installs:
-> `install.sh --harness <name>` or `install.ps1 -Harness <name>` installs the native `aidlc` command, and
-> `aidlc init` safely initializes or refreshes a project. The documented copy
-> install remains supported and continues to require bun.
+The installer downloads the self-contained command and selected harness
+runtime. `aidlc init` safely reconciles that runtime into a project. The
+[lifecycle guide](docs/guide/18-install-and-lifecycle.md) covers upgrades,
+rollback, pins, offline packages, trust, and the advanced manual projection.
 
 > [!NOTE]
 > AI-DLC on Kiro (IDE or CLI) works best with **Claude Opus 4.8**, which requires a **paid Kiro plan**. On weaker models the conductor may skip optional stage steps (reviewer pass, learnings ritual) or rush approval gates.
@@ -73,50 +72,49 @@ This release works better with `Claude Opus 4.8`. We are sharpening it for previ
 
 ## Quick Start
 
-### Prerequisites (every harness)
-
-Every harness runs the same TypeScript hooks and CLI tools through **bun**, so install bun first — it's the one requirement they all share.
+Install the native command and one harness runtime:
 
 ```bash
-# macOS / Linux
-curl -fsSL https://bun.sh/install | bash
+curl -fsSL https://github.com/awslabs/aidlc-workflows/releases/latest/download/install.sh \
+  | sh -s -- --harness claude
+export PATH="$HOME/.local/bin:$PATH"
+cd your-project
+aidlc init
+aidlc doctor
 ```
 
-```powershell
-# Windows PowerShell
-irm bun.sh/install.ps1 | iex
-```
+Replace `claude` with `kiro`, `kiro-ide`, or `codex`. On Windows, download
+`install.ps1`, run `install.ps1 -Harness <name>`, then run the same `aidlc init`
+and `aidlc doctor` commands. The native runtime needs neither Bun nor Node.js.
+Configure your harness and model provider before the first chat session.
 
-```batch
-:: Windows Command Prompt (CMD) — bun ships only a PowerShell installer, so invoke it from CMD
-powershell -c "irm bun.sh/install.ps1 | iex"
-```
+The installer verifies SHA-256 checksums; published release artifacts also
+carry SLSA provenance attestations. See [Install and
+Lifecycle](docs/guide/18-install-and-lifecycle.md) for PATH setup, previewing
+init, offline and proxy use, pins, upgrades, and rollback.
 
-On Windows, use *either* PowerShell *or* CMD, not both — your prompt shows `PS C:\` in PowerShell and `C:\` (no `PS`) in CMD. Everything runs on native Windows; WSL is not required. [Git for Windows](https://git-scm.com/downloads/win) is recommended so harnesses that use a Bash tool can find one.
+### Advanced Manual Projection
 
-> [!TIP]
-> bun has to be on the PATH that *non-interactive* shells see, since that's what a harness uses to run a hook or tool. Those shells read `~/.zshenv` (zsh) or `~/.bashrc` (bash), not `~/.zshrc` — but the bun installer writes to `~/.zshrc`. So if `which bun` works in your terminal yet the harness can't find bun, copy the `BUN_INSTALL`/`PATH` export into `~/.zshenv` (or `~/.bashrc` for bash and Git Bash).
-
-Every harness runs on **AWS Bedrock**, so set Bedrock up before your first run — enable model access in your AWS account and make sure the harness can see working AWS credentials. Each harness section below has the specifics.
-
-### Install a harness
-
-With bun in place, pick your harness below and expand it — each section installs that CLI, sets up your project, and walks the first run end to end.
+The generated `dist/<harness>/` trees remain available for source checkouts.
+They now invoke the installed native `aidlc` command and do not form a
+standalone Bun installation. Install the matching binary first, copy the
+complete projection, and merge root files rather than replacing project-owned
+content.
 
 <details>
-<summary><b>Kiro IDE</b></summary>
+<summary><b>Manual projection: Kiro IDE</b></summary>
 
 **1. Install Kiro IDE** and sign in.
 
 **2. Set up your project**
 
 ```bash
-cp -r dist/kiro-ide/.kiro your-project/.kiro
-cp -r dist/kiro-ide/aidlc your-project/aidlc        # the workspace shell — a sibling of .kiro/, not inside it
-cp dist/kiro-ide/AGENTS.md your-project/AGENTS.md   # merge if you already have one
+aidlc init --project-dir your-project --from "$PWD/dist/kiro-ide" --harness kiro-ide
 ```
 
-The `aidlc/` shell ships the pre-built `aidlc/spaces/default/memory/` method tree the engine reads; `/aidlc --doctor` fails its "workspace shell ready" check without it.
+This projects `.kiro/` and the `aidlc/` workspace shell, merges the AI-DLC
+blocks in `.gitignore` and `AGENTS.md`, and adds only the native trust entry to
+`.vscode/settings.json`.
 
 Open `your-project/` in Kiro IDE. The install ships `.kiro/settings/cli.json` with `chat.defaultAgent` set to `aidlc` and registers the framework hooks as `.kiro/hooks/*.kiro.hook` files (the IDE's hook mechanism). In the chat panel, run `/aidlc --doctor` to verify, then `/aidlc <description>` to start.
 
@@ -126,7 +124,7 @@ Open `your-project/` in Kiro IDE. The install ships `.kiro/settings/cli.json` wi
 </details>
 
 <details>
-<summary><b>Kiro CLI</b></summary>
+<summary><b>Manual projection: Kiro CLI</b></summary>
 
 **1. Install Kiro CLI** (≥ 2.6) and log in:
 
@@ -138,9 +136,7 @@ kiro-cli login
 **2. Set up your project**
 
 ```bash
-cp -r dist/kiro/.kiro your-project/.kiro
-cp -r dist/kiro/aidlc your-project/aidlc       # the workspace shell — a sibling of .kiro/, not inside it
-cp dist/kiro/AGENTS.md your-project/AGENTS.md   # merge if you already have one
+aidlc init --project-dir your-project --from "$PWD/dist/kiro" --harness kiro
 cd your-project && kiro-cli chat
 ```
 
@@ -154,7 +150,7 @@ The install ships `.kiro/settings/cli.json` with `chat.defaultAgent` set to `aid
 </details>
 
 <details>
-<summary><b>Claude Code</b></summary>
+<summary><b>Manual projection: Claude Code</b></summary>
 
 **1. Install Claude Code**
 
@@ -178,9 +174,7 @@ curl -fsSL https://claude.ai/install.cmd -o install.cmd && install.cmd && del in
 **2. Set up your project**
 
 ```bash
-# Copy the implementation (engine + the workspace shell sibling), then launch
-cp -r dist/claude/.claude/ your-project/.claude/
-cp -r dist/claude/aidlc/   your-project/aidlc/     # the workspace shell — a sibling of .claude/, not inside it
+aidlc init --project-dir your-project --from "$PWD/dist/claude" --harness claude
 cd your-project && claude
 ```
 
@@ -198,7 +192,7 @@ The shipped `.claude/settings.json` runs on **AWS Bedrock** (`AWS_REGION=us-east
 </details>
 
 <details>
-<summary><b>Codex CLI</b></summary>
+<summary><b>Manual projection: Codex CLI</b></summary>
 
 **1. Install Codex CLI** (≥ 0.139.0 — earlier releases don't surface the real agent role in hook payloads):
 
@@ -211,18 +205,15 @@ The shipped `config.toml` runs on **Amazon Bedrock**; set your AWS profile and r
 **2. Set up your project** (which must be a **git repository** — Codex only discovers a project `.codex/hooks.json` inside one):
 
 ```bash
-cp -r dist/codex/.codex/  your-project/.codex/
-cp -r dist/codex/.agents/ your-project/.agents/
-cp -r dist/codex/aidlc/   your-project/aidlc/      # the workspace shell — a sibling of .codex/, not inside it
-cp dist/codex/AGENTS.md   your-project/AGENTS.md   # or merge into yours
+aidlc init --project-dir your-project --from "$PWD/dist/codex" --harness codex
 ```
 
 The `aidlc/` shell ships the pre-built `aidlc/spaces/default/memory/` method tree the engine reads; `$aidlc --doctor` fails its "workspace shell ready" check without it.
 
-After copying, apply the `.gitignore` entries from the shipped `AGENTS.md` before your first workflow, pre-seed hook trust, then verify:
+After initialization, pre-seed hook trust, then verify:
 
 ```bash
-bun .codex/tools/aidlc-utility.ts doctor
+aidlc doctor
 ```
 
 Invoke the orchestrator with `$aidlc` (or `/skills` → aidlc) followed by a scope or description. The [Codex guide](docs/guide/harnesses/codex-cli.md) covers the trust dialog, config merge, and sandbox/git notes in full.
@@ -364,10 +355,10 @@ Most first-run trouble is one of these; each harness guide covers the rest.
 
 | Symptom | Harness | Fix |
 | --- | --- | --- |
-| `which bun` works in your terminal, but the harness can't find bun | all | bun isn't on the non-interactive PATH. Copy the `BUN_INSTALL`/`PATH` export into `~/.zshenv` (zsh) or `~/.bashrc` (bash/Git Bash) — see the tip under [Quick Start](#quick-start). |
+| `aidlc` works in your terminal, but hooks cannot find it | all | Add the installer-reported bin directory to the environment used to launch the harness, restart it, then run `aidlc doctor`. |
 | `/aidlc --doctor` reports a Codex CLI version below 0.139.0 | Codex | Upgrade to Codex CLI 0.139.0 or later. Older releases break subagent attribution and hyphenated agent TOML resolution. |
 | Bedrock calls fail with `AccessDenied` or a model-not-found error | Claude, Codex | Enable model access for the harness's configured models in your AWS account and put working credentials on your SDK chain. Confirm `AWS_REGION` is a region where you enabled them. |
-| Hooks never fire (no audit rows, no gates) | Codex | Trust the hooks: from the AI-DLC source checkout run `bun install --frozen-lockfile`, then `bun scripts/package.ts codex trust --project <dir>` and replace any existing entries for that hook path; or start one TUI session and choose "Trust all." Untrusted hooks never run. |
+| Hooks never fire (no audit rows, no gates) | Codex | Run `aidlc init`, start one TUI session, and choose "Trust all and continue"; or merge the project’s generated `.codex/trust-seed.toml` entries into `$CODEX_HOME/config.toml`. Untrusted hooks never run. |
 | Skills or rules don't take effect after you copy a new `dist/` | all | Start a fresh session — harnesses load skills, agents, and rules at session start. |
 
 ## Contributing

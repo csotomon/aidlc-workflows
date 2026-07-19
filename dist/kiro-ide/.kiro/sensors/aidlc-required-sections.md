@@ -1,7 +1,7 @@
 ---
 id: required-sections
 kind: deterministic
-command: bun .kiro/tools/aidlc-sensor-required-sections.ts
+command: aidlc __delegate sensor-required-sections
 default_severity: advisory
 description: Checks that stage output contains the required H2 headings — generic content-shape check, fires on every stage that writes markdown
 category: document-shape

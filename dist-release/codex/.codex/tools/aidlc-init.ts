@@ -569,7 +569,14 @@ function mergeBlock(
   current: string,
   shipped: string,
   identity: string,
-): { value?: string; currentHash?: string; nextHash?: string; error?: string } {
+  legacyWholeFileHashes: readonly string[] = [],
+): {
+  value?: string;
+  currentHash?: string;
+  nextHash?: string;
+  adoptedLegacy?: boolean;
+  error?: string;
+} {
   const { begin, end } = blockMarkers(path, identity);
   const begins = current.split(begin).length - 1;
   const ends = current.split(end).length - 1;
@@ -588,6 +595,13 @@ function mergeBlock(
       value: `${current.slice(0, beginAt)}${block}${current.slice(endAt + end.length)}`,
       currentHash: sha256Bytes(currentBlock),
       nextHash: sha256Bytes(block),
+    };
+  }
+  if (current.length > 0 && legacyWholeFileHashes.includes(sha256Bytes(current))) {
+    return {
+      value: `${block}${newline}`,
+      nextHash: sha256Bytes(block),
+      adoptedLegacy: true,
     };
   }
   if (/\baidlc\b|AI-DLC/i.test(current)) {
@@ -906,6 +920,7 @@ function planRootIntegrations(
         current,
         readFileSync(sourcePath, "utf-8"),
         integration.marker || basename(integration.path),
+        integration.legacySignatures?.wholeFileHashes,
       );
       if (merged.error) {
         actions.push({ path: integration.path, action: "conflict", detail: merged.error });
@@ -937,7 +952,11 @@ function planRootIntegrations(
         actions.push({ path: integration.path, action: "preserve" });
       } else {
         operations.push(writeOperation(integration.path, value, expected(targetPath)));
-        actions.push({ path: integration.path, action: targetExists ? "merge" : "create" });
+        actions.push({
+          path: integration.path,
+          action: targetExists ? "merge" : "create",
+          detail: merged.adoptedLegacy ? "adopted exact legacy signature" : undefined,
+        });
       }
       continue;
     }
@@ -997,6 +1016,12 @@ function planRootIntegrations(
             targetMap[entry] = value;
             nextEntries[entry] = desiredHash;
           } else if (priorHash && currentHash === desiredHash) {
+            nextEntries[entry] = desiredHash;
+          } else if (
+            !priorHash &&
+            (integration.legacySignatures?.jsonEntryHashes?.[entry] ?? []).includes(currentHash)
+          ) {
+            targetMap[entry] = value;
             nextEntries[entry] = desiredHash;
           }
         }
@@ -1100,14 +1125,26 @@ function planRootIntegrations(
     const priorHash = priorContribution?.policy === "whole-file"
       ? priorContribution.hash
       : undefined;
+    const currentHash = sha256Bytes(current);
+    const adoptedLegacy = integration.legacySignatures?.wholeFileHashes?.includes(currentHash) ?? false;
     contributions[integration.path] = { policy: "whole-file", hash: shippedHash };
-    if (targetExists && sha256Bytes(current) !== priorHash && sha256Bytes(current) !== shippedHash && !force) {
+    if (
+      targetExists &&
+      currentHash !== priorHash &&
+      currentHash !== shippedHash &&
+      !adoptedLegacy &&
+      !force
+    ) {
       actions.push({ path: integration.path, action: "conflict", detail: "unowned whole file" });
-    } else if (sha256Bytes(current) === shippedHash) {
+    } else if (currentHash === shippedHash) {
       actions.push({ path: integration.path, action: "preserve" });
     } else {
       operations.push(writeOperation(integration.path, shipped, expected(targetPath)));
-      actions.push({ path: integration.path, action: targetExists ? "update" : "create" });
+      actions.push({
+        path: integration.path,
+        action: targetExists ? "update" : "create",
+        detail: adoptedLegacy ? "adopted exact legacy signature" : undefined,
+      });
     }
   }
 }

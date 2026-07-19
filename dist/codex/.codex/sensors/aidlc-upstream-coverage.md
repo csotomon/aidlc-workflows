@@ -1,7 +1,7 @@
 ---
 id: upstream-coverage
 kind: deterministic
-command: bun .codex/tools/aidlc-sensor-upstream-coverage.ts
+command: aidlc __delegate sensor-upstream-coverage
 default_severity: advisory
 description: Checks the stage's deliverables reference the upstream artifacts the stage frontmatter declares it consumes
 category: document-shape

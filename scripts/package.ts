@@ -729,8 +729,8 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-function rewriteKiroReleaseAllowlists(outRoot: string, m: HarnessManifest): void {
-  if (m.name !== "kiro" && m.name !== "kiro-ide") return;
+function rewriteKiroNativeAllowlists(outRoot: string, m: HarnessManifest): void {
+  if (m.tierFlavor !== "kiro") return;
   const agentsDir = join(outRoot, m.harnessDir, "agents");
   for (const file of walk(agentsDir)) {
     if (!file.endsWith(".json")) continue;
@@ -755,8 +755,8 @@ function rewriteKiroReleaseAllowlists(outRoot: string, m: HarnessManifest): void
   }
 }
 
-function rewriteClaudeReleasePermissions(outRoot: string, m: HarnessManifest): void {
-  if (m.name !== "claude") return;
+function rewriteClaudeNativePermissions(outRoot: string, m: HarnessManifest): void {
+  if (m.tierFlavor !== "claude") return;
   const settingsPath = join(outRoot, m.harnessDir, "settings.json");
   const value = JSON.parse(readFileSync(settingsPath, "utf-8")) as {
     permissions?: { allow?: unknown };
@@ -773,7 +773,7 @@ function rewriteClaudeReleasePermissions(outRoot: string, m: HarnessManifest): v
   writeFileSync(settingsPath, `${JSON.stringify(value, null, 2)}\n`);
 }
 
-function rewriteReleaseOnboarding(value: string): string {
+function rewriteNativeOnboarding(value: string): string {
   return value
     .replace(
       /^- \*\*bun\*\*:.*$/gm,
@@ -801,8 +801,8 @@ function rewriteReleaseOnboarding(value: string): string {
     );
 }
 
-function projectReleaseRootIntegrations(outRoot: string, m: HarnessManifest): void {
-  const additions = m.releaseRootIntegrations ?? [];
+function projectNativeRootIntegrations(outRoot: string, m: HarnessManifest): void {
+  const additions = m.nativeRootIntegrations ?? [];
   if (additions.length === 0) return;
   const descriptorPath = join(outRoot, m.harnessDir, PROJECTION_DATA);
   const descriptor = JSON.parse(readFileSync(descriptorPath, "utf-8")) as {
@@ -826,8 +826,8 @@ function projectReleaseRootIntegrations(outRoot: string, m: HarnessManifest): vo
   writeFileSync(descriptorPath, `${JSON.stringify(descriptor, null, 2)}\n`);
 }
 
-function rewriteReleaseInvocations(outRoot: string, m: HarnessManifest): void {
-  projectReleaseRootIntegrations(outRoot, m);
+function rewriteNativeInvocations(outRoot: string, m: HarnessManifest): void {
+  projectNativeRootIntegrations(outRoot, m);
   const harnessDir = escapeRegExp(m.harnessDir);
   const delegateNames = [
     "audit",
@@ -900,13 +900,15 @@ function rewriteReleaseInvocations(outRoot: string, m: HarnessManifest): void {
       `"aidlc .*"`,
     );
     value = value.replace(INVOKE_TOKEN, "aidlc");
-    value = rewriteReleaseOnboarding(value);
+    value = rewriteNativeOnboarding(value);
     writeFileSync(file, value);
   }
-  rewriteKiroReleaseAllowlists(outRoot, m);
-  rewriteClaudeReleasePermissions(outRoot, m);
-  if (m.name === "codex") {
-    const { emitDefaultRules, emitTrustSeed } = require(join(HARNESS_ROOT, "codex", "emit.ts")) as {
+  rewriteKiroNativeAllowlists(outRoot, m);
+  rewriteClaudeNativePermissions(outRoot, m);
+  if (m.tierFlavor === "codex") {
+    const { emitDefaultRules, emitTrustSeed } = require(
+      join(HARNESS_ROOT, m.name, "emit.ts"),
+    ) as {
       emitDefaultRules: (harnessDir: string, release?: boolean) => string;
       emitTrustSeed: (harnessDir: string, release?: boolean) => string;
     };
@@ -928,20 +930,20 @@ function rewriteReleaseInvocations(outRoot: string, m: HarnessManifest): void {
       leftovers.push(`${relative(outRoot, file)}: unexpanded {{INVOKE}}`);
     }
     if (new RegExp(String.raw`\bbun\s+[^\n]*${harnessDir}/(?:tools|hooks)/aidlc`).test(value)) {
-      leftovers.push(`${relative(outRoot, file)}: bun invocation survived release projection`);
+      leftovers.push(`${relative(outRoot, file)}: bun invocation survived native projection`);
     }
     if (bareToolCheck.test(value)) {
-      leftovers.push(`${relative(outRoot, file)}: bare bun invocation survived release projection`);
+      leftovers.push(`${relative(outRoot, file)}: bare bun invocation survived native projection`);
     }
     if (
       relative(outRoot, file).split(sep).join("/").includes("/agents/") &&
       /"allowedCommands"\s*:\s*\[[\s\S]*?"bun [^"]*tools\//.test(value)
     ) {
-      leftovers.push(`${relative(outRoot, file)}: bun allowlist survived release projection`);
+      leftovers.push(`${relative(outRoot, file)}: bun allowlist survived native projection`);
     }
   }
   if (leftovers.length > 0) {
-    throw new Error(`[${m.name}] release invocation projection failed:\n${leftovers.join("\n")}`);
+    throw new Error(`[${m.name}] native invocation projection failed:\n${leftovers.join("\n")}`);
   }
 }
 
@@ -1029,7 +1031,8 @@ function writeHarness(name: string): void {
     // Siblings at dist/ (plugins, specifications, and unrelated assets) remain
     // outside this harness-owned boundary.
     if (existsSync(distDir)) rmSync(distDir, { recursive: true, force: true });
-    buildTree(m, distDir, seedStash);
+    buildTree(m, distDir, seedStash, "aidlc");
+    rewriteNativeInvocations(distDir, m);
     console.log(`[${name}] regenerated dist/${name}/${m.harnessDir}`);
   } finally {
     rmSync(seedStash, { recursive: true, force: true });
@@ -1047,12 +1050,13 @@ function checkHarness(name: string): string[] {
   let problems: string[] = [];
   try {
     // Seed compile from the committed tree (untouched under --check).
-    const generatedFiles = buildTree(m, tmp, committedTreeRoot);
+    buildTree(m, tmp, committedTreeRoot, "aidlc");
+    rewriteNativeInvocations(tmp, m);
     // The whole harness distribution is generated, not just <harnessDir>.
     // Diffing its root makes every generated file part of the same
     // bidirectional contract: missing/modified root onboarding and config are
     // caught, and outputs removed or renamed in a manifest become ORPHANs.
-    problems = diffTrees(tmp, committedDistRoot, name, generatedFiles);
+    problems = diffTrees(tmp, committedDistRoot, name);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
@@ -1066,7 +1070,7 @@ function writeReleaseHarness(name: string): void {
   const seedFrom = join(REPO_ROOT, "dist", name, m.harnessDir);
   if (existsSync(releaseDir)) rmSync(releaseDir, { recursive: true, force: true });
   buildTree(m, releaseDir, seedFrom, "aidlc");
-  rewriteReleaseInvocations(releaseDir, m);
+  rewriteNativeInvocations(releaseDir, m);
   console.log(`[${name}] regenerated dist-release/${name}/${m.harnessDir}`);
 }
 
@@ -1077,7 +1081,7 @@ function checkReleaseHarness(name: string): string[] {
   const tmp = mkdtempSync(join(tmpdir(), `aidlc-release-${name}-`));
   try {
     buildTree(m, tmp, seedFrom, "aidlc");
-    rewriteReleaseInvocations(tmp, m);
+    rewriteNativeInvocations(tmp, m);
     const problems = diffTrees(tmp, committed, `dist-release/${name}`);
     console.log(
       `[${name}] release --check: ${problems.length === 0 ? "OK" : `${problems.length} problem(s)`}`,

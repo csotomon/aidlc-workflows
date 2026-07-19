@@ -54,9 +54,9 @@ Every directive is validated against the frozen contract in `aidlc-directive.ts`
 
 ```
 Loop:
-  1. directive = `bun .claude/tools/aidlc-orchestrate.ts next $ARGUMENTS`
+  1. directive = `aidlc __delegate orchestrate next $ARGUMENTS`
   2. act on directive.kind
-  3. `bun .claude/tools/aidlc-orchestrate.ts report --stage <directive.stage> --result <outcome> [--user-input "<text>"]` when the directive names a stage; omit `--stage` only for non-stage report round-trips.
+  3. `aidlc __delegate orchestrate report --stage <directive.stage> --result <outcome> [--user-input "<text>"]` when the directive names a stage; omit `--stage` only for non-stage report round-trips.
   4. repeat unless directive.kind == done
 ```
 
@@ -98,7 +98,7 @@ Scope is a file-authored primitive, the same muscle memory as authoring a sensor
 1. **Identity** lives in one file per scope at `dist/claude/.claude/scopes/aidlc-<name>.md` — frontmatter (`name`, `depth`, `keywords`, `description`, optional `runner`) plus prose describing the scope. The shipped set is `bugfix`, `enterprise`, `feature`, `infra`, `mvp`, `poc`, `refactor`, `security-patch`, `workshop`.
 2. **Membership** lives in each stage's `scopes:` frontmatter — the list of scopes for which that stage is EXECUTE.
 
-`bun .claude/tools/aidlc-graph.ts compile` (the same compile path that produces `stage-graph.json`) transposes these into the grid at `tools/data/scope-grid.json` — a `scope → {stages: {slug: EXECUTE|SKIP}}` map that the engine reads for all scope-level routing. The engine's `validScopes()` derives its canonical scope-name set from that compiled grid.
+`aidlc __delegate graph compile` (the same compile path that produces `stage-graph.json`) transposes these into the grid at `tools/data/scope-grid.json` — a `scope → {stages: {slug: EXECUTE|SKIP}}` map that the engine reads for all scope-level routing. The engine's `validScopes()` derives its canonical scope-name set from that compiled grid.
 
 Adding a scope is purely additive: drop `.claude/scopes/aidlc-<name>.md`, tag the member stages' `scopes:` lists, recompile, and regenerate the human-readable summary table in `SKILL.md`. No dispatch-logic edit is required, and the drift guards prevent the on-disk set from diverging.
 

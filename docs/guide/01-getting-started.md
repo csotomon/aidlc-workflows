@@ -6,20 +6,21 @@ This chapter walks you through installing this implementation, verifying your en
 
 ## Prerequisites
 
-This implementation requires two tools on your system:
+Install the CLI harness you plan to use. The AI-DLC native installer supplies
+the self-contained `aidlc` runtime; Bun is required only for framework source
+development or a third-party plugin that explicitly declares Bun-backed
+commands.
 
 | Prerequisite | Purpose | Install |
 |-------------|---------|---------|
 | **Claude Code** | This implementation runs as a Claude Code command. The orchestrator, agents, and hooks all execute within Claude Code. | Native install (recommended, auto-updates): macOS/Linux/WSL `curl -fsSL https://claude.ai/install.sh \| bash`; Windows PowerShell `irm https://claude.ai/install.ps1 \| iex`. Or `brew install --cask claude-code`. ([docs](https://code.claude.com/docs/en/quickstart)) |
-| **bun** | Required by the documented copy-install channel. Self-contained native installs do not require bun. | `curl -fsSL https://bun.sh/install \| bash` ([docs](https://bun.sh)). On Windows: `npm install -g bun` or `powershell -c "irm bun.sh/install.ps1 \| iex"` |
-
-> **Important**: `bun` must be on your `PATH` for non-interactive shells. Claude Code runs your shell non-interactively, so it sources `~/.zshenv` (zsh) or `~/.bashrc` (bash) — NOT `~/.zshrc`. On Windows with Git Bash, `~/.bashrc` is the correct file. If `which bun` fails inside Claude Code, add the bun PATH export to the appropriate file.
+| **AI-DLC** | Supplies the deterministic engine, hooks, and lifecycle command. | Installed in [Installation](#installation) below. |
 
 Verify prerequisites:
 
 ```bash
 command -v claude >/dev/null && echo "✓ Claude Code installed" || echo "✗ Install Claude Code first"
-command -v bun    >/dev/null && echo "✓ bun installed"          || echo "✗ Install bun first"
+command -v aidlc  >/dev/null && echo "✓ AI-DLC installed"       || echo "✗ Install AI-DLC first"
 ```
 
 ## AWS Bedrock Setup
@@ -133,35 +134,8 @@ Missing credentials are not blocking. A server you have no credentials for — n
 
 ## Installation
 
-AI-DLC installs by copying its distribution for your harness into your project.
-The steps below cover **Claude Code** (the `dist/claude/.claude/` tree). For the
-other distributions, see [Running on Kiro CLI](harnesses/kiro-cli.md),
-[Running on Kiro IDE](harnesses/kiro-ide.md), or
-[Running on Codex CLI](harnesses/codex-cli.md), or
-[AI-DLC on opencode](harnesses/opencode.md). The Claude Code implementation
-ships as a `.claude/` directory that you copy into your project.
-
-### Step 1
-
-```bash
-cp -r dist/claude/.claude/ your-project/.claude/
-cp -r dist/claude/aidlc/   your-project/aidlc/     # the workspace shell — a sibling of .claude/, not inside it
-```
-
-The first line copies the engine — the orchestrator, stage files, agent personas, hooks, knowledge files, and default settings. The second copies the **workspace shell**: the pre-built `aidlc/spaces/default/memory/` method tree the engine reads. It ships as a **sibling** of `.claude/` (not inside it), so it must be copied separately — or copy the whole `dist/claude/` tree at once. `/aidlc --doctor` fails its "workspace shell ready" check if `aidlc/spaces/default/memory/` is missing.
-
-### Step 2
-
-```bash
-cd your-project
-```
-
-All `/aidlc` commands run relative to the project root.
-
-### Alternative: self-contained native channel
-
-Published releases also carry a native installer. It installs a checksum-
-verified binary and the selected harness runtime without bun, Node.js, or git:
+The native installer is the default. It installs a checksum-verified binary
+and the selected harness runtime without Bun, Node.js, or Git:
 
 ```bash
 curl -fsSL https://github.com/awslabs/aidlc-workflows/releases/latest/download/install.sh \
@@ -194,17 +168,35 @@ The installer places a stable `aidlc.cmd` under
 directory to the current PowerShell session and prints the exact command needed
 in a new session when the directory is not already on `PATH`.
 `AIDLC_OFFLINE=1` has the same effect as `-Offline` and requires `-From`, so it
-cannot silently open a network connection. Copy-install instructions remain
-supported on every platform.
+cannot silently open a network connection.
+
+The installer authenticates the release with SHA-256 checksums. Published
+artifacts also carry SLSA provenance attestations; checksums, TLS, and
+attestation are the permanent release trust model.
+
+### Manual Projection
+
+The committed `dist/<harness>/` trees remain available for source checkouts,
+but they now invoke the installed native `aidlc` command. They are not a
+standalone Bun installation. Install a matching binary first, then project the
+local distribution through the same typed reconciliation used by the installer:
+
+```bash
+aidlc init --project-dir your-project --from "$PWD/dist/claude" --harness claude
+```
+
+This preserves project-owned root content and merges `.gitignore`, `.mcp.json`,
+and `AGENTS.md` according to [Install and
+Lifecycle](18-install-and-lifecycle.md#root-files-and-existing-projects).
 
 ---
 
 ## The Workspace Shell
 
-For a manual copy install, there is no scaffold step. The distribution you copied in already ships the
-workspace shell — the `.claude/` engine plus a pre-built `aidlc/spaces/default/`
-holding the memory layer (`aidlc/spaces/default/memory/`, where team-affirmed
-practices and learnings live). You do not run any init command.
+`aidlc init` creates the workspace shell: the `.claude/` engine plus
+`aidlc/spaces/default/` holding the memory layer
+(`aidlc/spaces/default/memory/`, where team-affirmed practices and learnings
+live). A complete manual projection already contains the same shell.
 
 The first time you run `/aidlc` (or describe what to build), the engine
 **auto-births** the first intent into the active space. Each intent gets its own
@@ -223,9 +215,8 @@ To add [team knowledge](08-knowledge.md) or team practices before your first run
 edit the shipped `aidlc/spaces/default/memory/` files; the space-level
 `aidlc/knowledge/` directory is created (empty) once your first `/aidlc` runs.
 
-For a self-contained machine install, `aidlc init` creates this shell and its
-refresh baseline before the first harness session. It does not create a
-workflow intent and never uses the network.
+Init also records a refresh baseline before the first harness session. It does
+not create a workflow intent and never uses the network.
 
 For the full picture of the workspace layout — how it holds many intents at once,
 what spaces are for, and the commands to move between them — see
@@ -247,7 +238,7 @@ Run the health check to confirm everything is in place:
 
 | Check | What It Validates |
 |-------|-------------------|
-| Prerequisites | Self-contained binary, or `bun` installed and on `$PATH` for copy installs |
+| Prerequisites | Active self-contained `aidlc` command |
 | Installed runtime | Active machine version and selected harness runtime for binary installs |
 | Project stamp | Project distribution/version compared with the selected engine |
 | Hook presence | Every hook `settings.json` wires (its `hooks` blocks + the `statusLine` command — all 12 framework hooks) exists in `.claude/hooks/`; a wired-but-missing hook fails loudly. Sourcing the expected roster from `settings.json` means adding a hook there auto-checks it |
@@ -264,7 +255,7 @@ Run the health check to confirm everything is in place:
 ### Example output
 
 ```
-✓ bun installed (required for CLI tools and hooks)
+✓ Installed runtime: active AI-DLC version is complete
 ✓ aidlc-audit-logger.ts present
 ✓ aidlc-sync-statusline.ts present
 ✓ aidlc-validate-state.ts present
@@ -289,12 +280,12 @@ Run the health check to confirm everything is in place:
 
 | Failure | Fix |
 |---------|-----|
-| `bun` not installed | Install via `curl -fsSL https://bun.sh/install \| bash`. On Windows: `npm install -g bun` or `powershell -c "irm bun.sh/install.ps1 \| iex"`. Ensure it is on PATH for non-interactive shells. |
-| Hook not present | Re-copy the `.claude/` directory from the distribution |
-| `settings.json` missing | Re-copy from the distribution: `cp dist/claude/.claude/settings.json .claude/settings.json` |
-| Workspace shell missing | Re-copy the workspace shell from `dist/claude/` into your project root |
+| `aidlc` not found | Add the installer-reported bin directory to PATH, then open a new shell |
+| Hook not present | Run `aidlc init --dry-run`, then `aidlc init` to refresh the projection |
+| `settings.json` missing | Run `aidlc init` to restore the selected harness projection |
+| Workspace shell missing | Run `aidlc init` to restore the project shell |
 | State file issues | Archive the active intent's record dir under `aidlc/spaces/<space>/intents/` and run `/aidlc` to start fresh |
-| Graph/scope/schema/keyword failures | The diagnostic reports the specific artifact, slug, or scope name at fault. These indicate authoring drift in `.claude/aidlc-common/stages/` or `.claude/scopes/`; regenerate the compiled graph + scope grid with `bun .claude/tools/aidlc-graph.ts compile` or inspect the named stage/scope directly. |
+| Graph/scope/schema/keyword failures | The diagnostic names the artifact, slug, or scope at fault. Refresh released content with `aidlc init`; framework developers can regenerate authored changes with `aidlc __delegate graph compile`. |
 
 ---
 
@@ -324,14 +315,13 @@ In your shell:
 ```bash
 # Verify prerequisites
 command -v claude >/dev/null && echo "✓ Claude Code" || echo "✗ Claude Code"
-command -v bun    >/dev/null && echo "✓ bun"          || echo "✗ bun"
+command -v aidlc  >/dev/null && echo "✓ aidlc"        || echo "✗ aidlc"
 
-# Install (engine + the workspace shell sibling)
-cp -r dist/claude/.claude/ your-project/.claude/
-cp -r dist/claude/aidlc/   your-project/aidlc/
-
-# Launch Claude Code in your project
-cd your-project && claude
+# Initialize, verify, and launch
+cd your-project
+aidlc init
+aidlc doctor
+claude
 ```
 
 Inside the Claude Code session:
@@ -348,7 +338,9 @@ Inside the Claude Code session:
 
 ## Tool Permissions
 
-The included `.claude/settings.json` pre-approves Claude Code tools (Read, Edit, Write, Bash, Glob, Grep, Task, WebSearch) so workflows run without per-call permission prompts. Review this file before use and adjust to your security requirements.
+The included `.claude/settings.json` pre-approves the standard non-shell tools
+and the native `aidlc` command prefix. Review this file before use and adjust
+it to your security requirements.
 
 See [Customization](13-customization.md) for details on modifying tool permissions.
 
@@ -359,4 +351,5 @@ See [Customization](13-customization.md) for details on modifying tool permissio
 - [Your First Workflow](02-your-first-workflow.md) — annotated walkthrough of a complete run
 - [Scopes, Depth, and Test Strategy](05-scopes-and-depth.md) — choosing the right scope for your task
 - [Troubleshooting](15-troubleshooting.md) — common issues and fixes
+- [Install and Lifecycle](18-install-and-lifecycle.md) — upgrades, rollback, pins, offline packages, and uninstall
 - [Glossary](glossary.md) — terminology reference

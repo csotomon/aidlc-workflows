@@ -94,18 +94,13 @@ describe("settings.json — JSON validity [.sh test 1]", () => {
 });
 
 describe("permissions.allow — pre-approved tool list [.sh tests 2-9]", () => {
-  // The .sh looped `for tool in Read Edit Write Bash Glob Grep Task WebSearch`
-  // and grepped each as an EXACT line (`grep -c "^${tool}$"`) in the allow
-  // array. STRONGER here: assert exact membership in the parsed array, so a
-  // tool that only appeared as a substring (e.g. inside
-  // `Bash(bun .../tools/*)`) would NOT satisfy it — matching the .sh's
-  // anchored `^...$` grep, which the bare `Bash` entry on its own line passes.
+  // Native projections grant the deterministic `aidlc` command instead of
+  // unrestricted Bash or harness-local Bun prefixes.
   const allow = settings.permissions?.allow ?? [];
   const REQUIRED_TOOLS = [
     "Read",
     "Edit",
     "Write",
-    "Bash",
     "Glob",
     "Grep",
     "Task",
@@ -117,12 +112,17 @@ describe("permissions.allow — pre-approved tool list [.sh tests 2-9]", () => {
       expect(allow).toContain(tool);
     });
   }
+  test("permissions.allow grants only the native aidlc Bash prefix", () => {
+    expect(allow).toContain("Bash(aidlc *)");
+    expect(allow).not.toContain("Bash");
+    expect(allow.some((entry) => entry.startsWith("Bash(bun "))).toBe(false);
+  });
 });
 
 describe("statusLine [.sh test 10]", () => {
-  test("statusLine.command references aidlc-statusline.ts", () => {
+  test("statusLine.command routes through the native aidlc command", () => {
     const cmd = settings.statusLine?.command ?? "";
-    expect(cmd).toContain("aidlc-statusline.ts");
+    expect(cmd).toBe("aidlc statusline");
   });
 });
 

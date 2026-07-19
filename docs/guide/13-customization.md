@@ -36,7 +36,7 @@ This file is listed in `.gitignore` so your personal changes are never committed
 
 Shipped agents are authored with a `tier:` (`judgment` | `balanced` | `templated`) that the build projects into each harness's native model/effort keys — judgment agents inherit your session's model and effort, balanced agents pin a mid-size model, and templated agents additionally reduce effort. See [Agent System](../reference/05-agent-system.md) for the full projection table.
 
-To change ONE agent's behavior in your installed copy, edit the projected value directly — for example, set `model: opus` in a Claude agent's `.claude/agents/aidlc-*-agent.md` frontmatter, or change the `"model"` field in a Kiro agent JSON. The edit survives until you re-copy the `dist/<harness>/` shell. To cap EVERY agent when building your own distribution from source, set a `tier_cap:` in `core/memory/org.md`/`project.md` frontmatter or run the packager with `AIDLC_TIER_CAP=<tier>` — both are pack-time knobs on `bun scripts/package.ts`, not runtime settings.
+To change ONE agent's behavior in your installed copy, edit the projected value directly — for example, set `model: opus` in a Claude agent's `.claude/agents/aidlc-*-agent.md` frontmatter, or change the `"model"` field in a Kiro agent JSON. The edit survives until a later `aidlc init` refresh replaces that framework-owned file (and init reports the local modification first). To cap EVERY agent when building your own distribution from source, set a `tier_cap:` in `core/memory/org.md`/`project.md` frontmatter or run the packager with `AIDLC_TIER_CAP=<tier>` — both are pack-time knobs on `bun scripts/package.ts`, not runtime settings.
 
 ---
 
@@ -146,13 +146,17 @@ The statusline is configured in `.claude/settings.json`:
 ```json
 "statusLine": {
   "type": "command",
-  "command": "bun \"$CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-statusline.ts\""
+  "command": "aidlc statusline"
 }
 ```
 
 ### Customizing the format
 
-Edit `.claude/hooks/aidlc-statusline.ts` directly. The output format is defined in the `main()` function near the end of the file. The hook reads phase, stage, and agent from `aidlc-state.md`, maps stage slugs to display names, and builds both the unicode progress bar and the `n/m` ratio from the same phase-local checkbox parse.
+Framework developers customize the authored `core/hooks/aidlc-statusline.ts`
+and regenerate the projections. The hook reads phase, stage, and agent from
+`aidlc-state.md`, maps stage slugs to display names, and builds both the
+unicode progress bar and the `n/m` ratio from the same phase-local checkbox
+parse.
 
 ### Disabling the statusline
 
@@ -168,13 +172,15 @@ The `permissions.allow` list in `.claude/settings.json` pre-approves Claude Code
 "permissions": {
   "allow": [
     "Read", "Edit", "Write",
-    "Bash(bun \"$CLAUDE_PROJECT_DIR/.claude/tools/\"*)",
-    "Bash", "Glob", "Grep", "Task", "WebSearch"
+    "Glob", "Grep", "Task", "WebSearch",
+    "Bash(aidlc *)"
   ]
 }
 ```
 
-The scoped `Bash(bun "$CLAUDE_PROJECT_DIR/.claude/tools/"*)` entry sits ahead of the bare `Bash` so the framework's own tool invocations always match the narrower rule first. `$CLAUDE_PROJECT_DIR` stays double-quoted (with the `*` outside the quotes) so the command survives word-splitting shells when the project path contains spaces while the permission matcher still globs.
+The scoped `Bash(aidlc *)` entry allows framework commands without granting
+unrestricted shell access. Add a broader Bash permission only when your own
+stages require arbitrary shell commands.
 
 ### How permissions work
 

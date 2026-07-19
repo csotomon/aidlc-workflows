@@ -22,8 +22,42 @@ const manifest: HarnessManifest = {
   harnessDir: ".claude",
   tierFlavor: "claude",
   rootIntegrations: [
-    { path: ".gitignore", policy: "managed-block", marker: "gitignore" },
-    { path: ".mcp.json", policy: "json-map", jsonKey: "mcpServers", optional: true },
+    {
+      path: ".gitignore",
+      policy: "managed-block",
+      marker: "gitignore",
+      legacySignatures: {
+        wholeFileHashes: [
+          "sha256:3da36b2d01551aeae2e366caa08be8cce0dbc9110e252445dcaa4e758e24a0b6",
+          "sha256:4f1cd2e930bd37d2f5d715a06ea3fa1e2d39479fc662f0f0562116376132114b",
+        ],
+      },
+    },
+    {
+      path: ".mcp.json",
+      policy: "json-map",
+      jsonKey: "mcpServers",
+      optional: true,
+      legacySignatures: {
+        jsonEntryHashes: {
+          context7: [
+            "sha256:8a440d21705f35c8f5649f118d17f786e08d589fb2dd888f5de5aa503233afbf",
+          ],
+          "aws-mcp": [
+            "sha256:d6ff496cb02a8b61d81f8534b179f60e42173ee8510eebe3428bf0bfe30ff0aa",
+          ],
+          "aws-pricing": [
+            "sha256:43bc3467687da178f795ad41ad8767da8b255780f95b64d5c7464b2fbff9ef40",
+          ],
+          "aws-iac": [
+            "sha256:9fea0efb8aea62ec3446cc8201bc74cae477c75d36659b47e93d53981cb94686",
+          ],
+          "aws-serverless": [
+            "sha256:858610c8f5ccbbecc39595fdf866f68d0fb32d62750b3d50ee4bdef7ec1d104b",
+          ],
+        },
+      },
+    },
   ],
 
   // core/<src> → <harnessDir>/<dst>. Claude keeps every core dir name as-is.

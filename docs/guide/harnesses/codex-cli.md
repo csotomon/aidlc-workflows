@@ -12,8 +12,7 @@ never hand-edit it (the drift guard fails CI).
 - **Codex CLI ≥ 0.139.0** — earlier releases do not surface the real agent
   role in subagent hook payloads and do not resolve hyphenated agent TOMLs.
   `/aidlc --doctor` enforces the pin. Check with `codex --version`.
-- **bun** for the copy channel; its tools and hooks run through Bun. The
-  native channel is self-contained.
+- The self-contained `aidlc` command installed below
 - **A model provider** — the shipped `config.toml` defaults to **Amazon
   Bedrock** (`openai.gpt-5.5`; agents on `openai.gpt-5.4`). Set the AWS
   profile/region in `[model_providers.amazon-bedrock.aws]`. For OpenAI auth,
@@ -22,30 +21,45 @@ never hand-edit it (the drift guard fails CI).
 
 ## Install
 
-### Copy channel
+### Native install
 
-1. Copy the distribution into your project (which must be a **git
+```bash
+curl -fsSL https://github.com/awslabs/aidlc-workflows/releases/latest/download/install.sh \
+  | sh -s -- --harness codex
+cd your-project
+aidlc init
+aidlc doctor
+codex
+```
+
+This verifies release checksums and needs neither Bun nor Node.js. Init wires
+hooks through `aidlc adapter codex ...` and ships a matching
+`trust-seed.toml`. Choose **Trust all and continue** in the first Codex session,
+or replace `<PROJECT_DIR>` in that template and merge its complete
+`[hooks.state]` set into `$CODEX_HOME/config.toml`. On Windows, run
+`install.ps1 -Harness codex`.
+
+### Manual projection
+
+Install a matching native `aidlc` binary first, then:
+
+1. Project the local distribution into your project (which must be a **git
    repository** — Codex only discovers a project `.codex/hooks.json` inside
    one):
 
    ```bash
-   cp -r dist/codex/.codex/  your-project/.codex/
-   cp -r dist/codex/.agents/ your-project/.agents/
-   cp -r dist/codex/aidlc/   your-project/aidlc/      # the workspace shell (spaces/default/memory) — a sibling of .codex/, not inside it
-   cp dist/codex/AGENTS.md   your-project/AGENTS.md   # or merge into yours
+   aidlc init --project-dir your-project --from "$PWD/dist/codex" --harness codex
    ```
 
-   The `aidlc/` directory is the workspace shell — it ships the pre-built
-   `aidlc/spaces/default/memory/` method tree the engine reads. It is a
-   **sibling** of `.codex/`, so copy it separately (or copy the whole
-   `dist/codex/` tree at once). `$aidlc --doctor` fails its "workspace shell
-   ready" check if it is missing.
+   This creates `.codex/`, `.agents/`, and the complete workspace shell while
+   merging the managed `.gitignore` and `AGENTS.md` blocks without replacing
+   project-owned content.
 
-2. Apply the `.gitignore` entries from the shipped `AGENTS.md` § "Git
-   Integration" **before** starting a workflow — the per-clone audit shards
-   under each intent's `audit/` are committed deliberately (each clone writes
-   its own `<host>-<clone>.md`, so concurrent appends never git-conflict), while
-   per-user cursors and machine-local runtime state stay ignored.
+2. Review the managed `.gitignore` block before starting a workflow. Per-clone
+   audit shards under each intent's `audit/` are committed deliberately (each
+   clone writes its own `<host>-<clone>.md`, so concurrent appends never
+   git-conflict), while per-user cursors and machine-local runtime state stay
+   ignored.
 
 3. Trust the project and pre-seed hook trust. Codex never runs untrusted
    hooks (the `--dangerously-bypass-hook-trust` flag does not run them
@@ -84,32 +98,12 @@ never hand-edit it (the drift guard fails CI).
    (or keep it project-level — trusted projects read it). Verify with:
 
    ```bash
-   bun .codex/tools/aidlc-utility.ts doctor
+   aidlc doctor
    ```
 
-### Native channel
-
-```bash
-curl -fsSL https://github.com/awslabs/aidlc-workflows/releases/latest/download/install.sh \
-  | sh -s -- --harness codex
-cd your-project
-aidlc init
-aidlc doctor
-codex
-```
-
-This channel verifies release checksums and does not require Bun or Node.js.
-The release projection wires hooks through `aidlc adapter codex ...` and
-ships a `trust-seed.toml` template with matching hashes. Either choose
-**Trust all and continue** in the first Codex session, or replace
-`<PROJECT_DIR>` in that template and merge its complete `[hooks.state]` set
-into `$CODEX_HOME/config.toml`; the source-checkout trust generator used by
-copy installs is not required. Merge the generated `.codex/config.toml`
-settings into your user config as needed. For an air-gapped install, use
-`install.sh --from <release-directory> --offline --harness codex`.
-On Windows, download the matching release `install.ps1` and run
-`install.ps1 -Harness codex`; use `-From <release-directory> -Offline` for the
-same flat air-gapped package.
+For an air-gapped install, use `--from <release-directory> --offline` or
+PowerShell `-From <release-directory> -Offline`. See [Install and
+Lifecycle](../18-install-and-lifecycle.md).
 
 ## Use
 

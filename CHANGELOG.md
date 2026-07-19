@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.5.3] - 2026-07-19
+
+The AI-DLC install mechanism is now generally available: every shipped project projection uses the self-contained `aidlc` command, and the installer is the documented default. Release trust is permanently based on authenticated SHA-256 checksums, TLS, and published SLSA provenance attestations. **Upgrade:** install or upgrade the native command, then run `aidlc init --dry-run` and `aidlc init` in each project; known unmodified legacy root files are adopted automatically.
+
+* `dist/<harness>/` and `dist-release/<harness>/` are byte-identical native projections with native Claude, Kiro CLI, Kiro IDE, and Codex hook and permission trust entries; Bun remains a source-development and third-party plugin runtime, not an AI-DLC runtime prerequisite.
+* `aidlc init` adopts known historical `.gitignore`, `.mcp.json`, and `AGENTS.md` content only by exact whole-file or canonical JSON-entry SHA-256 signatures, records contribution ownership, and continues to refuse unknown or modified unmarked content even with `--force`.
+* Native binary builds now require byte-for-byte stdout/stderr and exit parity with Bun-spawn execution for hooks, statusline, all host adapters, and generated-surface routes; Kiro IDE adapter dispatch never reads the IDE's deliberately open stdin channel.
+* Getting started is installer-first, with a complete lifecycle reference for project pins and CI, upgrades and rollback, harness management, offline packages, mirrors/proxies/custom CAs, plugin synchronization, output modes, exit codes, transaction staging, doctor, and uninstall.
+
 ## [2.5.2] - 2026-07-19
 
 AI-DLC now compares host-installed plugins with each project's composed version and source hash, and synchronizes plugin changes through one rollback-safe project transaction. **Upgrade:** update AI-DLC, refresh the project runtime, then run `aidlc plugin sync` once to establish stamps for previously composed plugins.

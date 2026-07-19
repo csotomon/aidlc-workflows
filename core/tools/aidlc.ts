@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync, realpathSync, writeSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -11,6 +12,7 @@ import { AIDLC_VERSION } from "./aidlc-version.ts";
 import {
   installRoot,
   inspectInstalledVersion,
+  installedVersionFingerprint,
   machineTransactionRoot,
   projectDirFrom,
   STRICT_SEMVER,
@@ -1372,8 +1374,11 @@ async function runDelegateInProcess(tool: string, args: string[]): Promise<numbe
   }
 }
 
+let bufferedStdin: string | null = null;
+
 async function readStdin(): Promise<string> {
-  return await Bun.stdin.text();
+  if (bufferedStdin === null) bufferedStdin = await Bun.stdin.text();
+  return bufferedStdin;
 }
 
 async function withProjectDir(
@@ -1438,7 +1443,10 @@ async function runAdapter(action: Extract<Action, { type: "adapter" }>): Promise
       text(2, `aidlc adapter ${action.harness} ${action.target}: adapter does not export run(target, input, extraArgs)\n`);
       return 1;
     }
-    return await mod.run(action.target, await readStdin(), action.extraArgs);
+    const input = action.harness === "kiro-ide"
+      ? (bufferedStdin ?? "")
+      : await readStdin();
+    return await mod.run(action.target, input, action.extraArgs);
   } finally {
     if (previousHarness === undefined) delete process.env.AIDLC_HARNESS_DIR;
     else process.env.AIDLC_HARNESS_DIR = previousHarness;
@@ -1662,6 +1670,9 @@ export function routePolicyFor(argv: readonly string[]): Route | null {
   const verb = clean[1];
   if (head === "config" && clean.includes("--global")) return routeById("config-global");
   return nounRoutes.find((route) => route.verbs.includes(verb ?? "")) ??
+    nounRoutes.find((route) =>
+      route.kind === "routing-only" && route.verbs.includes("<name>")
+    ) ??
     nounRoutes.find((route) => route.kind === "custom") ??
     null;
 }
@@ -1686,9 +1697,132 @@ function projectDistribution(projectDir: string): string | null {
   return null;
 }
 
-function completePinnedVersion(version: string, distribution: string | null): boolean {
+type PinResolutionCache = {
+  schemaVersion: 1;
+  session: string;
+  version: string;
+  distribution: string | null;
+  fingerprint: string;
+  validatedAt: number;
+};
+
+const PIN_CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
+function hashIdentity(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function pinSessionId(argv: readonly string[], input: string | null): string | null {
+  if (input) {
+    try {
+      const value = JSON.parse(input) as { session_id?: unknown };
+      if (typeof value.session_id === "string" && value.session_id.length > 0) {
+        return value.session_id;
+      }
+    } catch {
+      // Host-specific fallbacks below cover transports without JSON stdin.
+    }
+  }
+  const clean = withoutProjectDirFlag(argv);
+  if (clean[0] === "adapter" && clean[1] === "kiro-ide") {
+    const vscodePid = process.env.VSCODE_PID?.trim();
+    const vscodeIpc = process.env.VSCODE_IPC_HOOK?.trim();
+    if (vscodePid || vscodeIpc) {
+      return `kiro-ide:${vscodePid ?? ""}:${vscodeIpc ?? ""}`;
+    }
+  }
+  return null;
+}
+
+function pinCachePath(projectDir: string, sessionId: string): string {
+  const project = existsSync(projectDir) ? realpathSync(projectDir) : resolve(projectDir);
+  return join(
+    installRoot(),
+    "pin-resolution-cache",
+    `${hashIdentity(project)}-${hashIdentity(sessionId)}.json`,
+  );
+}
+
+function readPinCache(projectDir: string, sessionId: string): PinResolutionCache | null {
   try {
-    return inspectInstalledVersion(version, distribution).complete;
+    const value = JSON.parse(
+      readFileSync(pinCachePath(projectDir, sessionId), "utf-8"),
+    ) as PinResolutionCache;
+    return value.schemaVersion === 1 &&
+        typeof value.session === "string" &&
+        typeof value.version === "string" &&
+        (value.distribution === null || typeof value.distribution === "string") &&
+        typeof value.fingerprint === "string" &&
+        typeof value.validatedAt === "number"
+      ? value
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function writePinCache(
+  projectDir: string,
+  sessionId: string,
+  version: string,
+  distribution: string | null,
+  fingerprint: string,
+): void {
+  const path = pinCachePath(projectDir, sessionId);
+  const root = machineTransactionRoot();
+  const value: PinResolutionCache = {
+    schemaVersion: 1,
+    session: hashIdentity(sessionId),
+    version,
+    distribution,
+    fingerprint,
+    validatedAt: Date.now(),
+  };
+  executePlan({
+    schemaVersion: 1,
+    root,
+    operations: [writeOperation(
+      relative(root, path),
+      `${JSON.stringify(value, null, 2)}\n`,
+      transactionState(path),
+    )],
+  });
+}
+
+function completePinnedVersion(
+  projectDir: string,
+  sessionId: string | null,
+  version: string,
+  distribution: string | null,
+): boolean {
+  try {
+    const fingerprint = installedVersionFingerprint(version);
+    if (sessionId && fingerprint) {
+      const cache = readPinCache(projectDir, sessionId);
+      if (
+        cache &&
+        cache.session === hashIdentity(sessionId) &&
+        cache.version === version &&
+        cache.distribution === distribution &&
+        cache.fingerprint === fingerprint &&
+        Date.now() - cache.validatedAt >= 0 &&
+        Date.now() - cache.validatedAt <= PIN_CACHE_MAX_AGE_MS
+      ) {
+        return true;
+      }
+    }
+    const inspection = inspectInstalledVersion(version, distribution);
+    if (!inspection.complete) return false;
+    const verifiedFingerprint = installedVersionFingerprint(version);
+    if (!verifiedFingerprint || (fingerprint && fingerprint !== verifiedFingerprint)) return false;
+    if (sessionId) {
+      try {
+        writePinCache(projectDir, sessionId, version, distribution, verifiedFingerprint);
+      } catch {
+        // A cache failure may cost latency, but cannot weaken or block pin enforcement.
+      }
+    }
+    return true;
   } catch {
     return false;
   }
@@ -1724,7 +1858,7 @@ function reconcilePinRegistration(projectDir: string, version: string): void {
   });
 }
 
-function dispatchPinnedVersion(argv: string[]): number | null {
+function dispatchPinnedVersion(argv: string[], input: string | null): number | null {
   if (routePinPolicy(argv) !== "pinned") return null;
   const projectDir = projectDirFrom(argv);
   const pinPath = join(projectDir, ".aidlc-version");
@@ -1740,7 +1874,7 @@ function dispatchPinnedVersion(argv: string[]): number | null {
   }
   if (process.env.AIDLC_PIN_DISPATCHED === version) return null;
   const distribution = projectDistribution(projectDir);
-  if (!completePinnedVersion(version, distribution)) {
+  if (!completePinnedVersion(projectDir, pinSessionId(argv, input), version, distribution)) {
     return renderDispatcherFailure(
       argv,
       1,
@@ -1753,7 +1887,7 @@ function dispatchPinnedVersion(argv: string[]): number | null {
   const executable = join(versionRoot(version), process.platform === "win32" ? "aidlc.exe" : "aidlc");
   const child = Bun.spawnSync([executable, ...argv], {
     cwd: process.cwd(),
-    stdin: "inherit",
+    stdin: input === null ? "inherit" : new TextEncoder().encode(input),
     stdout: "inherit",
     stderr: "inherit",
     env: { ...process.env, AIDLC_PIN_DISPATCHED: version, AIDLC_ACTIVE_VERSION: AIDLC_VERSION },
@@ -1877,6 +2011,7 @@ async function withRoutePolicy(route: Route, argv: readonly string[], run: () =>
 
 export async function main(argv: string[]): Promise<void> {
   process.exitCode = 0;
+  bufferedStdin = null;
   if (import.meta.url.includes("/$bunfs/") && !process.env.AIDLC_HARNESS_DIR) {
     // Compiled, no explicit harness: probe the project install (.claude /
     // .kiro / .codex by tools/data/harness.json) rather than assuming
@@ -1917,7 +2052,14 @@ export async function main(argv: string[]): Promise<void> {
       return;
     }
   }
-  const pinnedCode = dispatchPinnedVersion(argv);
+  if (
+    route?.routeOnly === "hook" ||
+    route?.routeOnly === "statusline" ||
+    (route?.routeOnly === "adapter" && withoutProjectDirFlag(argv)[1] !== "kiro-ide")
+  ) {
+    await readStdin();
+  }
+  const pinnedCode = dispatchPinnedVersion(argv, bufferedStdin);
   if (pinnedCode !== null) {
     process.exitCode = pinnedCode;
     return;

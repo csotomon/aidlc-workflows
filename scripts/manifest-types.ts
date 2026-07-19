@@ -75,10 +75,20 @@ export type RootIntegration = {
   jsonKey?: string;
   /** Optional integrations may be omitted by an init mode such as --mcp none. */
   optional?: boolean;
+  /**
+   * Exact historical signatures that `aidlc init` may adopt as framework-owned.
+   * Unknown or locally modified legacy content remains project-owned or conflicts.
+   */
+  legacySignatures?: {
+    /** SHA-256 hashes of exact unmarked files safe to wrap or replace. */
+    wholeFileHashes?: string[];
+    /** Canonical JSON value hashes, keyed by entry below jsonKey. */
+    jsonEntryHashes?: Record<string, string[]>;
+  };
 };
 
-export type ReleaseRootIntegration = RootIntegration & {
-  /** Authored file below harness/<name>/ copied only into dist-release/<name>/. */
+export type NativeRootIntegration = RootIntegration & {
+  /** Authored file below harness/<name>/ copied into each native projection. */
   src: string;
 };
 
@@ -93,8 +103,8 @@ export type HarnessManifest = {
   harnessDir: string;
   /** Explicit project-root reconciliation policies consumed by `aidlc init`. */
   rootIntegrations: RootIntegration[];
-  /** Binary-channel-only project-root integrations such as host trust seeds. */
-  releaseRootIntegrations?: ReleaseRootIntegration[];
+  /** Native-invocation-only project-root integrations such as host trust seeds. */
+  nativeRootIntegrations?: NativeRootIntegration[];
   /**
    * Which tier-projection flavor this harness's agent surfaces use
    * (core/tools/aidlc-tiers.ts TIER_PROJECTIONS column). Declared here so a

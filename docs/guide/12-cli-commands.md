@@ -50,14 +50,14 @@ All AI-DLC commands start with the orchestrator invocation. This chapter is a co
 | `aidlc package create\|verify` | Create or verify a flat offline release set |
 | `/aidlc --version` | Print the framework version |
 | `/aidlc --help` | Display usage information |
-| `bun .claude/tools/aidlc-utility.ts select-plugins [names]` | Direct-only: show or set the enabled plugin list for this install |
+| `aidlc plugin select [names]` | Show or set the enabled plugin list |
 
 ---
 
 ## Native Install And Lifecycle
 
-The machine-level `aidlc` command is available in the self-contained binary
-install channel. It is distinct from the harness chat invocation shown above.
+The machine-level `aidlc` command is the supported install and lifecycle
+surface. It is distinct from the harness chat invocation shown above.
 
 ```bash
 install.sh --harness claude
@@ -70,6 +70,9 @@ aidlc doctor
 previews the exact change set with `--dry-run`, preserves project-owned method
 and workflow data, and refuses locally modified framework files unless
 `--force` is explicit.
+
+See [Install and Lifecycle](18-install-and-lifecycle.md) for the complete
+installer, trust, root-merge, pin, offline, plugin, and transaction contract.
 
 For scripted approval, read `data.planToken` from
 `aidlc init --dry-run --json`, then rerun the same command without
@@ -273,10 +276,10 @@ If no state file exists, the framework treats this as a new workflow and asks fo
 
 ### Workflow Initialization — automatic
 
-For copy installs, there is no scaffold command. The shipped `dist/<harness>/` workspace shell
-arrives pre-built (the `.claude/` engine plus `aidlc/spaces/default/memory/`),
-and the engine **auto-births** the first intent on your first `/aidlc` (or when
-you describe what to build). Birth runs the three Initialization stages
+`aidlc init` lays down the project shell and refresh baseline. A complete
+advanced manual projection already contains that same shell. In either case,
+the engine **auto-births** the first intent on your first `/aidlc` (or when you
+describe what to build). Birth runs the three Initialization stages
 (Workspace Scaffold, Workspace Detection, State Init) as a single deterministic
 tool call: it creates the intent's record dir at
 `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/` (the `audit/` shard dir, the
@@ -291,9 +294,8 @@ or guardrails before the first run, edit the shipped `aidlc/spaces/default/memor
 files; the space-level `aidlc/knowledge/` directory is created (empty) once the
 first intent exists, and you add free-form files to it from there.
 
-For native machine installs, run `aidlc init` once before opening the harness.
-That command lays down the same shell and records a refresh baseline; workflow
-intent birth remains automatic on the first chat invocation.
+Run `aidlc init` once before opening the harness; workflow intent birth remains
+automatic on the first chat invocation.
 
 The welcome message is rendered at session start via the `companyAnnouncements`
 entry in `settings.json`.
@@ -364,8 +366,8 @@ Validate that all of this implementation's prerequisites, configuration, and sta
 
 | Check | What it validates |
 |-------|-------------------|
-| Prerequisites | Self-contained binary, or `bun` on PATH for a copy install |
-| Installed runtime | Active machine version and installed harness distributions, when using the binary channel |
+| Prerequisites | Active self-contained `aidlc` command |
+| Installed runtime | Active machine version and installed harness distributions |
 | Project stamp | Project distribution/version compared with the selected engine |
 | Hook presence | Every hook `settings.json` wires (its `hooks` blocks + the `statusLine` command — all 12 framework hooks) exists in `.claude/hooks/`; a wired-but-missing hook fails loudly. Sourcing the expected roster from `settings.json` means adding a hook there auto-checks it |
 | Project structure | `.claude/settings.json` exists (file presence only, no content validation) |
@@ -377,7 +379,7 @@ Validate that all of this implementation's prerequisites, configuration, and sta
 | State drift | the active intent's `aidlc-state.md` matches the last `WORKFLOW_COMPLETED` in the audit |
 | Cycle detection | `stage-graph.json` has no cycles |
 | Orphan stage files | Every slug in the graph has a matching `<phase>/<slug>.md` on disk |
-| Uncompiled stage files | Surfaces any stage `.md` on disk whose slug is not in the compiled graph, it will not execute until you run `aidlc-graph.ts compile` (advisory, never fails) |
+| Uncompiled stage files | Surfaces any stage `.md` on disk whose slug is not in the compiled graph; it will not execute until you run `aidlc graph compile` (advisory, never fails) |
 | Plugin selection | Enabled plugin list, per-plugin enabled-stage counts, full-graph `enabled:false` flag agreement, and torn-selection recovery hints |
 | Plugin composition | Offline installed-versus-composed version/hash state, including sync or repair remediation |
 | Scope validation | All enabled scopes (from `.claude/scopes/*.md` after plugin selection) walk cleanly (advisories for scope-truncation gaps are expected) |
@@ -390,31 +392,60 @@ Validate that all of this implementation's prerequisites, configuration, and sta
 **Example output:**
 
 ```
-✓ bun installed (required for CLI tools and hooks)
+AI-DLC Health Check
+─────────────────────────────────────
+✓ Self-contained binary runtime (bun is not required)
+✓ Installed runtime: 2.5.3 [claude, codex, kiro, kiro-ide]
+✓ Command pointer: ~/.local/bin/aidlc -> 2.5.3
+✓ Rollback target: none recorded
+✓ Transaction staging: no abandoned directories
+✓ Project pin registry: no stale registrations
+✓ Native command trust: host hooks and permission entries select the installed `aidlc` command
+✓ Project runtime stamp: 2.5.3 (claude)
 ✓ aidlc-audit-logger.ts present
+✓ aidlc-log-subagent.ts present
+✓ aidlc-mint-presence.ts present
+✓ aidlc-reviewer-scope.ts present
+✓ aidlc-runtime-compile.ts present
+✓ aidlc-sensor-fire.ts present
+✓ aidlc-session-end.ts present
+✓ aidlc-session-start.ts present
+✓ aidlc-statusline.ts present
+✓ aidlc-stop.ts present
 ✓ aidlc-sync-statusline.ts present
 ✓ aidlc-validate-state.ts present
-✓ aidlc-log-subagent.ts present
-✓ aidlc-session-start.ts present
-✓ aidlc-session-end.ts present
-✓ aidlc-statusline.ts present
 ✓ settings.json present
 ✓ AWS_AIDLC_DEFAULT_SCOPE (unset — no project default)
+✓ Enabled plugins: all enabled (no selection); enabled stage counts: aidlc=29, bootstrap=3
+✓ Plugin selection flags: harness.json agrees with stage-graph.json
+✓ Enabled stage compile coverage: every enabled stage file is in the full graph
 ✓ workspace shell ready (.claude/ + aidlc/spaces/default/memory/)
+✓ Agent filename/name consistency: all agent files match declared names
+✓ Scope filename/name consistency: all scope files match declared names
 ✓ Submodules: no .gitmodules at workspace root
-✓ Hook heartbeats: not yet fired (first workflow stage will populate)
+✓ Hooks last fired: validate-state 2026-07-19T07:47:47Z
 ✓ Hook drops: none recorded
-✓ State matches last audit event (no drift)
+✓ Audit locks: none leaked
+✓ Orphan worktrees: 0 observed
+✓ Stale branches: 0 observed (not a git repo)
+✓ Orphan state files: 0 observed
+✓ Orphan audit: 0 observed
+✓ Practices staleness: state file absent (informational)
+✓ MERGE_DISPATCH: 0 orphan INVOKED (0 bracketed)
 ✓ Cycle detection: 0 cycles
 ✓ Orphan stage files: 32 graph entries all have files
 ✓ Uncompiled stage files: 0 stage files missing from the compiled graph
-✓ Enabled plugins: all enabled (no selection); enabled stage counts: aidlc=32
-✓ Scope validation: 9 scopes valid (29 advisories)
-✓ Schema validation: 32/32 stages valid
+✓ Scope validation: 9 scopes valid (27 advisories)
+✓ Schema validation: 32/32 stages validated
 ✓ Graph references: 122 artifacts + edges resolved
 ✓ Keyword overlap: no conflicts
 ✓ Rule drift: no team/project rule overlaps org policy
 ✓ Paired sensor coverage: no sensor-bound rules (0 feedforward-only)
+✓ Intent registry: all rows ⇄ record dirs reconciled
+! Update: update cache is absent
+✓ Plugins: no AIDLC plugins installed
+─────────────────────────────────────
+49 passed, 1 warnings, 0 failed
 ```
 
 ---
@@ -581,22 +612,16 @@ Display a summary of available commands and flags.
 
 ## Deterministic CLI Tools
 
-Beyond the `/aidlc` flags above, this implementation ships several
-Bun/TypeScript tools that the hooks and stage protocol call as a workflow runs.
-You rarely invoke them by hand, but each is also a useful debug handle.
-
-Use `bun <harness-dir>/tools/<tool>.ts <subcommand>`, where `<harness-dir>` is
-`.claude` on Claude Code, `.kiro` on Kiro CLI and Kiro IDE, and `.codex` on
-Codex CLI.
+Beyond the `/aidlc` flags above, the native dispatcher exposes deterministic
+debug routes. The TypeScript files under each harness directory are authored
+sources, not the runtime invocation surface.
 
 ### `aidlc-utility codekb-path` - resolve the code knowledge directory
 
-This is a **direct utility invocation**, not an `/aidlc codekb-path` command:
+Use the hidden workspace route:
 
 ```bash
-bun .claude/tools/aidlc-utility.ts codekb-path --repo <repo>
-bun .kiro/tools/aidlc-utility.ts codekb-path --repo <repo>
-bun .codex/tools/aidlc-utility.ts codekb-path --repo <repo>
+aidlc workspace codekb --repo <repo>
 ```
 
 It prints the active space's deterministic
@@ -607,9 +632,9 @@ are never derived by hand.
 
 ### `aidlc-utility detect` - read-only workspace scan
 
-`bun .claude/tools/aidlc-utility.ts detect --json` prints the workspace scan (project type, languages, frameworks, build system, and a `submodules` array of any declared git submodules with their initialized state) plus the resolved scopes dir and scope-grid path. Pure read; the composer runs it to learn where scope data lives on the current harness.
+`aidlc workspace detect --json` prints the workspace scan (project type, languages, frameworks, build system, and a `submodules` array of any declared git submodules with their initialized state) plus the resolved scopes dir and scope-grid path. Pure read; the composer runs it to learn where scope data lives on the current harness.
 
-### `aidlc-utility select-plugins` - install plugin selection
+### `aidlc plugin select` - install plugin selection
 
 `/aidlc plugin list` reads the host's installed plugin inventory and compares
 each plugin's manifest version and deterministic source hash with the project's
@@ -621,14 +646,13 @@ settings are malformed instead of assuming every installed plugin is enabled;
 both hosts fall back when their proved registry source disappears. Kiro reports
 `host inventory unavailable` outside a hook that supplies the current plugin
 root. The check is always offline.
-`select-plugins` is a **direct utility invocation**, not an `/aidlc select-plugins` command.
-`bun .claude/tools/aidlc-utility.ts select-plugins` prints the current selection
+`aidlc plugin select` prints the current selection
 (`all enabled (no selection)` when the `plugins` key is absent) and the known
 plugin names. Pass a comma-separated list to set it:
 
 ```bash
-bun .claude/tools/aidlc-utility.ts select-plugins test-pro
-bun .claude/tools/aidlc-utility.ts select-plugins aidlc,test-pro
+aidlc plugin select test-pro
+aidlc plugin select aidlc,test-pro
 ```
 
 The command validates names, writes `.claude/tools/data/harness.json`, strips a newly disabled plugin's merged contributions from core stage source (structural adds via the compose-written sidecar, spliced prose via its sentinel markers; re-enabling restores them on the next session start), recompiles the full graph with disabled nodes marked `enabled:false`, prunes/regenerates stage and scope runners, and refreshes the generated SKILL.md scope/stage tables in one transaction. `aidlc` is core; omitting it disables core surfaces except the always-on Initialization stages. A change that would strand an active workflow (its scope, or a pending EXECUTE stage in its plan, owned by a plugin the new selection disables) is refused with each dependency named - complete or park the workflow first, or keep the plugin enabled.
@@ -644,11 +668,11 @@ proved.
 
 ### `aidlc-utility recompose` - in-flight plan flips
 
-`bun .claude/tools/aidlc-utility.ts recompose --skip <slugs> --add <slugs>` (comma-separated) flips PENDING, ahead-of-cursor stages' plan suffixes on the live state file. Runs under the audit lock, rejects flips that would starve a remaining stage of a required input (and flips of completed/in-progress stages, behind-cursor stages, any flip that would move the first EXECUTE stage of Construction - the walking-skeleton anchor - in either direction, any recompose against a workflow whose Status is not Running, and any recompose under autonomous Construction - re-shaping the plan needs a human at the gate, so switch to gated first or let the swarm finish), rebuilds the derived state fields, and emits `RECOMPOSED`. Normally reached through `/aidlc compose` mid-workflow, not typed directly.
+`aidlc recompose --skip <slugs> --add <slugs>` (comma-separated) flips PENDING, ahead-of-cursor stages' plan suffixes on the live state file. Runs under the audit lock, rejects flips that would starve a remaining stage of a required input (and flips of completed/in-progress stages, behind-cursor stages, any flip that would move the first EXECUTE stage of Construction - the walking-skeleton anchor - in either direction, any recompose against a workflow whose Status is not Running, and any recompose under autonomous Construction - re-shaping the plan needs a human at the gate, so switch to gated first or let the swarm finish), rebuilds the derived state fields, and emits `RECOMPOSED`. Normally reached through `/aidlc compose` mid-workflow, not typed directly.
 
 ### `aidlc-graph validate-grid` - arbitrary-grid dependency check
 
-`bun .claude/tools/aidlc-graph.ts validate-grid --proposal <path> [--strict] [--project-type <t>] [--keywords <csv>]` validates an arbitrary `{"<stage>": "EXECUTE"|"SKIP"}` JSON grid. Lenient mode mirrors `validate-scope` (an off-path required producer is advisory); `--strict` hard-rejects it (the recompose posture). `--keywords` checks each granted keyword against the keywords existing scopes already claim: a collision is a hard error naming the incumbent scope (the composer runs this before writing gate-granted keywords). Exit 1 iff invalid; the JSON result lands on stdout.
+`aidlc graph validate-grid --proposal <path> [--strict] [--project-type <t>] [--keywords <csv>]` validates an arbitrary `{"<stage>": "EXECUTE"|"SKIP"}` JSON grid. Lenient mode mirrors `validate-scope` (an off-path required producer is advisory); `--strict` hard-rejects it (the recompose posture). `--keywords` checks each granted keyword against the keywords existing scopes already claim: a collision is a hard error naming the incumbent scope (the composer runs this before writing gate-granted keywords). Exit 1 iff invalid; the JSON result lands on stdout.
 
 ### `aidlc-sensor` — inspect and fire Sensors
 
@@ -663,9 +687,9 @@ Sensors are deterministic checks that run after every `Write` or `Edit` to a sta
 A manual fire emits a `SENSOR_FIRED` audit row, then exactly one terminal row: `SENSOR_PASSED`, `SENSOR_FAILED`, or `SENSOR_BUDGET_OVERRIDE`. A failure writes a detail file under `<record>/.aidlc-sensors/<stage>/` (in the intent's record dir). Sensors are advisory — a Sensor failure is never a tool failure, so the command still exits 0. The four Sensors that ship with the framework are `required-sections`, `upstream-coverage`, `linter`, and `type-check`.
 
 ```
-bun .claude/tools/aidlc-sensor.ts list
-bun .claude/tools/aidlc-sensor.ts describe required-sections
-bun .claude/tools/aidlc-sensor.ts fire required-sections \
+aidlc sensor list
+aidlc sensor describe required-sections
+aidlc sensor fire required-sections \
   --stage requirements-analysis \
   --output-path aidlc/spaces/default/intents/<YYMMDD>-<label>/inception/requirements-analysis/requirements.md
 ```
@@ -692,7 +716,7 @@ The runtime graph (`runtime-graph.json` in the intent's record dir) is the data-
 | `summary [--json]` | Print deterministic aggregates over the whole graph — stage/phase outcome tallies, memory-entry counts, Sensor 4-state tallies, learnings captured, workflow duration. The data source the read-only session skills read from |
 
 ```
-bun .claude/tools/aidlc-runtime.ts read requirements-analysis
+aidlc runtime read requirements-analysis
 ```
 
 `runtime-graph.json` is gitignored. See [Artifacts Reference](14-artifacts-reference.md) for the artifact's shape and the [Runtime Graph](../reference/13-runtime-graph.md) reference chapter for the full schema.

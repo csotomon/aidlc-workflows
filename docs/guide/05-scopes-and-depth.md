@@ -6,7 +6,7 @@ Scopes control **which stages execute**. Depth controls **how much detail** each
 
 ## The 9 Core Scopes
 
-Core ships 9 named scopes. Each scope defines a stage set and a default depth level. Plugin installs can add more scopes, and an install can narrow which plugin scopes are visible with `bun .claude/tools/aidlc-utility.ts select-plugins <names>`. When a `plugins` selection disables core (`aidlc` omitted), the core scope files remain installed but are not valid runtime scopes until core is re-enabled; the Initialization stages still run for every enabled scope.
+Core ships 9 named scopes. Each scope defines a stage set and a default depth level. Plugin installs can add more scopes, and an install can narrow which plugin scopes are visible with `aidlc __delegate utility select-plugins <names>`. When a `plugins` selection disables core (`aidlc` omitted), the core scope files remain installed but are not valid runtime scopes until core is re-enabled; the Initialization stages still run for every enabled scope.
 
 ### enterprise
 
@@ -87,7 +87,7 @@ See [Workshop Mode](workshop-mode.md) for the multi-developer manual recipe and 
 
 ## Scope Routing Table
 
-Authoritative data lives in the `.claude/scopes/aidlc-<name>.md` files (scope identity), plugin scope files, plus each stage's `scopes:` frontmatter (membership), compiled into `.claude/tools/data/scope-grid.json`. The compiled grid contains only scopes enabled by the current plugin selection. Run `bun .claude/tools/aidlc-utility.ts scope-table` for the live compiled table (and `bun .claude/tools/aidlc-utility.ts help` for the user-facing one-liners).
+Authoritative data lives in the `.claude/scopes/aidlc-<name>.md` files (scope identity), plugin scope files, plus each stage's `scopes:` frontmatter (membership), compiled into `.claude/tools/data/scope-grid.json`. The compiled grid contains only scopes enabled by the current plugin selection. Run `aidlc __delegate utility scope-table` for the live compiled table (and `aidlc __delegate utility help` for the user-facing one-liners).
 
 | Scope | EXECUTE / Total | Depth | Test Strategy | Use Case |
 |-------|-----------------|-------|---------------|----------|

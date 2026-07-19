@@ -76,6 +76,7 @@ To reshape *how* AI-DLC behaves — add a stage or an agent, define a scope, aut
 | [Troubleshooting](15-troubleshooting.md) | Symptom-based problem solving |
 | [Worked Examples](16-worked-examples.md) | Full bugfix and feature walkthroughs |
 | [Skills and Runner Commands](17-skills.md) | The `/aidlc-*` stage- and scope-runner commands and the author-your-own-runner path |
+| [Install and Lifecycle](18-install-and-lifecycle.md) | Native install, init, upgrades, rollback, pins, offline packages, and uninstall |
 | [Workshop Mode](workshop-mode.md) | Multi-developer manual recipe for the workshop scope (claim semantics via git push) |
 | [Running on other harnesses](harnesses/README.md) | Install and run on Kiro CLI, Kiro IDE, Codex CLI, or opencode, and what differs per harness |
 | [Glossary](glossary.md) | All terminology defined |

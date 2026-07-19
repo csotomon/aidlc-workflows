@@ -1206,7 +1206,7 @@ export async function collectDoctorReport(
   const results: DoctorCheck[] = [];
   const isWindows = process.platform === "win32";
 
-  // 1. bun installed — check PATH (Bun.which handles Windows .exe suffix automatically)
+  // Compiled installs carry their runtime; direct source execution requires Bun.
   const bunHome = process.env.HOME ? join(process.env.HOME, ".bun", "bin", "bun") : "";
   const bunFound = Bun.which("bun") !== null || (bunHome !== "" && existsSync(bunHome));
   const compiled = isCompiledExecutable();
@@ -1214,7 +1214,7 @@ export async function collectDoctorReport(
     pass: compiled || bunFound,
     label: compiled
       ? "Self-contained binary runtime (bun is not required)"
-      : "bun installed (required for copy-install CLI tools and hooks)",
+      : "Source execution runtime: bun is available",
     fix: isWindows
       ? "install via `npm install -g bun` or `powershell -c \"irm bun.sh/install.ps1 | iex\"`"
       : "install via `curl -fsSL https://bun.sh/install | bash`",
@@ -1430,7 +1430,7 @@ export async function collectDoctorReport(
   } else {
     results.push({
       pass: true,
-      label: "Install channel: legacy copy-install (no machine runtime expected)",
+      label: "Execution mode: source checkout (no machine runtime expected)",
     });
   }
 
@@ -1497,8 +1497,8 @@ export async function collectDoctorReport(
     }
   }
 
-  // 2. Hook presence. Copy installs invoke the TypeScript files through Bun;
-  // native installs route the same hook targets through the compiled command.
+  // 2. Hook presence. Shipped projects route hook targets through the native
+  // command; direct source execution may still invoke these TypeScript files.
   // The Kiro and Codex trees also carry the authored host adapter.
   const harness = harnessDir();
   if (harness === ".claude") {
@@ -3762,7 +3762,7 @@ function ensureWorkspaceDirs(projectDir: string): void {
 function handleIntentBirth(projectDir: string, flags: Record<string, string>): void {
   // Default to poc when --scope is omitted. Matches the orchestrator's
   // ultimate fallback in SKILL.md and makes direct tool invocations
-  // (`bun aidlc-utility.ts intent-birth`) work without extra flags.
+  // (`aidlc __delegate utility intent-birth`) work without extra flags.
   const scope = flags.scope || "poc";
   if (!validScopes().has(scope)) {
     die(

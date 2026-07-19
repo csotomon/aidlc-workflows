@@ -1,6 +1,7 @@
 // covers: tool:aidlc, tool:aidlc-sensor, tool:aidlc-swarm, hook:aidlc-validate-state, hook:aidlc-statusline
 import { afterAll, describe, expect, test } from "bun:test";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   cpSync,
   existsSync,
@@ -24,6 +25,8 @@ import {
   resolveAction,
   routePolicyFor,
 } from "../../core/tools/aidlc.ts";
+import { targetTriple } from "../../core/tools/aidlc-install-paths.ts";
+import { AIDLC_VERSION } from "../../core/tools/aidlc-version.ts";
 import {
   cleanupTestProject,
   createTestProject,
@@ -518,6 +521,106 @@ describe("t230 version-aware startup", () => {
     expect(result.exitCode).toBe(1);
     expect(result.stderr.toString()).toContain("not installed completely");
   });
+
+  test("session pin caches coexist, support Kiro IDE identity, and invalidate on executable change", () => {
+    const project = makeProject();
+    const machine = mkdtempSync(join(tmpdir(), "aidlc-t230-pin-cache-"));
+    const root = join(machine, "versions", AIDLC_VERSION);
+    const executable = join(root, process.platform === "win32" ? "aidlc.exe" : "aidlc");
+    mkdirSync(root, { recursive: true });
+    cpSync(join(REPO_ROOT, "dist-release", "claude"), join(root, "runtime", "claude"), {
+      recursive: true,
+    });
+    writeFileSync(executable, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    writeFileSync(
+      join(root, "version.json"),
+      `${JSON.stringify({
+        schemaVersion: 1,
+        version: AIDLC_VERSION,
+        distributions: [{ name: "claude" }],
+        assets: [{
+          name: `aidlc-${targetTriple()}${process.platform === "win32" ? ".exe" : ""}`,
+          sha256: createHash("sha256").update(readFileSync(executable)).digest("hex"),
+        }],
+      }, null, 2)}\n`,
+    );
+    writeFileSync(join(project, ".aidlc-version"), `${AIDLC_VERSION}\n`);
+    const env = {
+      AIDLC_INSTALL_ROOT: machine,
+      AIDLC_BIN_DIR: join(machine, "bin"),
+    };
+    const inputA = JSON.stringify({ session_id: "t230-pin-cache-a" });
+    const inputB = JSON.stringify({ session_id: "t230-pin-cache-b" });
+    const first = viaDispatcher(["hook", "validate-state"], project, env, inputA);
+    expect(first.exitCode, first.stderr.toString()).toBe(0);
+    expect(readdirSync(join(machine, "pin-resolution-cache"))).toHaveLength(1);
+
+    const second = viaDispatcher(["hook", "validate-state"], project, env, inputB);
+    expect(second.exitCode, second.stderr.toString()).toBe(0);
+    const resumed = viaDispatcher(["hook", "validate-state"], project, env, inputA);
+    expect(resumed.exitCode, resumed.stderr.toString()).toBe(0);
+    expect(readdirSync(join(machine, "pin-resolution-cache"))).toHaveLength(2);
+
+    cpSync(
+      join(REPO_ROOT, "dist", "kiro-ide", ".kiro"),
+      join(project, ".kiro"),
+      { recursive: true },
+    );
+    const ide = viaDispatcher(
+      ["adapter", "kiro-ide", "mint"],
+      project,
+      {
+        ...env,
+        USER_PROMPT: "{}",
+        VSCODE_PID: "23001",
+        VSCODE_IPC_HOOK: join(machine, "vscode-ipc.sock"),
+      },
+    );
+    expect(ide.exitCode, ide.stderr.toString()).toBe(0);
+    expect(readdirSync(join(machine, "pin-resolution-cache"))).toHaveLength(3);
+
+    writeFileSync(executable, `${readFileSync(executable, "utf-8")}# changed\n`);
+    const changed = viaDispatcher(["hook", "validate-state"], project, env, inputA);
+    expect(changed.exitCode).toBe(1);
+    expect(changed.stderr.toString()).toContain("not installed completely");
+  });
+
+  test("Kiro IDE adapter routing never waits for its open stdin pipe", async () => {
+    const project = makeProject();
+    cpSync(
+      join(REPO_ROOT, "dist", "kiro-ide", ".kiro"),
+      join(project, ".kiro"),
+      { recursive: true },
+    );
+    const child = spawn(
+      BUN,
+      [DISPATCHER, "adapter", "kiro-ide", "mint", "--project-dir", project],
+      {
+        cwd: project,
+        env: childEnv(project, {
+          AIDLC_DISPATCH_TOOLS_DIR: CORE_TOOLS_DIR,
+          USER_PROMPT: "{}",
+          VSCODE_PID: "23002",
+        }),
+        stdio: ["pipe", "pipe", "pipe"],
+      },
+    );
+    let stderr = "";
+    child.stderr.setEncoding("utf-8");
+    child.stderr.on("data", (chunk: string) => {
+      stderr += chunk;
+    });
+    const outcome = await Promise.race([
+      new Promise<number | null>((resolveExit) => child.once("exit", resolveExit)),
+      new Promise<"timeout">((resolveTimeout) =>
+        setTimeout(() => resolveTimeout("timeout"), 2_000)
+      ),
+    ]);
+    if (outcome === "timeout") child.kill("SIGKILL");
+    child.stdin.destroy();
+    expect(outcome, stderr).not.toBe("timeout");
+    expect(outcome, stderr).toBe(0);
+  }, 10_000);
 });
 
 describe("t230 dispatcher global flag translation", () => {
@@ -677,6 +780,8 @@ describe("t230 dispatcher route completeness", () => {
       .toBe("delegate");
     expect(routePolicyFor(["__delegate", "lifecycle", "package", "verify", "/tmp/release"])?.id)
       .toBe("package-verify");
+    expect(routePolicyFor(["hook", "validate-state", "--project-dir", "/tmp/example"]))
+      .toEqual(expect.objectContaining({ id: "hook", pinPolicy: "pinned" }));
     const utilityRoutes: Readonly<Record<string, string>> = {
       help: "top-help",
       version: "top-version",

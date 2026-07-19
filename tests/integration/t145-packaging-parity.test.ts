@@ -163,7 +163,7 @@ describe("t145 packager contract regressions", () => {
       expect(descriptor.harnessDir).toBe(".foo");
       expect(graph).toContain('"path": ".foo/sensors/');
       expect(graph).not.toContain('"path": ".claude/sensors/');
-      expect(runner).toContain("bun .foo/tools/aidlc-utility.ts");
+      expect(runner).toContain("aidlc __delegate utility");
       expect(runner).not.toContain("bun .claude/tools/aidlc-utility.ts");
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -200,11 +200,11 @@ describe("t145 packager contract regressions", () => {
         .flat()
         .flatMap((group) => group.hooks.map((hook) => hook.command));
       expect(commands.length).toBeGreaterThan(0);
-      expect(commands.every((command: string) => command.startsWith("bun .foo/hooks/"))).toBe(true);
+      expect(commands.every((command: string) => command.startsWith("aidlc adapter foo"))).toBe(true);
 
       const rules = readFileSync(join(generated, "rules", "default.rules"), "utf-8");
-      expect(rules).toContain('["bun", ".foo/tools/"]');
-      expect(rules).toContain('["bun", ".foo/hooks/"]');
+      expect(rules).toContain('pattern = ["aidlc"]');
+      expect(rules).not.toContain('pattern = ["bun"');
       expect(rules).not.toContain('["bun", ".codex/');
 
       const trustSeed = readFileSync(join(generated, "trust-seed.toml"), "utf-8");
@@ -215,7 +215,7 @@ describe("t145 packager contract regressions", () => {
         join(distRoot, ".agents", "skills", "aidlc-init", "SKILL.md"),
         "utf-8",
       );
-      expect(runner).toContain("bun .foo/tools/aidlc-utility.ts");
+      expect(runner).toContain("aidlc __delegate utility");
       expect(runner).not.toContain("bun .codex/tools/aidlc-utility.ts");
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -239,7 +239,7 @@ describe("t145 packager contract regressions", () => {
       ).toContain('"path": ".foo/sensors/');
       expect(
         readFileSync(join(generated, "skills", "aidlc-init", "SKILL.md"), "utf-8"),
-      ).toContain("bun .foo/tools/aidlc-utility.ts");
+      ).toContain("aidlc __delegate utility");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -296,11 +296,13 @@ describe("t145 packager contract regressions", () => {
         '    { src: ".mcp.json", dst: ".mcp.json", projectRoot: true },\n',
         "",
       );
-      replaceOnce(
-        manifest,
-        '    { path: ".mcp.json", policy: "json-map", jsonKey: "mcpServers", optional: true },\n',
+      const before = readFileSync(manifest, "utf-8");
+      const after = before.replace(
+        /    \{\n      path: "\.mcp\.json",[\s\S]*?^    \},\n/m,
         "",
       );
+      expect(after).not.toBe(before);
+      writeFileSync(manifest, after);
       const run = runPackage(root, "claude", "--check");
       expect(run.status).not.toBe(0);
       expect(output(run)).toContain("ORPHAN in dist: claude/.mcp.json");

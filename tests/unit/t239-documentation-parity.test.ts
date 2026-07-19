@@ -381,7 +381,7 @@ describe("documentation parity derives current behavior from authored implementa
     }
   });
 
-  test("workspace CLI docs follow the implemented router and keep utility-only verbs direct-only", () => {
+  test("workspace CLI docs follow the implemented public and hidden routes", () => {
     const lib = read("core", "tools", "aidlc-lib.ts");
     const workspaceBlock = sliceBetween(
       lib,
@@ -393,11 +393,13 @@ describe("documentation parity derives current behavior from authored implementa
 
     const cliGuide = read("docs", "guide", "12-cli-commands.md");
     for (const verb of workspaceVerbs) expect(cliGuide).toContain(`/aidlc ${verb}`);
-    const directOnlyVerbs = ["codekb-path", "select-plugins"];
-    for (const verb of directOnlyVerbs) {
+    const hiddenUtilityRoutes = new Map([
+      ["codekb-path", "aidlc workspace codekb"],
+      ["select-plugins", "aidlc plugin select"],
+    ]);
+    for (const [verb, route] of hiddenUtilityRoutes) {
       expect(workspaceVerbs).not.toContain(verb);
-      expect(cliGuide).toContain("direct utility invocation");
-      expect(cliGuide).toContain(`not an \`/aidlc ${verb}\` command`);
+      expect(cliGuide).toContain(route);
     }
 
     const helpTail = sliceBetween(
@@ -405,7 +407,7 @@ describe("documentation parity derives current behavior from authored implementa
       "const HELP_TEXT_TAIL = `",
       "`;",
     );
-    for (const verb of directOnlyVerbs) expect(helpTail).not.toContain(verb);
+    for (const verb of hiddenUtilityRoutes.keys()) expect(helpTail).not.toContain(verb);
   });
 
   test("Codex onboarding fills and rendered output name the emitted agent TOML directory", () => {

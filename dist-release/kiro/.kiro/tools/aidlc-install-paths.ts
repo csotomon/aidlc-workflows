@@ -180,6 +180,56 @@ export function installedExecutablePath(version: string): string {
   return join(versionRoot(version), platform() === "win32" ? "aidlc.exe" : "aidlc");
 }
 
+export function installedVersionFingerprint(version: string): string | null {
+  try {
+    const root = versionRoot(version);
+    const runtime = runtimeRoot(version);
+    const paths = [
+      root,
+      installedExecutablePath(version),
+      join(root, "version.json"),
+      runtime,
+    ];
+    for (const distribution of readdirSync(runtime).sort()) {
+      const distributionRoot = join(runtime, distribution);
+      const harnessDirs = readdirSync(distributionRoot)
+        .filter((entry) =>
+          existsSync(join(
+            distributionRoot,
+            entry,
+            "tools",
+            "data",
+            "aidlc-stamp.json",
+          ))
+        )
+        .sort();
+      if (harnessDirs.length !== 1) return null;
+      const harnessRoot = join(distributionRoot, harnessDirs[0]);
+      paths.push(
+        distributionRoot,
+        harnessRoot,
+        join(harnessRoot, "tools", "data", "aidlc-stamp.json"),
+        join(harnessRoot, "tools", "data", "aidlc-projection.json"),
+      );
+    }
+    const metadata = paths.map((path) => {
+      const stat = statSync(path);
+      return [
+        path.slice(root.length),
+        stat.dev,
+        stat.ino,
+        stat.mode,
+        stat.size,
+        stat.mtimeMs,
+        stat.ctimeMs,
+      ].join(":");
+    }).join("\n");
+    return createHash("sha256").update(metadata).digest("hex");
+  } catch {
+    return null;
+  }
+}
+
 export function inspectInstalledVersion(
   version: string,
   requiredDistribution?: string | null,

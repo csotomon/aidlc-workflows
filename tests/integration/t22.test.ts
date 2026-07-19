@@ -22,7 +22,7 @@
 // The known-answer label strings are READ from the shipped doctor handler
 // (dist/claude/.claude/tools/aidlc-utility.ts handleDoctor), NOT guessed:
 //   - header literal:     "AI-DLC Health Check"               (utility.ts:1355)
-//   - bun check label:    "bun installed (required ...)"      (utility.ts:336)
+//   - runtime label:      "Self-contained binary runtime ..." (utility.ts)
 //   - hook check label:   "<hook>.ts present"                 (utility.ts:356)
 //   - settings label:     "settings.json present"            (utility.ts:365)
 //   - shell-ready label:  "workspace shell ready"            (utility.ts:597; P4: the
@@ -64,7 +64,7 @@ const DRIVE_TIMEOUT_MS = Math.max(120_000, TEST_TIMEOUT_MS - 15_000);
 
 // Known-answer doctor strings, read from the shipped handler (see header).
 const DOCTOR_HEADER = "AI-DLC Health Check";
-const DOCTOR_BUN_LABEL = "bun installed (required for copy-install CLI tools and hooks)";
+const DOCTOR_RUNTIME_LABEL = "Self-contained binary runtime (bun is not required)";
 const DOCTOR_HOOK_LABEL = "aidlc-audit-logger.ts present";
 // handleDoctor emits a separate `${h}.ts present` line per hook (utility.ts:356);
 // the .sh checked BOTH audit-logger (tests 1,4) AND session-start (tests 2,5),
@@ -88,7 +88,7 @@ describe("t22 /aidlc --doctor (SDK port)", () => {
   // audit-logger (hook), session-start, settings, and "health" keywords with a
   // SUMMARY_PASS regex-OR fallback. Here we assert those exact labels against
   // the Bash tool_result — the deterministic doctor stdout the tool emitted.
-  //   - .sh test 7 ("bun")          -> DOCTOR_BUN_LABEL
+  //   - .sh test 7 ("bun")          -> DOCTOR_RUNTIME_LABEL
   //   - .sh tests 1,4 ("audit-logger") -> DOCTOR_HOOK_LABEL
   //   - .sh tests 2,5 ("session-start") -> DOCTOR_HOOK_LABEL_2 (a SEPARATE
   //                                        `${h}.ts present` line per hook)
@@ -124,7 +124,7 @@ describe("t22 /aidlc --doctor (SDK port)", () => {
         // Header + footer (was .sh test 9's "health" grep):
         assertToolResultContains(r, "Bash", DOCTOR_HEADER);
         // bun runtime check (was .sh test 7):
-        assertToolResultContains(r, "Bash", DOCTOR_BUN_LABEL);
+        assertToolResultContains(r, "Bash", DOCTOR_RUNTIME_LABEL);
         // hook-presence checks — the .sh asserted BOTH hooks separately:
         // audit-logger (tests 1,4) AND session-start (tests 2,5). Each is its
         // own `${h}.ts present` line in the doctor stdout, so assert both.

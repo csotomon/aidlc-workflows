@@ -15,6 +15,10 @@ export type RootIntegration = {
   marker?: string;
   jsonKey?: string;
   optional?: boolean;
+  legacySignatures?: {
+    wholeFileHashes?: string[];
+    jsonEntryHashes?: Record<string, string[]>;
+  };
 };
 
 export type ProjectionDescriptor = {
@@ -47,6 +51,18 @@ function safeRelativePath(value: unknown, label: string, topLevel = false): stri
     (topLevel && value.includes("/"))
   ) {
     throw new Error(`${label} is not a safe ${topLevel ? "top-level name" : "relative path"}`);
+  }
+  return value;
+}
+
+function validateHashes(value: unknown, label: string): string[] {
+  if (
+    !Array.isArray(value) ||
+    value.length === 0 ||
+    value.some((hash) => typeof hash !== "string" || !/^sha256:[a-f0-9]{64}$/.test(hash)) ||
+    new Set(value).size !== value.length
+  ) {
+    throw new Error(`${label} must contain unique lowercase SHA-256 signatures`);
   }
   return value;
 }
@@ -103,6 +119,42 @@ function validateDescriptor(root: string, stamp: ProjectionStamp, descriptor: Pr
       (typeof integration.jsonKey !== "string" || integration.jsonKey.length === 0)
     ) {
       throw new Error(`${root}: ${safe} has an invalid JSON integration key`);
+    }
+    const legacy = integration.legacySignatures;
+    if (legacy !== undefined) {
+      if (!legacy || typeof legacy !== "object" || Array.isArray(legacy)) {
+        throw new Error(`${root}: ${safe} has invalid legacy signatures`);
+      }
+      const keys = Object.keys(legacy);
+      if (
+        keys.length === 0 ||
+        keys.some((key) => key !== "wholeFileHashes" && key !== "jsonEntryHashes")
+      ) {
+        throw new Error(`${root}: ${safe} has invalid legacy signature fields`);
+      }
+      if (legacy.wholeFileHashes !== undefined) {
+        if (integration.policy !== "managed-block" && integration.policy !== "whole-file") {
+          throw new Error(`${root}: ${safe} cannot use legacy whole-file signatures`);
+        }
+        validateHashes(legacy.wholeFileHashes, `${root}: ${safe} legacy whole-file signatures`);
+      }
+      if (legacy.jsonEntryHashes !== undefined) {
+        if (
+          integration.policy !== "json-map" ||
+          !legacy.jsonEntryHashes ||
+          typeof legacy.jsonEntryHashes !== "object" ||
+          Array.isArray(legacy.jsonEntryHashes) ||
+          Object.keys(legacy.jsonEntryHashes).length === 0
+        ) {
+          throw new Error(`${root}: ${safe} has invalid legacy JSON-entry signatures`);
+        }
+        for (const [entry, hashes] of Object.entries(legacy.jsonEntryHashes)) {
+          if (entry.length === 0) {
+            throw new Error(`${root}: ${safe} has an empty legacy JSON entry name`);
+          }
+          validateHashes(hashes, `${root}: ${safe} legacy JSON entry ${entry}`);
+        }
+      }
     }
   }
 }

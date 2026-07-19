@@ -41,7 +41,7 @@ never route, advance, or gate a workflow yourself.
 
 ## Procedure
 
-1. **Detect.** Run `bun .kiro/tools/aidlc-utility.ts detect --json`.
+1. **Detect.** Run `aidlc __delegate utility detect --json`.
    It returns the workspace scan (projectType Greenfield/Brownfield,
    languages, frameworks, buildSystem) AND the resolved `scopesDir` +
    `scopeGridPath` - the authoritative locations scope data is read from at
@@ -70,7 +70,7 @@ never route, advance, or gate a workflow yourself.
 
 4. **Validate.** Before the proposal is shown, write the proposed grid to a
    temp file and run the deterministic check:
-   `bun .kiro/tools/aidlc-graph.ts validate-grid --proposal <path> --project-type <greenfield|brownfield>`
+   `aidlc __delegate graph validate-grid --proposal <path> --project-type <greenfield|brownfield>`
    (lenient mode for a front/report proposal; the recompose path runs it
    `--strict`). Exit 1 means the grid is rejected: fix the grid or withdraw
    the SKIP - never show an invalid grid at the gate. Surface any advisories
@@ -111,7 +111,7 @@ start). Therefore:
   this scope inferable for future prompts? which keywords?") - never a side
   effect of composing. If keywords are granted, run the deterministic
   collision check BEFORE writing them:
-  `bun .kiro/tools/aidlc-graph.ts validate-grid --proposal <path> --keywords <granted,csv>`
+  `aidlc __delegate graph validate-grid --proposal <path> --keywords <granted,csv>`
   (the same proposal file from the Validate step). A collision is a hard
   error naming the scope that already claims the keyword - drop or rename
   the colliding keyword (or take it back to the human), never write it.

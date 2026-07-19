@@ -135,9 +135,6 @@ Use the deterministic utility command to inspect or change the selection:
 aidlc plugin select
 aidlc plugin select test-pro
 aidlc plugin select aidlc,test-pro
-bun <harness-dir>/tools/aidlc-utility.ts select-plugins
-bun <harness-dir>/tools/aidlc-utility.ts select-plugins test-pro
-bun <harness-dir>/tools/aidlc-utility.ts select-plugins aidlc,test-pro
 ```
 
 `select-plugins` validates names against the known set (`aidlc` plus plugin
@@ -366,11 +363,11 @@ Independent authors who never coordinate are kept safe by:
 
 The emitted SessionStart command probes for `aidlc` on `PATH` first and runs
 `aidlc plugin sync` when it is available. If no binary is found, it invokes the
-project's Bun `aidlc-plugin.ts` so copy installs use the same transactional
-implementation. A discovered sync entrypoint is authoritative: its failure is
-propagated without falling through to another composer. Direct `hooks/compose.ts`
-remains only as a compatibility fallback for an older project runtime; the hook
-exits 0 when neither executable is available.
+project's Bun `aidlc-plugin.ts` only as a compatibility fallback for older
+project projections. A discovered sync entrypoint is authoritative: its failure
+is propagated without falling through to another composer. Direct
+`hooks/compose.ts` remains a second compatibility fallback; the hook exits 0
+when no supported runtime is available.
 
 **Install, per host:**
 

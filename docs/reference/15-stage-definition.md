@@ -422,7 +422,7 @@ milestone 7 shipped `parseStageFrontmatter` and `emitStageFrontmatter` in
 `lib.ts` — YAML-only, no prose back-compat path. milestone 8 migrated all 31
 stage files to YAML frontmatter in a single atomic change. milestone 9 expanded
 `aidlc-graph.ts` to compile the YAML into `stage-graph.json` and added
-`compile --check` as the CI drift guard. Running `bun aidlc-graph.ts
+`compile --check` as the CI drift guard. Running `aidlc graph
 compile --check` on a clean tree exits 0; editing any stage YAML without
 recompiling the JSON exits 1 with a clear message.
 

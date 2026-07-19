@@ -260,7 +260,7 @@ The scope determines which of the 32 stages execute and at what depth. Stages no
 
 ### Complete Mapping
 
-Authoritative data lives in the `.claude/scopes/aidlc-<name>.md` files plus each stage's `scopes:` frontmatter, compiled into `.claude/tools/data/scope-grid.json`. Run `bun .claude/tools/aidlc-utility.ts scope-table` for the live compiled counts.
+Authoritative data lives in the `.claude/scopes/aidlc-<name>.md` files plus each stage's `scopes:` frontmatter, compiled into `.claude/tools/data/scope-grid.json`. Run `aidlc __delegate utility scope-table` for the live compiled counts.
 
 | Scope | Stages Included | EXECUTE / Total | Depth | Test Strategy |
 |---|---|---|---|---|
@@ -487,20 +487,20 @@ The state tool owns every transition above. The orchestrator never writes checkb
 
 1. **Run completion verification** - check artifacts exist on disk, guardrails respected. This is a correctness check, not a state transition. This is also enforced deterministically: `approve` refuses a gated stage whose declared `produces` artifacts are missing (unless `AIDLC_SKIP_ARTIFACT_GUARD=1`), so a stage cannot be marked complete without its outputs (#366). Per-unit Construction stages are verified by the swarm referee instead.
 
-2. **Enter the gate** (optional): `bun .claude/tools/aidlc-state.ts gate-start <slug>`. Marks `[-]` → `[?]`, emits `STAGE_AWAITING_APPROVAL`, makes `/aidlc --status` show "Awaiting your approval on \<stage\>". If skipped, the engine's `report` / `reject` paths backfill the missing `STAGE_AWAITING_APPROVAL` row (tagged `Recovered=true`) before recording the outcome.
+2. **Enter the gate** (optional): `aidlc __delegate state gate-start <slug>`. Marks `[-]` → `[?]`, emits `STAGE_AWAITING_APPROVAL`, makes `/aidlc --status` show "Awaiting your approval on \<stage\>". If skipped, the engine's `report` / `reject` paths backfill the missing `STAGE_AWAITING_APPROVAL` row (tagged `Recovered=true`) before recording the outcome.
 
 3. **Present the approval gate** (AskUserQuestion).
 
 4. **Record the user's response**:
-   - **Approve** -> `bun .claude/tools/aidlc-orchestrate.ts report --stage <slug> --result approved --user-input "<exact choice>"`. Emits any missing gate row, then `GATE_APPROVED` + `STAGE_COMPLETED`, and advances. Refuses with a missing-produced-artifact error if the stage's `produces` outputs are absent.
-   - **Request Changes** → `bun .claude/tools/aidlc-state.ts reject <slug> --feedback "<text>"`. Emits `GATE_REJECTED` + `STAGE_REVISING`, marks `[?]` → `[R]`, increments Revision Count.
-   - After re-running work for a `[R]` stage, call `bun .claude/tools/aidlc-state.ts revise <slug>` to re-enter the gate (emits a fresh `STAGE_AWAITING_APPROVAL`, marks `[R]` → `[?]`).
+   - **Approve** -> `aidlc __delegate orchestrate report --stage <slug> --result approved --user-input "<exact choice>"`. Emits any missing gate row, then `GATE_APPROVED` + `STAGE_COMPLETED`, and advances. Refuses with a missing-produced-artifact error if the stage's `produces` outputs are absent.
+   - **Request Changes** → `aidlc __delegate state reject <slug> --feedback "<text>"`. Emits `GATE_REJECTED` + `STAGE_REVISING`, marks `[?]` → `[R]`, increments Revision Count.
+   - After re-running work for a `[R]` stage, call `aidlc __delegate state revise <slug>` to re-enter the gate (emits a fresh `STAGE_AWAITING_APPROVAL`, marks `[R]` → `[?]`).
 
-5. **Advance to the next stage**: `bun .claude/tools/aidlc-state.ts advance <slug>`. The tool derives the next in-scope stage from the state file's EXECUTE/SKIP suffix (set by `init`) plus the compiled scope grid (`scope-grid.json`). Marks `[x]` on completed, `[-]` on next, updates Current Stage / Lifecycle Phase / Active Agent / Next Stage / Last Completed Stage / Last Updated / Completed count, and emits `STAGE_STARTED` for the next stage. At a phase boundary it additionally emits `PHASE_COMPLETED` + `PHASE_VERIFIED` + `PHASE_STARTED` atomically.
+5. **Advance to the next stage**: `aidlc __delegate state advance <slug>`. The tool derives the next in-scope stage from the state file's EXECUTE/SKIP suffix (set by `init`) plus the compiled scope grid (`scope-grid.json`). Marks `[x]` on completed, `[-]` on next, updates Current Stage / Lifecycle Phase / Active Agent / Next Stage / Last Completed Stage / Last Updated / Completed count, and emits `STAGE_STARTED` for the next stage. At a phase boundary it additionally emits `PHASE_COMPLETED` + `PHASE_VERIFIED` + `PHASE_STARTED` atomically.
 
    The tool is idempotent — replaying `advance <slug>` a second time returns `{replay: true}` without re-emitting events.
 
-6. **If this was the last in-scope stage**: `bun .claude/tools/aidlc-state.ts complete-workflow <slug>`. Marks `[x]`, sets Status=Completed, emits `PHASE_COMPLETED` + `PHASE_VERIFIED` + `WORKFLOW_COMPLETED`. Present a completion summary.
+6. **If this was the last in-scope stage**: `aidlc __delegate state complete-workflow <slug>`. Marks `[x]`, sets Status=Completed, emits `PHASE_COMPLETED` + `PHASE_VERIFIED` + `WORKFLOW_COMPLETED`. Present a completion summary.
 
 7. **Transition tasks**: mark the old task `completed`, set the new task `in_progress` with `activeForm: "Running <Next Stage> [slug]"`. The `[slug]` suffix triggers the PostToolUse hook that syncs statusline fields.
 
@@ -706,7 +706,8 @@ The framework hooks are registered project-wide in `settings.json` (the v0.6.0 h
 - **Trigger**: When any subagent finishes execution.
 - **Behavior**: Emits a canonical `SUBAGENT_COMPLETED` audit event via `appendAuditEntry` (replacing the earlier free-form `## Subagent Completed` markdown write). Fields: agent type, agent ID, and truncated message (first 200 characters). Uses `mkdir`-based locking via `lib.ts`.
 
-These hooks are TypeScript and run via `bun`. They do not require `jq`.
+These hooks are TypeScript sources routed through `aidlc`; they require neither
+Bun nor `jq` at runtime.
 
 ---
 

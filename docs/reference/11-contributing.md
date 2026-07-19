@@ -11,7 +11,7 @@ Contributions to this implementation are welcome. This guide covers prerequisite
 ## Prerequisites
 
 - **Claude Code** -- native install (recommended, auto-updates): macOS/Linux/WSL `curl -fsSL https://claude.ai/install.sh | bash`; Windows PowerShell `irm https://claude.ai/install.ps1 | iex`. Or `brew install --cask claude-code`. (see [Claude Code docs](https://code.claude.com/docs/en/quickstart))
-- **bun** -- Required to build, package, test, and run the copy-channel TypeScript tools and hooks. Native release installs do not require bun at runtime. Install via `curl -fsSL https://bun.sh/install | bash`. On Windows: `npm install -g bun` or `powershell -c "irm bun.sh/install.ps1 | iex"`. Copy installs need it on PATH for non-interactive shells (`~/.zshenv` for zsh, `~/.bashrc` for bash / Git Bash on Windows).
+- **bun** -- Required to build, package, test, and directly run authored TypeScript sources. Shipped project projections use the self-contained `aidlc` command. Install via `curl -fsSL https://bun.sh/install | bash`; on Windows use `powershell -c "irm bun.sh/install.ps1 | iex"`.
 - **timeout** (GNU coreutils) -- Required by the test suite for LLM test timeouts (L2/L3). Pre-installed on Linux. macOS: `brew install coreutils` then add gnubin to PATH: `export PATH="/opt/homebrew/opt/coreutils/libexec/gnubin:$PATH"` (in `~/.zshenv` or `~/.zshrc`).
 - **Bash** -- Optional for the POSIX compatibility wrapper (`tests/run-tests.sh`). The primary test runner is `bun tests/run-tests.ts`; at runtime, none of the distributable hooks require Bash.
 - **Bedrock access** -- Required for running live integration and e2e tests (L2/L3). Not needed for L1 protocol tests.
@@ -106,25 +106,24 @@ Utility handlers fall into two categories:
 ### Deterministic handlers (preferred)
 For handlers that require no LLM reasoning (print text, read/format files, check prerequisites, create directories):
 1. Add a subcommand to `core/tools/aidlc-utility.ts`
-2. Dispatch from SKILL.md with a single Bash call: `bun .claude/tools/aidlc-utility.ts <subcommand>`
+2. Register a dispatcher route and call it from SKILL.md through `aidlc __delegate utility <subcommand>` (or its public route)
 3. No task tracking needed -- the script runs in under a second
 4. Handle audit logging inside the script via `appendAuditEntry` from `aidlc-audit.ts` (never hand-write `**Event**:` markdown blocks)
 5. Add the verb to the `aidlc-utility` usage string. If it renders a generated SKILL.md region, also document the corresponding `--check` guard in this chapter.
 
 The `--help`, `--version`, `--status`, and `--doctor` handlers are reference implementations.
 
-The `codekb-path` handler is a read-only **direct utility verb**: stage prose
-invokes `bun <harness-dir>/tools/aidlc-utility.ts codekb-path`, not
-`/aidlc codekb-path`. It emits NO audit event, drives NO SKILL.md task tracking,
-and creates NO directory (`mkdir`). It simply prints the canonical per-repo
-codekb directory the reverse-engineering stage writes its artifacts into, so
-prose never hand-derives that path.
+The `codekb-path` handler is a read-only utility verb reached through
+`aidlc workspace codekb`, not a chat command. It emits NO audit event, drives
+NO SKILL.md task tracking, and creates NO directory (`mkdir`). It simply prints
+the canonical per-repo codekb directory the reverse-engineering stage writes
+its artifacts into, so prose never hand-derives that path.
 
 ### LLM-driven handlers
 For handlers that benefit from agent reasoning (filesystem scanning, decision-making):
 1. **Task tracking** -- Create tasks via `TaskCreate` for each logical step, transition them with `TaskUpdate` (`in_progress` -> `completed`) as work progresses. This drives the task sidebar in Claude Code.
 2. **Statusline update** -- If the active intent's `aidlc-state.md` exists, temporarily set `Current Stage` to describe the running utility (e.g., `running health check`), then restore the original value when done. The `aidlc-statusline.ts` hook reads this field for the terminal status bar.
-3. **Audit logging** -- Invoke the appropriate tool subcommand (e.g., `bun .claude/tools/aidlc-utility.ts <handler>` that calls `appendAuditEntry` internally). Never hand-write `**Event**:` markdown blocks from LLM prose — see [State Machine: Forbidden patterns](12-state-machine.md).
+3. **Audit logging** -- Invoke the appropriate native dispatcher route (for example, `aidlc __delegate utility <handler>` calling `appendAuditEntry` internally). Never hand-write `**Event**:` markdown blocks from LLM prose — see [State Machine: Forbidden patterns](12-state-machine.md).
 
 The `intent-birth` handler is fully deterministic: all three init stages (workspace-scaffold, workspace-detection, state-init) run inside a single `aidlc-utility intent-birth` call. The welcome message is rendered at session start via `companyAnnouncements` in `settings.json` and is not a stage.
 

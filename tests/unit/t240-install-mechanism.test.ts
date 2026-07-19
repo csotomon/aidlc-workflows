@@ -56,6 +56,7 @@ const INIT = join(REPO_ROOT, "core", "tools", "aidlc-init.ts");
 const LIFECYCLE = join(REPO_ROOT, "core", "tools", "aidlc-lifecycle.ts");
 const DISPATCHER = join(REPO_ROOT, "core", "tools", "aidlc.ts");
 const INSTALLER = join(REPO_ROOT, "scripts", "install.sh");
+const CLAUDE_COPY = join(REPO_ROOT, "dist", "claude");
 const CLAUDE_RELEASE = join(REPO_ROOT, "dist-release", "claude");
 const CODEX_RELEASE = join(REPO_ROOT, "dist-release", "codex");
 const KIRO_IDE_COPY = join(REPO_ROOT, "dist", "kiro-ide");
@@ -633,6 +634,86 @@ describe("t240 project initialization", () => {
     expect(readFileSync(gitignore, "utf-8")).not.toContain("# local managed edit");
   }, 60_000);
 
+  test("exact legacy root signatures are adopted while modified lookalikes still refuse", () => {
+    const project = temp("aidlc-t240-legacy-adopt-");
+    mkdirSync(join(project, ".git"));
+    cpSync(join(CLAUDE_COPY, ".gitignore"), join(project, ".gitignore"));
+    cpSync(join(CLAUDE_COPY, ".mcp.json"), join(project, ".mcp.json"));
+
+    const adopted = run(INIT, [
+      "init",
+      "--project-dir",
+      project,
+      "--from",
+      CLAUDE_RELEASE,
+      "--harness",
+      "claude",
+      "--mcp",
+      "defaults",
+      "--json",
+    ], project);
+    expect(adopted.status, adopted.stdout + adopted.stderr).toBe(0);
+    const result = JSON.parse(adopted.stdout) as {
+      data: { actions: Array<{ path: string; detail?: string }> };
+    };
+    expect(result.data.actions).toContainEqual(expect.objectContaining({
+      path: ".gitignore",
+      detail: "adopted exact legacy signature",
+    }));
+    const gitignore = readFileSync(join(project, ".gitignore"), "utf-8");
+    expect(gitignore.match(/BEGIN AI-DLC:gitignore/g)).toHaveLength(1);
+    expect(gitignore.match(/END AI-DLC:gitignore/g)).toHaveLength(1);
+
+    const baseline = JSON.parse(
+      readFileSync(join(project, ".claude", "tools", "data", "aidlc-manifest.json"), "utf-8"),
+    ) as {
+      rootContributions: {
+        ".mcp.json": { policy: string; entries: Record<string, string> };
+      };
+    };
+    expect(baseline.rootContributions[".mcp.json"].policy).toBe("json-map");
+    expect(Object.keys(baseline.rootContributions[".mcp.json"].entries).sort()).toEqual([
+      "aws-iac",
+      "aws-mcp",
+      "aws-pricing",
+      "aws-serverless",
+      "context7",
+    ]);
+
+    const disabled = run(INIT, [
+      "init",
+      "--project-dir",
+      project,
+      "--from",
+      CLAUDE_RELEASE,
+      "--mcp",
+      "none",
+    ], project);
+    expect(disabled.status, disabled.stdout + disabled.stderr).toBe(0);
+    expect(JSON.parse(readFileSync(join(project, ".mcp.json"), "utf-8")).mcpServers)
+      .toBeUndefined();
+
+    const ambiguous = temp("aidlc-t240-legacy-ambiguous-");
+    mkdirSync(join(ambiguous, ".git"));
+    writeFileSync(
+      join(ambiguous, ".gitignore"),
+      `${readFileSync(join(CLAUDE_COPY, ".gitignore"), "utf-8")}# local AI-DLC rule\n`,
+    );
+    const refused = run(INIT, [
+      "init",
+      "--project-dir",
+      ambiguous,
+      "--from",
+      CLAUDE_RELEASE,
+      "--harness",
+      "claude",
+      "--force",
+    ], ambiguous);
+    expect(refused.status).toBe(4);
+    expect(refused.stdout).toContain("legacy root integration ambiguous");
+    expect(existsSync(join(ambiguous, ".claude"))).toBe(false);
+  }, 60_000);
+
   test("--force does not replace a pre-existing user-owned JSON entry", () => {
     const project = temp("aidlc-t240-json-owner-");
     mkdirSync(join(project, ".git"));
@@ -902,7 +983,7 @@ describe("t240 project initialization", () => {
     expect(readFileSync(stagePath, "utf-8")).toContain("Upstream refresh marker.");
   }, 60_000);
 
-  test("Kiro IDE release trust merge owns only the native command entry", () => {
+  test("Kiro IDE native projections merge and own only the native command entry", () => {
     const project = temp("aidlc-t240-kiro-trust-");
     mkdirSync(join(project, ".git"));
     mkdirSync(join(project, ".vscode"));
@@ -936,7 +1017,7 @@ describe("t240 project initialization", () => {
     ], project);
     expect(switched.status, switched.stdout + switched.stderr).toBe(0);
     settings = JSON.parse(readFileSync(join(project, ".vscode", "settings.json"), "utf-8"));
-    expect(settings["kiroAgent.trustedCommands"]).toEqual(["user-tool *"]);
+    expect(settings["kiroAgent.trustedCommands"]).toEqual(["user-tool *", "aidlc *"]);
     expect(settings["editor.formatOnSave"]).toBe(true);
   }, 60_000);
 });
@@ -1643,7 +1724,7 @@ describe("t240 release lifecycle", () => {
 });
 
 describe("t240 projection channel", () => {
-  test("release projection is stamped and contains no harness-local bun invocation", () => {
+  test("copy and release projections converge on the stamped native invocation", () => {
     const stamp = JSON.parse(
       readFileSync(join(CLAUDE_RELEASE, ".claude", "tools", "data", "aidlc-stamp.json"), "utf-8"),
     ) as { frameworkVersion: string; distribution: string };
@@ -1659,6 +1740,95 @@ describe("t240 projection channel", () => {
     }
     expect(sha256Bytes(readFileSync(join(CLAUDE_RELEASE, ".claude", "tools", "aidlc.ts"))))
       .toMatch(/^sha256:[a-f0-9]{64}$/);
+    for (const harness of ["claude", "codex", "kiro", "kiro-ide"]) {
+      const copy = join(REPO_ROOT, "dist", harness);
+      const release = join(REPO_ROOT, "dist-release", harness);
+      expect(walkFiles(copy)).toEqual(walkFiles(release));
+      for (const path of walkFiles(copy)) {
+        expect(sha256Bytes(readFileSync(join(copy, path))), `${harness}/${path}`)
+          .toBe(sha256Bytes(readFileSync(join(release, path))));
+      }
+    }
+  });
+
+  test("legacy signature inventory covers every shipped unmarked root variant", () => {
+    const expected: Record<string, Record<string, string[]>> = {
+      claude: {
+        ".gitignore": [
+          "sha256:3da36b2d01551aeae2e366caa08be8cce0dbc9110e252445dcaa4e758e24a0b6",
+          "sha256:4f1cd2e930bd37d2f5d715a06ea3fa1e2d39479fc662f0f0562116376132114b",
+        ],
+      },
+      codex: {
+        "AGENTS.md": [
+          "sha256:30a9f5f43d87cd29b63e75333b8ef6695f8f4e11909fd6af64e2b6cf0b8cb292",
+          "sha256:47678f42e0233de9b0164eb4ec318a3ba3196074d6ec88f69aa7980bc1f2fd0d",
+          "sha256:821b2149c7c6c2b6592eecd10623823fc5579fc4ae52f2ad272e00c93013d027",
+          "sha256:83c6e5141646dc604c87d80622fc898761a69bd0c9caebb398441bce9f1d0727",
+          "sha256:b3a07e9bb603fb0a2328004fc7cf2294afc670ec6f350a43de9c15d6e27aa04e",
+          "sha256:bfc2adb83e00041750b1d19c9f3167cb7f5f5502a62af83a58d0a2828890febf",
+          "sha256:d8afae6a0813f5298cf873a047664cf485308c6e0dad41dde53d8dcb27dd7769",
+          "sha256:f1deb7dc72a78fe7d39c71ad2fe6c0f41248c03cde7fb36b7a478f5b9233881c",
+          "sha256:f7c55e9917d3801f676fba066fdd78d8df2c36311e8d6e78068965fc7b4371fa",
+        ],
+      },
+      kiro: {
+        "AGENTS.md": [
+          "sha256:4f7133cc1a9bb1243245c25c28fad57c3660b35e251ea36cea3aa2db431bf55f",
+          "sha256:992307cc3fac05d81958851b2ca51db3723fea604c8d2636814ef9b2e9f7a848",
+          "sha256:b886d5b375f9ebc33ef206c4f6ad20630a13eb83d0f5838e9f71f483c040f362",
+          "sha256:c6796d512752c8f4aa927c9de3fb794e3432f62dd85b77fe3da1101d90aa5a0b",
+          "sha256:cd7c66ba1bdd67af0be6203a1d8928efc01733ef196201003e914051d1309a28",
+          "sha256:e01ac1caf52a59d25faf859a03cfb65b803853c99298bbcbc80ef565e7628de6",
+          "sha256:e3de4a295f9b9404b40678c28c0773ae432ac8d4aeacc07613ecfcdfbb4c866b",
+          "sha256:e85a5d7ce13b676282dc99572f89c81256f2dada50b1881f4c9641e61339f5a4",
+        ],
+      },
+      "kiro-ide": {
+        "AGENTS.md": [
+          "sha256:4d539288363565feb6cf1a8d2468d1aca4373d46d354936d89e609f9862b2b9f",
+          "sha256:8159f54fcfe2a2ef807227cb12a3c83327e3851672ea47294812dde411f0de69",
+          "sha256:8d59f353b5575abe6ee12e8abd5ac75f55461bd7307d677d64388c16690e5afa",
+          "sha256:aef608b826a4993d47e3de98679a81abe4823c7c73556def4a339c5cb92999e7",
+          "sha256:b58a882d1b56bbb5cdb9a3c356b1428eb8d2593f4a9ca22118b98ca7cd0bae9c",
+          "sha256:c5d2188b046cd75d8cb7214f32faa85cbc1539cddda4a0fae9bfe8fad90c237c",
+          "sha256:dead4d5ea47849f489e05baeae418d5d26efc6cd14dd2201351a474376f8efde",
+          "sha256:e01ac1caf52a59d25faf859a03cfb65b803853c99298bbcbc80ef565e7628de6",
+        ],
+      },
+    };
+    const harnessDirs: Record<string, string> = {
+      claude: ".claude",
+      codex: ".codex",
+      kiro: ".kiro",
+      "kiro-ide": ".kiro",
+    };
+    for (const [harness, paths] of Object.entries(expected)) {
+      const descriptor = JSON.parse(
+        readFileSync(
+          join(
+            REPO_ROOT,
+            "dist",
+            harness,
+            harnessDirs[harness],
+            "tools",
+            "data",
+            "aidlc-projection.json",
+          ),
+          "utf-8",
+        ),
+      ) as {
+        rootIntegrations: Array<{
+          path: string;
+          legacySignatures?: { wholeFileHashes?: string[] };
+        }>;
+      };
+      for (const [path, hashes] of Object.entries(paths)) {
+        const integration = descriptor.rootIntegrations.find((item) => item.path === path);
+        expect(integration?.legacySignatures?.wholeFileHashes, `${harness}/${path}`)
+          .toEqual(hashes);
+      }
+    }
   });
 
   test("release runtime-generated commands remain binary-invoked", () => {
@@ -1790,5 +1960,48 @@ describe("t240 projection channel", () => {
     writeFileSync(path, `${JSON.stringify(descriptor, null, 2)}\n`);
     const { projectionFiles } = await import("../../core/tools/aidlc-distribution.ts");
     expect(() => projectionFiles(root)).toThrow("safe top-level name");
+  });
+
+  test("projection descriptors reject malformed or policy-mismatched legacy signatures", async () => {
+    const { projectionFiles } = await import("../../core/tools/aidlc-distribution.ts");
+    const malformed = temp("aidlc-t240-legacy-schema-");
+    cpSync(CLAUDE_RELEASE, malformed, { recursive: true });
+    const path = join(malformed, ".claude", "tools", "data", "aidlc-projection.json");
+    const descriptor = JSON.parse(readFileSync(path, "utf-8")) as {
+      rootIntegrations: Array<{
+        path: string;
+        legacySignatures?: {
+          wholeFileHashes?: string[];
+          jsonEntryHashes?: Record<string, string[]>;
+        };
+      }>;
+    };
+    const gitignore = descriptor.rootIntegrations.find((item) => item.path === ".gitignore");
+    gitignore!.legacySignatures!.wholeFileHashes = ["SHA256:not-canonical"];
+    writeFileSync(path, `${JSON.stringify(descriptor, null, 2)}\n`);
+    expect(() => projectionFiles(malformed)).toThrow("unique lowercase SHA-256 signatures");
+
+    const mismatched = temp("aidlc-t240-legacy-policy-");
+    cpSync(CLAUDE_RELEASE, mismatched, { recursive: true });
+    const mismatchPath = join(
+      mismatched,
+      ".claude",
+      "tools",
+      "data",
+      "aidlc-projection.json",
+    );
+    const mismatch = JSON.parse(readFileSync(mismatchPath, "utf-8")) as {
+      rootIntegrations: Array<Record<string, unknown>>;
+    };
+    const mcp = mismatch.rootIntegrations.find((item) => item.path === ".mcp.json")!;
+    mcp.legacySignatures = {
+      wholeFileHashes: [
+        "sha256:5314da95387e5e6235d93bd8a9f314cba261b145da1edce01c90d96143fb95c8",
+      ],
+    };
+    writeFileSync(mismatchPath, `${JSON.stringify(mismatch, null, 2)}\n`);
+    expect(() => projectionFiles(mismatched)).toThrow(
+      "cannot use legacy whole-file signatures",
+    );
   });
 });

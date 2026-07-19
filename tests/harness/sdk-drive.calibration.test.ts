@@ -57,7 +57,7 @@ const DRIVE_TIMEOUT_MS = Math.max(60_000, TEST_TIMEOUT_MS - 15_000);
 // aidlc-utility.ts handleDoctor():
 //   - header literal:           "AI-DLC Health Check\n"            (utility.ts:1355)
 //   - separator rule:           "─".repeat(37)                (utility.ts:1356)
-//   - check #1 label:           "bun installed (required ...)"     (utility.ts:336)
+//   - check #1 label:           "Self-contained binary runtime ..." (utility.ts)
 //   - hook label shape:         "<hook>.ts present"                (utility.ts:356, hooks :343-351)
 //   - settings label:           "settings.json present"           (utility.ts:365)
 //   - aidlc-docs label:         "aidlc-docs/ directory exists"     (utility.ts:396)
@@ -66,7 +66,7 @@ const DRIVE_TIMEOUT_MS = Math.max(60_000, TEST_TIMEOUT_MS - 15_000);
 // ---------------------------------------------------------------------------
 const DOCTOR_HEADER = "AI-DLC Health Check";
 const DOCTOR_RULE = "─".repeat(37); // 37 box-drawing horizontals
-const DOCTOR_BUN_LABEL = "bun installed (required for CLI tools and hooks)";
+const DOCTOR_RUNTIME_LABEL = "Self-contained binary runtime (bun is not required)";
 const DOCTOR_HOOK_LABEL = "aidlc-audit-logger.ts present";
 const DOCTOR_SETTINGS_LABEL = "settings.json present";
 const DOCTOR_DOCS_LABEL = "aidlc-docs/ directory exists";
@@ -170,7 +170,7 @@ describe("sdk-drive calibration (known-answer)", () => {
         // loudly if Bash never fired (no vacuous pass) — see calibration 4.
         assertToolResultContains(rA, "Bash", DOCTOR_HEADER);
         assertToolResultContains(rA, "Bash", DOCTOR_RULE);
-        assertToolResultContains(rA, "Bash", DOCTOR_BUN_LABEL);
+        assertToolResultContains(rA, "Bash", DOCTOR_RUNTIME_LABEL);
         assertToolResultContains(rA, "Bash", DOCTOR_HOOK_LABEL);
         assertToolResultContains(rA, "Bash", DOCTOR_SETTINGS_LABEL);
         assertToolResultContains(rA, "Bash", DOCTOR_DOCS_LABEL);
@@ -186,7 +186,7 @@ describe("sdk-drive calibration (known-answer)", () => {
         expect(blockA!).toMatch(/\d+ passed, \d+ failed/);
         // The verbatim block uses the tool's ✓ check glyph + two spaces,
         // exactly as handleDoctor writes it (utility.ts:1361).
-        expect(blockA!).toContain(`✓  ${DOCTOR_BUN_LABEL}`);
+        expect(blockA!).toContain(`✓  ${DOCTOR_RUNTIME_LABEL}`);
 
         // Stability: a second independent run must yield a byte-identical
         // doctor block (deterministic stdout). We compare from the header to

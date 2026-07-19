@@ -16,14 +16,14 @@ This chapter covers common issues and their solutions, organized by symptom.
 
 | Symptom | Quick Fix |
 |---------|-----------|
-| No audit entries appearing | Verify `bun` is installed and on PATH |
+| No audit entries appearing | Run `aidlc doctor` and verify native hook trust |
 | State file corrupted | Run `/aidlc --doctor`, compare against state template |
 | Stuck at approval gate | Type your response; use `/aidlc --stage <target>` to jump past it |
 | Context compacted mid-session | Run `/aidlc` to resume from checkpoint |
 | Audit log too large | Rename to `audit-YYYY-MM.md`; a fresh one is created automatically |
 | Hooks appear to hang | Remove stale lock dirs from system temp directory (see below) |
 | Statusline shows "ready" | Check `aidlc-state.md` has a `**Lifecycle Phase**` field |
-| Statusline not appearing | Verify `bun` is on PATH and `settings.json` `statusLine.command` references `aidlc-statusline.ts` |
+| Statusline not appearing | Verify `aidlc` is on PATH and `settings.json` routes `aidlc statusline` |
 | Subagent timed out | Run `/aidlc` to retry or run the stage inline |
 
 ---
@@ -37,7 +37,7 @@ This chapter covers common issues and their solutions, organized by symptom.
 | `aidlc.cmd` exits 4 or the Windows active pointer is invalid | Do not edit `%LOCALAPPDATA%\aidlc\active-executable`. Rerun the same verified `install.ps1 -Harness <name>` or use `aidlc rollback --version <retained-version>` from a retained executable. |
 | `pending Windows uninstall` or a Windows uninstall recovery failure | Close active AI-DLC commands and run `aidlc doctor`. A valid continuation resumes on the next command; do not delete its temp journal, cleanup script, or machine fence independently. |
 | `locally modified or unowned` or `managed block was locally modified` from `aidlc init` | Run `aidlc init --dry-run --verbose` and review every conflict. Use `--force` only to replace framework-owned bytes; it never authorizes deletion of unrelated project content. |
-| `legacy root integration ambiguous; move or delete the unmarked AI-DLC content` | Move or delete the old unmarked AI-DLC block in the named root file, preserve any project-owned text elsewhere, then rerun `aidlc init`. This release intentionally refuses to guess ownership. |
+| `legacy root integration ambiguous; move or delete the unmarked AI-DLC content` | Exact historical signatures migrate automatically. This file differs from every known signature, so preserve project-owned text, move or delete only the unmarked legacy AI-DLC block, then rerun init. `--force` cannot claim ambiguous content. |
 | `managed markers are missing, duplicated, or malformed` | Repair the named root file so it has exactly one matching `BEGIN AI-DLC` / `END AI-DLC` pair, or remove the broken AI-DLC block and rerun `aidlc init`. |
 | `project runtime <version> is incompatible with selected engine <version>` | Install and select a compatible retained version with `aidlc versions install <version>` and `aidlc use <version>`, or refresh the project intentionally with `aidlc init`. |
 | An upgrade was interrupted and `aidlc version` still shows the prior release | This is the safe pre-pointer state: the old command remains active. Run `aidlc doctor`, then rerun the same `aidlc upgrade --version <version>` command. A complete unused retained version may remain and is reported by `aidlc versions list`. |
@@ -48,7 +48,7 @@ This chapter covers common issues and their solutions, organized by symptom.
 
 Native `aidlc doctor` also checks the active command pointer, rollback
 eligibility, retained pin completeness, stale pin registrations, abandoned
-transaction staging, project version skew, and whether binary-channel host
+transaction staging, project version skew, and whether native host
 hooks and permission/trust entries consistently select the native command.
 
 ---
@@ -57,23 +57,14 @@ hooks and permission/trust entries consistently select the native command.
 
 **Symptom**: No entries appearing in the intent's `audit/` shards after file writes, or no subagent completion logs.
 
-### `bun` not installed or not on PATH
+### `aidlc` not installed or not trusted
 
-All 12 TypeScript hooks (`aidlc-mint-presence.ts`, `aidlc-reviewer-scope.ts`, `aidlc-audit-logger.ts`, `aidlc-sensor-fire.ts`, `aidlc-runtime-compile.ts`, `aidlc-log-subagent.ts`, `aidlc-stop.ts`, `aidlc-validate-state.ts`, `aidlc-sync-statusline.ts`, `aidlc-session-start.ts`, `aidlc-session-end.ts`, `aidlc-statusline.ts`) require `bun`. If `bun` is missing or not on PATH for non-interactive shells, these hooks will not fire.
-
-```bash
-# macOS / Linux
-curl -fsSL https://bun.sh/install | bash
-
-# Windows
-npm install -g bun
-# or: powershell -c "irm bun.sh/install.ps1 | iex"
-
-# Verify
-bun --version
-```
-
-Ensure `bun` is on your PATH in `~/.zshenv` (zsh), `~/.bashrc` (bash / Git Bash on Windows) -- not just `~/.zshrc`. On native Windows PowerShell, the system PATH entry set by `npm install -g bun` is sufficient.
+All 12 host hooks route through the self-contained `aidlc` command. Run
+`aidlc doctor` from the project and address its installed-runtime and native
+command trust rows. If the command is missing, add the installer-reported bin
+directory to PATH and restart the harness. Bun is relevant only when directly
+running framework TypeScript sources or when a third-party plugin declares a
+Bun-backed command.
 
 ### Reviewer tool calls refused ("reviewer read-scope: ...")
 
@@ -81,7 +72,12 @@ During a per-unit Construction review, the reviewer-scope hook refuses the dispa
 
 ### Hook not configured
 
-Hooks are registered project-wide in `.claude/settings.json` (as of v0.6.0; earlier versions declared the workflow-spine hooks in the SKILL.md frontmatter). Verify that `settings.json` contains a `hooks` block with `PreToolUse`, `PostToolUse`, `PreCompact`, `SubagentStop`, and `Stop` entries (plus `SessionStart`/`SessionEnd`). If you took an upgrade that moved these and your on-disk `settings.json` predates it, re-copy the shipped `settings.json` hooks block.
+Hooks are registered project-wide in `.claude/settings.json` (as of v0.6.0;
+earlier versions declared the workflow-spine hooks in the SKILL.md
+frontmatter). Verify that it routes the native command for `PreToolUse`,
+`PostToolUse`, `PreCompact`, `SubagentStop`, `Stop`, `SessionStart`, and
+`SessionEnd`. Run `aidlc init --dry-run`, then `aidlc init` to refresh an old
+projection.
 
 ---
 
@@ -231,7 +227,7 @@ Expected behavior — the statusline updates when the state file is next written
 
 ### Not appearing at all
 
-1. `bun` not on PATH -- the statusline is invoked as `bun .claude/hooks/aidlc-statusline.ts`
+1. `aidlc` not on PATH -- the statusline is invoked as `aidlc statusline`
 2. Missing `settings.json` block -- verify the `statusLine` configuration exists
 3. No state file -- the statusline correctly shows `[AIDLC] ready` when no workflow is active
 
@@ -245,7 +241,16 @@ The `--doctor` utility command validates your setup. Run it whenever something s
 /aidlc --doctor
 ```
 
-It checks: prerequisite (`bun`), hook availability (every hook `settings.json` wires — all 12 framework hooks — must exist in `.claude/hooks/`, and a wired-but-missing hook fails loudly), project structure (`settings.json`), workspace shell readiness (`.claude/` + `aidlc/spaces/default/memory/`), state/audit consistency, hook heartbeats, graph integrity (no cycles, every graph entry has a file), scope validation across all 9 scopes, stage schema + graph references, and keyword overlap across scopes. It also surfaces two advisory rows that always pass (they never change the exit code): **Rule drift** (team/project rules that overlap a populated org-policy heading, flagged for contradiction review) and **Paired sensor coverage** (rules carrying a `pairing:` whose named Sensor resolves to a stage). One further row, **Hook drops**, is conditional: a hook that silently degraded (e.g. a plugin compose that could not apply a contribution, or a failed recompile) records a severity-tagged line to `<hooks-health>/<hook>.drops`; a `[degraded]` drop **fails** doctor (so a CI gate catches a half-applied plugin), while an `[advisory]` drop (an expected/benign condition) is a passing row. The plugin compose hook rewrites its drops file each run, so fixing the cause and re-composing self-clears it. Exits 0 on full pass, 1 on any failure; the report writes to stdout either way. `--doctor` is **read-only**: on a fresh shell with no intent yet it creates nothing — safe to run before the first intent is born, as the first thing you try when something seems off. Once an intent exists it records a `HEALTH_CHECKED` (and `GUARDRAIL_LOADED`) audit row.
+It checks the active installed runtime, project stamp and pin, native command
+trust, transaction staging, plugin composition, hook availability, project
+structure, workspace shell, state/audit consistency, graph integrity, scopes,
+stage schemas and references, and keyword overlap. It also reports advisory
+rule drift and paired sensor coverage. Hook drops marked `[degraded]` fail
+doctor; `[advisory]` drops do not. Interactive doctor may refresh stale update
+metadata within 750 ms; non-TTY, JSON, and quiet runs stay cache-only unless
+`--check-updates` is explicit. See [Install and
+Lifecycle](18-install-and-lifecycle.md#transactions-and-doctor) for the full
+machine lifecycle rows.
 
 See [CLI Commands](12-cli-commands.md#aidlc---doctor--health-check) for full details on what each check validates and how to fix failures.
 

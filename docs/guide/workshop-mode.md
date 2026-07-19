@@ -4,7 +4,7 @@ The `workshop` scope is the only AI-DLC scope designed for *facilitated group se
 
 This chapter is a **manual recipe**: it documents the workshop flow using primitives that already ship today (`aidlc-worktree`, `aidlc-bolt`, plus ordinary git). There is no dedicated `--claim-bolt` CLI yet — claim semantics ride on `git push` to the shared remote, and the recipe makes that contract explicit. A future release may automate the moves this chapter describes; for now, the recipe is the contract.
 
-For the scope's depth/test-strategy/skip-list, see [Scopes and Depth § workshop](05-scopes-and-depth.md#workshop). For the per-Bolt worktree mechanics this chapter assumes, see [State and Audit](10-state-and-audit.md) and the orchestrator's [Construction flow](../reference/03-orchestrator.md). New facilitator? Run through [Getting Started](01-getting-started.md) first — bun and your harness's framework copy must already be in place before any workshop step below.
+For the scope's depth/test-strategy/skip-list, see [Scopes and Depth § workshop](05-scopes-and-depth.md#workshop). For the per-Bolt worktree mechanics this chapter assumes, see [State and Audit](10-state-and-audit.md) and the orchestrator's [Construction flow](../reference/03-orchestrator.md). New facilitator? Run through [Getting Started](01-getting-started.md) first — the native command and project projection must already be in place.
 
 > **Harness note.** This recipe is harness-neutral: it drives the `aidlc-worktree`
 > and `aidlc-bolt` tools (shared across every harness) plus ordinary git. The
@@ -109,7 +109,7 @@ git ls-remote --heads origin "bolt-*"
 #   trunk-based  → --base main
 #   gitflow      → --base develop
 #   release-branch → --base release/<version>
-bun .claude/tools/aidlc-worktree.ts create --slug user-profile-api --base main
+aidlc __delegate worktree create --slug user-profile-api --base main
 
 # Publish the claim atomically. If another participant raced you,
 # this push is rejected — pick a different Bolt.
@@ -149,12 +149,12 @@ If a participant claims a Bolt but can't finish, the manual hand-off is:
 
 ```bash
 # On the original claimant's clone
-bun .claude/tools/aidlc-worktree.ts discard --slug user-profile-api
+aidlc __delegate worktree discard --slug user-profile-api
 git push origin :bolt-user-profile-api    # delete the remote branch
 
 # On the new claimant's clone, after fetch
 git fetch --all
-bun .claude/tools/aidlc-worktree.ts create --slug user-profile-api --base main
+aidlc __delegate worktree create --slug user-profile-api --base main
 git push origin bolt-user-profile-api
 ```
 
@@ -176,12 +176,12 @@ Alice and Bob have each cloned the workshop repo. During Inception's stage 2.2 t
 # gitflow teams or --base release/<version> for release-branch teams, per
 # aidlc/spaces/<space>/memory/team.md.)
 git fetch --all
-bun .claude/tools/aidlc-worktree.ts create --slug user-profile-api --base main
+aidlc __delegate worktree create --slug user-profile-api --base main
 git push origin bolt-user-profile-api    # claim succeeds — first claimant
 # In Claude Code (`claude`), run: /aidlc
 #   — runs Construction stages 3.1–3.5 in the worktree
 # Group reviews and approves the always-gate (workshop keeps every gate)
-bun .claude/tools/aidlc-bolt.ts complete --merge --slug user-profile-api
+aidlc __delegate bolt complete --merge --slug user-profile-api
 git push origin main                      # publishes the merged result
 ```
 
@@ -196,14 +196,14 @@ Both run `git fetch --all` to pick up Alice's merged main. (Both blocks below as
 ```bash
 # Alice picks billing-service
 git fetch --all
-bun .claude/tools/aidlc-worktree.ts create --slug billing-service --base main
+aidlc __delegate worktree create --slug billing-service --base main
 git push origin bolt-billing-service      # succeeds
 ```
 
 ```bash
 # Bob picks notifications-worker concurrently
 git fetch --all
-bun .claude/tools/aidlc-worktree.ts create --slug notifications-worker --base main
+aidlc __delegate worktree create --slug notifications-worker --base main
 git push origin bolt-notifications-worker # succeeds — different slug, no race
 ```
 
@@ -231,9 +231,9 @@ git push origin bolt-billing-service
 Bob's local worktree still exists at `.aidlc/worktrees/bolt-billing-service/` — it's a wasted local copy, not corruption. Bob discards it and picks `notifications-worker` instead:
 
 ```bash
-bun .claude/tools/aidlc-worktree.ts discard --slug billing-service
+aidlc __delegate worktree discard --slug billing-service
 git fetch --all
-bun .claude/tools/aidlc-worktree.ts create --slug notifications-worker --base main
+aidlc __delegate worktree create --slug notifications-worker --base main
 git push origin bolt-notifications-worker
 ```
 
@@ -245,13 +245,13 @@ When both Bolts complete:
 
 ```bash
 # Alice (after gate approval)
-bun .claude/tools/aidlc-bolt.ts complete --merge --slug billing-service
+aidlc __delegate bolt complete --merge --slug billing-service
 git push origin main                      # may need a fetch+rebase if Bob got there first
 ```
 
 ```bash
 # Bob (after gate approval)
-bun .claude/tools/aidlc-bolt.ts complete --merge --slug notifications-worker
+aidlc __delegate bolt complete --merge --slug notifications-worker
 git fetch --all
 git rebase origin/main                    # if Alice pushed in the meantime
 git push origin main
@@ -268,8 +268,8 @@ git push origin :bolt-user-profile-api :bolt-billing-service :bolt-notifications
 
 Once every Bolt has merged and `bolt-*` branches are deleted, the facilitator should:
 
-1. **Verify `Bolt Refs` is empty** — `bun .claude/tools/aidlc-utility.ts status` (or read `aidlc-state.md`) should show `Bolt Refs: [empty list]`. Any leftover slug indicates a Bolt that didn't merge cleanly; investigate before closing the workshop.
-2. **Inspect any preserved worktrees** — `bun .claude/tools/aidlc-worktree.ts list` shows every preserved `.aidlc/worktrees/bolt-*/` directory. These survived because a participant chose Skip or Abort during halt-and-ask. Decide whether to discard them (`aidlc-worktree discard --slug <slug>`) or keep them for post-workshop debrief.
+1. **Verify `Bolt Refs` is empty** — `aidlc __delegate utility status` (or read `aidlc-state.md`) should show `Bolt Refs: [empty list]`. Any leftover slug indicates a Bolt that didn't merge cleanly; investigate before closing the workshop.
+2. **Inspect any preserved worktrees** — `aidlc __delegate worktree list` shows every preserved `.aidlc/worktrees/bolt-*/` directory. These survived because a participant chose Skip or Abort during halt-and-ask. Decide whether to discard them (`aidlc-worktree discard --slug <slug>`) or keep them for post-workshop debrief.
 3. **Skim the audit log** — the intent's `audit/` shards carry the audit entries from every participant's worktree (each clone's shard merges in cleanly, no conflicts). `MERGE_DISPATCH_FALLBACK` rows are the breadcrumb for "we silently used trunk defaults instead of the team's affirmed branching" — surface these in debrief.
 4. **Tag a release if appropriate** — workshop scope completes with all Construction Bolts merged; if the workshop's project is going further, this is a natural tag point. Per the team's affirmed deployment cadence in `aidlc/spaces/<space>/memory/team.md`, this may auto-trigger a staging deploy.
 

@@ -112,7 +112,10 @@ A project can cap every projection at pack time, without editing any agent file:
 
 The two knobs differ in scope: the memory cap travels with the repo, so it applies in BOTH write and `--check` modes (a project that commits a capped dist stays self-consistent). The env var is a one-shot WRITE knob and is IGNORED under `--check` - the drift guard compares what the committed dist was legitimately built from, and a stray `AIDLC_TIER_CAP` in a CI or test runner's environment must neither fail nor mask drift (the packager prints a notice when it ignores one). The packager also prints the active cap and its source on every capped run.
 
-To opt a SINGLE agent out instead, edit the projected value in your installed `dist/<harness>/` copy (e.g. set `model: opus` on one Claude agent .md) -- the edit survives until you re-copy the dist shell.
+To opt a SINGLE agent out instead, edit the projected value in the installed
+harness directory (for example, set `model: opus` on one Claude agent `.md`).
+The edit survives until a later `aidlc init` refresh replaces that
+framework-owned file after reporting the local modification.
 
 ---
 
@@ -179,7 +182,7 @@ Agent display names and example knowledge files are authoritative in each agent'
 ## How to Modify an Agent
 
 - **Change tools**: Add or edit a `tools:` allowlist in frontmatter to narrow the agent; omit it to inherit the full session toolset. A `tools:` list drops inherited MCP tools unless the `mcp__<server>__<tool>` ids are also listed.
-- **Change tier**: Edit `tier:` to `judgment`, `balanced`, or `templated` and regenerate (`bun scripts/package.ts`). To force a specific model on ONE agent in an installed copy instead, edit the projected `model:` in your `dist/<harness>/` agent file (Claude Code accepts aliases, full ids, and `inherit`).
+- **Change tier**: Edit `tier:` to `judgment`, `balanced`, or `templated` and regenerate (`bun scripts/package.ts`). To force a specific model on ONE agent in an installed project instead, edit the projected `model:` in its harness agent file (Claude Code accepts aliases, full ids, and `inherit`).
 - **Change behavior**: Edit the markdown body sections (responsibilities, principles).
 - **Change stage assignments**: Edit both the agent file (Stages Owned section) and the relevant stage files (`core/aidlc-common/stages/`), then regenerate with `bun scripts/package.ts` — the compiled stage graph is derived from stage frontmatter, never hand-edited.
 

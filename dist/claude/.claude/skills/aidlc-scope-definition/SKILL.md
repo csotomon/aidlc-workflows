@@ -22,7 +22,7 @@ that flag without this skill.
 1. Ask the engine for the single-stage directive:
 
    ```bash
-   bun .claude/tools/aidlc-orchestrate.ts next --stage scope-definition --single
+   aidlc __delegate orchestrate next --stage scope-definition --single
    ```
 
    The engine emits one `run-stage` directive for `scope-definition` (carrying the
@@ -34,7 +34,7 @@ that flag without this skill.
 2. When the stage's work is done, commit the single-stage record:
 
    ```bash
-   bun .claude/tools/aidlc-orchestrate.ts report --single --stage scope-definition --result completed
+   aidlc __delegate orchestrate report --single --stage scope-definition --result completed
    ```
 
    This records a STAGE_STARTED / STAGE_COMPLETED pair under a synthetic workflow

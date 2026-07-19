@@ -6,7 +6,7 @@ YAML parser (`parseStageFrontmatter` in `lib.ts`), and the YAML stage
 files all implement against this document.
 
 YAML frontmatter at the top of every stage `.md` is authoritative. The
-build step `bun aidlc-graph.ts compile` regenerates
+build step `aidlc __delegate graph compile` regenerates
 `.kiro/tools/data/stage-graph.json` from the YAML sources; the runtime
 reads the compiled JSON via the unchanged `loadStageGraph()` API at
 `lib.ts:282-289`. The CI drift check `aidlc-graph compile --check` fails

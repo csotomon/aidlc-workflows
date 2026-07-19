@@ -18,8 +18,7 @@
   "toolsSettings": {
     "execute_bash": {
       "allowedCommands": [
-        "bun \\.kiro/tools/.*",
-        "bun \\${?KIRO_PROJECT_DIR}?/\\.kiro/tools/.*",
+        "aidlc .*",
         "date -u .*"
       ],
       "deniedCommands": [

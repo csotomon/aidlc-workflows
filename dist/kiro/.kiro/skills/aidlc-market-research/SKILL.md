@@ -22,7 +22,7 @@ that flag without this skill.
 1. Ask the engine for the single-stage directive:
 
    ```bash
-   bun .kiro/tools/aidlc-orchestrate.ts next --stage market-research --single
+   aidlc __delegate orchestrate next --stage market-research --single
    ```
 
    The engine emits one `run-stage` directive for `market-research` (carrying the
@@ -34,7 +34,7 @@ that flag without this skill.
 2. When the stage's work is done, commit the single-stage record:
 
    ```bash
-   bun .kiro/tools/aidlc-orchestrate.ts report --single --stage market-research --result completed
+   aidlc __delegate orchestrate report --single --stage market-research --result completed
    ```
 
    This records a STAGE_STARTED / STAGE_COMPLETED pair under a synthetic workflow

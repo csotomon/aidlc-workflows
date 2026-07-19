@@ -113,7 +113,7 @@ Architect synthesizes scan results into 9 artifacts:
 Run the read-only tool
 
 ```
-bun .codex/tools/aidlc-utility.ts codekb-path --repo <repo>
+aidlc __delegate utility codekb-path --repo <repo>
 ```
 
 (omit `--repo` for a single/unrecorded repo — the engine resolves the repo name).

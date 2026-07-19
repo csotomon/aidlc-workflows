@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bun .codex/hooks/aidlc-codex-adapter.ts session-start"
+            "command": "aidlc adapter codex session-start"
           }
         ]
       }
@@ -15,7 +15,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bun .codex/hooks/aidlc-codex-adapter.ts mint"
+            "command": "aidlc adapter codex mint"
           }
         ]
       }
@@ -25,7 +25,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bun .codex/hooks/aidlc-codex-adapter.ts reviewer-scope"
+            "command": "aidlc adapter codex reviewer-scope"
           }
         ]
       }
@@ -35,7 +35,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bun .codex/hooks/aidlc-codex-adapter.ts audit-and-sensors"
+            "command": "aidlc adapter codex audit-and-sensors"
           }
         ],
         "matcher": "apply_patch"
@@ -44,7 +44,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bun .codex/hooks/aidlc-codex-adapter.ts state-sync"
+            "command": "aidlc adapter codex state-sync"
           }
         ],
         "matcher": "update_plan"
@@ -53,7 +53,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bun .codex/hooks/aidlc-codex-adapter.ts runtime-compile"
+            "command": "aidlc adapter codex runtime-compile"
           }
         ],
         "matcher": "Bash"
@@ -64,7 +64,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bun .codex/hooks/aidlc-codex-adapter.ts validate-state"
+            "command": "aidlc adapter codex validate-state"
           }
         ]
       }
@@ -74,7 +74,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bun .codex/hooks/aidlc-codex-adapter.ts post-compact"
+            "command": "aidlc adapter codex post-compact"
           }
         ]
       }
@@ -84,7 +84,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bun .codex/hooks/aidlc-codex-adapter.ts log-subagent"
+            "command": "aidlc adapter codex log-subagent"
           }
         ]
       }
@@ -94,7 +94,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bun .codex/hooks/aidlc-codex-adapter.ts stop"
+            "command": "aidlc adapter codex stop"
           }
         ]
       }
