@@ -20,8 +20,14 @@ import emit from "./emit.ts";
 
 const manifest: HarnessManifest = {
   name: "codex",
+  productName: "Codex CLI",
+  initNextStep: "run `codex`, then `$aidlc --doctor`",
   harnessDir: ".codex",
   tierFlavor: "codex",
+  rootIntegrations: [
+    { path: ".gitignore", policy: "managed-block", marker: "gitignore" },
+    { path: "AGENTS.md", policy: "managed-block", marker: "agents" },
+  ],
 
   // Core projection: rules→aidlc-rules, NO session skills (emitted to
   // .agents/skills/ by emit). Persona .md files ARE core (the conductor reads

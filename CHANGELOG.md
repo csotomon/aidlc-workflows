@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.5.0] - 2026-07-17
+
+AI-DLC now has a checksum-verified, self-contained macOS/Linux install channel with project initialization, retained versions, project pins, upgrade, rollback, and offline packages. Existing copy installs remain supported and unchanged in how they are invoked. **Upgrade:** binary users run `install.sh --harness <name>` and then `aidlc init`; copy-install users may continue copying `dist/<harness>/` and running through bun.
+
+* `aidlc init` initializes or refreshes a complete harness projection locally, supports `--dry-run`, exact apply approval with `--plan-token`, `--force`, `--from`, `--harness`, and `--mcp defaults|none`, preserves project-owned method and plugin-composed data, and merges declared root integrations without replacing unrelated content.
+* `aidlc upgrade`, `aidlc rollback`, `aidlc use`, `aidlc versions list|install`, and `aidlc package create|verify` provide transactional machine lifecycle, exact side-by-side versions, commit-ready project pins, and air-gapped release sets.
+* Release assets now include one binary per target, one binary-invocation data archive per harness, `install.sh`, `version.json`, and `checksums.txt`; the checksum set authenticates the manifest before its asset metadata is trusted, and the tag workflow publishes and attests the resulting assets.
+* Release CI executes both musl binaries inside matching Alpine containers before publication instead of treating cross-target format inspection as a smoke run.
+* Install and lifecycle mutations use one lean transaction core with same-filesystem staging, atomic rename-over pointer changes, in-process snapshot rollback, and lazy abandoned-staging cleanup; no startup recovery journal is required on macOS/Linux.
+* Release projections carry native host trust entries for Claude, Kiro CLI, Kiro IDE, and Codex. `install.sh` supports channel-aware download progress, human, quiet, and schema-versioned JSON output plus opt-in transactional PATH profile blocks through `--profile <startup-file>`; it refuses package-manager-owned and mixed-ownership command destinations.
+* Every distribution carries schema-versioned harness identity, projection policy, and version stamps. `dist-release/<harness>/` is committed and drift-guarded beside the existing copy-install `dist/<harness>/`.
+* Public lifecycle exits are disjoint: 0 success, 1 operational failure, 2 usage, 3 unavailable network result, 4 integrity/safety refusal, and 5 action needed.
+* `aidlc doctor --json` reports the same check set as human output, treats bun as optional under the compiled binary, and diagnoses installed-runtime, transaction staging, pin registry, project-stamp, and native host-trust state.
+* Breaking for CI/scripts: release tooling must package `dist-release/` with `bun scripts/package-release.ts`; do not publish `build/binaries/*/runtime/` as standalone release data.
+
 ## [2.4.6] - 2026-07-17
 
 Adds a fifth harness distribution: **opencode** (opencode.ai, verified live on 1.17.18). `dist/opencode/` ships the same deterministic core as every other harness, projected for opencode's native surfaces: skills, subagents, a `/aidlc` command, and a hook-adapter plugin. One layout note: the engine tree ships at `.aidlc/`, not `.opencode/`, because opencode auto-imports `.opencode/tools/*.ts` as custom tool definitions and the engine's CLI scripts would crash the session; the shipped `opencode.json` points opencode's skill discovery at `.aidlc/skills` and carries the method-tree `instructions` glob plus the `bun .aidlc/tools/*` permission allowlist. **Upgrade:** existing installs on other harnesses are unaffected; to run on opencode copy `dist/opencode/` into your project per the README's opencode Quick Start.

@@ -45,14 +45,15 @@ const HOOK_WIRING: Array<{ event: string; matcher?: string; target: string }> = 
   { event: "Stop", target: "stop" },
 ];
 
-const adapterCmd = (harnessDir: string, target: string) =>
+const sourceAdapterCmd = (harnessDir: string, target: string) =>
   `bun ${harnessDir}/hooks/aidlc-codex-adapter.ts ${target}`;
+const releaseAdapterCmd = (target: string) => `aidlc adapter codex ${target}`;
 
 function emitHooksJson(harnessDir: string): string {
   const hooks: Record<string, Array<Record<string, unknown>>> = {};
   for (const { event, matcher, target } of HOOK_WIRING) {
     const group: Record<string, unknown> = {
-      hooks: [{ type: "command", command: adapterCmd(harnessDir, target) }],
+      hooks: [{ type: "command", command: sourceAdapterCmd(harnessDir, target) }],
     };
     if (matcher) group.matcher = matcher;
     hooks[event] ??= [];
@@ -123,14 +124,18 @@ status_line = ["model-with-reasoning", "git-branch", "task-progress", "context-u
 `;
 }
 
-function emitDefaultRules(harnessDir: string): string {
+export function emitDefaultRules(harnessDir: string, release = false): string {
+  const runtimeRules = release
+    ? `# Native runtime allowlist: the release projection invokes the self-contained binary.
+prefix_rule(pattern = ["aidlc"], decision = "allow")`
+    : `# bun tool allowlist: the deterministic core runs via these exact prefixes.
+prefix_rule(pattern = ["bun", "${harnessDir}/tools/"], decision = "allow")
+prefix_rule(pattern = ["bun", "${harnessDir}/hooks/"], decision = "allow")`;
   return `# dist/codex shipped permission rules (Starlark) — ${harnessDir}/rules/ is
 # Codex's NATIVE rules dir (this file), distinct from the AIDLC markdown rule
 # layers at ${harnessDir}/aidlc-rules/ (D-10 rename).
 #
-# bun tool allowlist: the deterministic core runs via these exact prefixes.
-prefix_rule(pattern = ["bun", "${harnessDir}/tools/"], decision = "allow")
-prefix_rule(pattern = ["bun", "${harnessDir}/hooks/"], decision = "allow")
+${runtimeRules}
 
 # Git allow-rules (S9d): workspace-write keeps .git read-only in-sandbox and
 # routes git writes through escalation; these prefix rules pre-approve the
@@ -184,6 +189,7 @@ export function trustEntries(
   projectDir: string,
   hooksJsonPath?: string,
   harnessDir = ".codex",
+  release = false,
 ): string {
   // A supplied hooks path is already the Codex trust identity: preserve it
   // exactly. For the default, choose the path implementation from the project
@@ -201,19 +207,28 @@ export function trustEntries(
     const snake = SNAKE[event];
     const idx = counters[snake] ?? 0;
     counters[snake] = idx + 1;
-    const hash = trustHash(snake, adapterCmd(harnessDir, target));
+    const command = release ? releaseAdapterCmd(target) : sourceAdapterCmd(harnessDir, target);
+    const hash = trustHash(snake, command);
     state[`${path}:${snake}:${idx}:0`] = { trusted_hash: hash };
   }
   return stringify({ hooks: { state } });
 }
 
-function emitTrustSeed(harnessDir: string): string {
+export function emitTrustSeed(harnessDir: string, release = false): string {
+  const recipe = release
+    ? `# This release-channel template hashes the native \`aidlc adapter codex ...\`
+# commands in hooks.json. Start one interactive Codex session and choose
+# "Trust all and continue", or replace <PROJECT_DIR> in the complete entry set
+# below before merging it into $CODEX_HOME/config.toml.
+`
+    : `# From an AI-DLC source checkout, install the pinned serializer first:
+#   bun install --frozen-lockfile
+# Then generate ready-to-paste entries:
+#   bun scripts/package.ts codex trust --project <abs-dir> [--hooks-json <abs-path>]
+`;
   return (
     `# dist/codex hook-trust pre-seed (S9a) — TEMPLATE.\n` +
-    `# From an AI-DLC source checkout, install the pinned serializer first:\n` +
-    `#   bun install --frozen-lockfile\n` +
-    `# Then generate ready-to-paste entries:\n` +
-    `#   bun scripts/package.ts codex trust --project <abs-dir> [--hooks-json <abs-path>]\n` +
+    recipe +
     `# Paste the complete stdout into the USER config.toml ($CODEX_HOME/config.toml).\n` +
     `# If entries for that hooks.json path already exist, replace the full set;\n` +
     `# appending a second set creates invalid TOML. The hash covers the\n` +
@@ -221,7 +236,7 @@ function emitTrustSeed(harnessDir: string): string {
     `# only the key changes per install. Codex then runs the hooks without a\n` +
     `# TUI trust pass (the --dangerously-bypass-hook-trust flag does NOT fire\n` +
     `# untrusted hooks at 0.137-0.139; never rely on it).\n\n` +
-    trustEntries("<PROJECT_DIR>", undefined, harnessDir)
+    trustEntries("<PROJECT_DIR>", undefined, harnessDir, release)
   );
 }
 

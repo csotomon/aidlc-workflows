@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 const MODULE_TOOLS_DIR = dirname(fileURLToPath(import.meta.url));
 const MODULE_HARNESS_ROOT = join(MODULE_TOOLS_DIR, "..");
 const KNOWN_HARNESSES = [".claude", ".kiro", ".codex"] as const;
+const PROJECTED_INVOKE = "bun .codex/tools/aidlc.ts";
 
 export interface HarnessLocation {
   harnessDir?: string;
@@ -23,6 +24,27 @@ export function compiledExecutable(): string | null {
   return isCompiledExecutable() ? process.execPath : null;
 }
 
+export function aidlcInvocation(): string {
+  if (isCompiledExecutable()) return "aidlc";
+  if (!PROJECTED_INVOKE.startsWith("{{")) return PROJECTED_INVOKE;
+  return `bun ${runtimeHarnessDir()}/tools/aidlc.ts`;
+}
+
+export function aidlcToolInvocation(
+  route: string,
+  sourceTool?: string,
+  qualifiedSource = true,
+): string {
+  const invoke = aidlcInvocation();
+  if (!invoke.startsWith("bun ")) return `${invoke} __delegate ${route}`;
+  const tool = sourceTool ??
+    route.replace(/([a-z0-9])([A-Z])/g, "$1-$2").toLowerCase();
+  const path = qualifiedSource
+    ? `${runtimeHarnessDir()}/tools/aidlc-${tool}.ts`
+    : `aidlc-${tool}.ts`;
+  return `bun ${path}`;
+}
+
 function explicitRuntimeProjectDir(): string | null {
   const argv = process.argv.slice(1);
   const index = argv.indexOf("--project-dir");
@@ -31,7 +53,8 @@ function explicitRuntimeProjectDir(): string | null {
       ? argv[index + 1]
       : resolve(process.cwd(), argv[index + 1]);
   }
-  const explicit = process.env.AIDLC_PROJECT_DIR ?? process.env.CLAUDE_PROJECT_DIR;
+  const explicit = process.env.AIDLC_PROJECT_DIR ??
+    process.env.CLAUDE_PROJECT_DIR ?? process.env.KIRO_PROJECT_DIR;
   return explicit
     ? isAbsolute(explicit) ? explicit : resolve(process.cwd(), explicit)
     : null;

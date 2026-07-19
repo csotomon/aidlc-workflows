@@ -6,14 +6,10 @@
 // covers: function:harnessDir
 //
 // WHY THIS GUARD EXISTS. The deterministic engine emits `print` directives whose
-// `message` tells the conductor to run a tool, e.g.
-//   `Run \`bun ${harnessDir()}/tools/aidlc-utility.ts init --scope ...\` ...`
-// The .ts tools are BYTE-COPIED into every harness dist (dist/claude/.claude/,
-// dist/kiro/.kiro/, dist/codex/.codex/) — harnessDir() resolves the right tree
-// at RUN time. A directive that hardcodes `bun .claude/tools/aidlc-*.ts` instead
-// would ship verbatim into the Kiro and Codex trees and tell their conductors to
-// run a tool at a path that does not exist there — the workflow-birth /
-// scope-change / config-change / jump directives would fail on 2 of 3 harnesses.
+// `message` tells the conductor to run a tool. aidlcToolInvocation() selects the
+// projected command: a harness-local Bun tool in copy installs, or an `aidlc
+// __delegate` route in native release installs. A directive that hardcodes a
+// harness path would fail in other harnesses and bypass the release channel.
 //
 // This is the exact CRIT-class seam bug the dist-unified review found for the
 // rules dir (rulesSubdir). The merge-endgame re-homed v0.6.8's birthPrintDirective
@@ -79,15 +75,15 @@ describe("t153 engine directive harness seam — no hardcoded .claude/tools in c
     expect(stray).toEqual([]);
   });
 
-  test("harnessDir() IS the idiom the engine's directive strings use (seam in active use)", () => {
-    // Positive control: the engine MUST build at least some directive through
-    // harnessDir() — if this drops to zero, a refactor has bypassed the seam and
-    // the negative test above would be vacuously green.
+  test("aidlcToolInvocation() is the active directive invocation seam", () => {
+    // Positive control: engine directives MUST call the channel-aware helper.
+    // Exclude its declaration so this proves call sites remain in active use.
     let seamUses = 0;
     for (const scanDir of SCAN_DIRS) {
       for (const file of walkTs(scanDir)) {
+        if (file.endsWith("aidlc-runtime-paths.ts")) continue;
         const src = readFileSync(file, "utf-8");
-        const m = src.match(/bun \$\{harnessDir\(\)\}\/tools\//g);
+        const m = src.match(/aidlcToolInvocation\(/g);
         if (m) seamUses += m.length;
       }
     }

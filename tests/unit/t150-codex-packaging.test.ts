@@ -9,9 +9,8 @@
 //       Drift fails with the regen command — same UX as aidlc-runner-gen
 //       check and kiro's t141.
 //   (2) Core parity: every .ts under dist/codex/.codex/tools/ and the core
-//       hook bodies are BYTE-IDENTICAL to their dist/claude sources (the
-//       architecture-B invariant: the generator may transform prose/data
-//       paths, never code).
+//       hook bodies are BYTE-IDENTICAL to their dist/claude sources, except
+//       for aidlc-runtime-paths.ts's single projected invocation constant.
 //   (3) The S9a trust-hash recipe in the packager reproduces the hash the
 //       spike recorded live (findings §S9a) — the installer pre-seed is only
 //       sound while this stays true.
@@ -87,10 +86,11 @@ describe("t150 dist/codex packaging parity + drift guard", () => {
     expect(r.stdout).toContain("in sync");
   });
 
-  test("2: every packaged .ts file is byte-identical to its dist/claude source (code is never transformed)", () => {
+  test("2: packaged .ts files differ only at the declared invocation projection", () => {
     // tools/ + hooks/ carry the deterministic core. The codex adapter
     // (authored shell, aidlc-codex-*.ts) has no claude counterpart and is
-    // exempt; everything else must match its source byte-for-byte.
+    // exempt. aidlc-runtime-paths.ts projects {{INVOKE}} once per harness;
+    // normalize that constant before enforcing byte parity.
     const divergent: string[] = [];
     for (const sub of ["tools", "hooks"]) {
       const dstDir = join(CODEX_DST, sub);
@@ -99,7 +99,19 @@ describe("t150 dist/codex packaging parity + drift guard", () => {
         if (/aidlc-codex-[^/]+\.ts$/.test(file)) continue;
         const rel = file.slice(dstDir.length + 1);
         const src = join(CLAUDE_SRC, sub, rel);
-        if (!readFileSync(file).equals(readFileSync(src))) divergent.push(`${sub}/${rel}`);
+        let dstBytes = readFileSync(file);
+        const srcBytes = readFileSync(src);
+        if (sub === "tools" && rel === "aidlc-runtime-paths.ts") {
+          const dstText = dstBytes.toString("utf-8");
+          expect(dstText).toContain('const PROJECTED_INVOKE = "bun .codex/tools/aidlc.ts";');
+          dstBytes = Buffer.from(
+            dstText.replace(
+              'const PROJECTED_INVOKE = "bun .codex/tools/aidlc.ts";',
+              'const PROJECTED_INVOKE = "bun .claude/tools/aidlc.ts";',
+            ),
+          );
+        }
+        if (!dstBytes.equals(srcBytes)) divergent.push(`${sub}/${rel}`);
       }
     }
     expect(divergent).toEqual([]);

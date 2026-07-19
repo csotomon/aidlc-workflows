@@ -19,16 +19,21 @@ hook wiring, activation) differs.
 
 - **Kiro IDE**, signed in
 - **Claude Opus 4.8** selected as the chat model (see the note above)
-- **bun** on your PATH (`curl -fsSL https://bun.sh/install | bash`)
+- **bun** on your PATH for the copy channel
+  (`curl -fsSL https://bun.sh/install | bash`). The native channel is
+  self-contained.
 
 > [!TIP]
-> bun must be on the PATH that *non-interactive* shells see — that's what the
-> IDE uses to run a hook or tool. Those shells read `~/.zshenv` (zsh) or
-> `~/.bashrc` (bash), not `~/.zshrc`, but the bun installer writes to
-> `~/.zshrc`. If `which bun` works in your terminal yet hooks can't find bun,
-> copy the `BUN_INSTALL`/`PATH` export into `~/.zshenv` (or `~/.bashrc`).
+> For a copy install, bun must be on the PATH that *non-interactive* shells see
+> — that's what the IDE uses to run a hook or tool. Those shells read
+> `~/.zshenv` (zsh) or `~/.bashrc` (bash), not `~/.zshrc`, but the bun
+> installer writes to `~/.zshrc`. If `which bun` works in your terminal yet
+> hooks can't find bun, copy the `BUN_INSTALL`/`PATH` export into
+> `~/.zshenv` (or `~/.bashrc`).
 
 ## Install
+
+### Copy channel
 
 ```bash
 cp -r dist/kiro-ide/.kiro your-project/.kiro
@@ -40,6 +45,23 @@ The `aidlc/` directory is the workspace shell — it ships the pre-built
 `aidlc/spaces/default/memory/` method tree the engine reads. It is a **sibling**
 of `.kiro/`, so copy it separately (or copy the whole `dist/kiro-ide/` tree at
 once). `/aidlc --doctor` fails its "workspace shell ready" check if it is missing.
+
+### Native macOS/Linux channel
+
+```bash
+curl -fsSL https://github.com/awslabs/aidlc-workflows/releases/latest/download/install.sh \
+  | sh -s -- --harness kiro-ide
+cd your-project
+aidlc init
+aidlc doctor
+```
+
+This channel verifies release checksums and does not require Bun, Node.js, or
+git for AI-DLC itself. `aidlc init` projects the IDE shell before the project
+is opened and merges the native `aidlc *` trust entry into
+`.vscode/settings.json` without replacing user-owned settings. Use
+`--from <release-directory> --offline` with the installer for an air-gapped
+package.
 
 Open `your-project/` in Kiro IDE. The install ships:
 
@@ -58,8 +80,9 @@ Identical to the Claude Code harness: `/aidlc <description>` starts a
 workflow, `/aidlc --status` reports position, `/aidlc --doctor`, `--stage`,
 `--phase`, `--depth`, `--test-strategy` all work, and the
 per-stage (`/aidlc-application-design`) and per-scope (`/aidlc-feature`) runner
-skills are installed. There is no init command — the shipped shell scaffolds
-the workspace and the first intent auto-births on your first `/aidlc`.
+skills are installed. A copy install needs no init command because the copied
+tree already contains the shell; a native install runs `aidlc init` once. The
+first intent auto-births on your first `/aidlc` in either channel.
 
 ## How hooks work on Kiro IDE
 

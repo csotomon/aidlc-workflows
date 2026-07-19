@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "distribution": "claude",
+  "productName": "Claude Code",
+  "initNextStep": "open Claude Code in this project and run `/aidlc --doctor`",
+  "harnessDir": ".claude",
+  "managedDirectories": [
+    ".claude",
+    "aidlc"
+  ],
+  "rootIntegrations": [
+    {
+      "path": ".gitignore",
+      "policy": "managed-block",
+      "marker": "gitignore"
+    },
+    {
+      "path": ".mcp.json",
+      "policy": "json-map",
+      "jsonKey": "mcpServers",
+      "optional": true
+    }
+  ]
+}

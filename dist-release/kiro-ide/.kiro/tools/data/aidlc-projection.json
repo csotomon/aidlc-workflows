@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "distribution": "kiro-ide",
+  "productName": "Kiro IDE",
+  "initNextStep": "open this project in Kiro IDE, then run `/aidlc --doctor`",
+  "harnessDir": ".kiro",
+  "managedDirectories": [
+    ".kiro",
+    "aidlc"
+  ],
+  "rootIntegrations": [
+    {
+      "path": ".gitignore",
+      "policy": "managed-block",
+      "marker": "gitignore"
+    },
+    {
+      "path": "AGENTS.md",
+      "policy": "managed-block",
+      "marker": "agents"
+    },
+    {
+      "path": ".vscode/settings.json",
+      "policy": "json-array",
+      "jsonKey": "kiroAgent.trustedCommands"
+    }
+  ]
+}

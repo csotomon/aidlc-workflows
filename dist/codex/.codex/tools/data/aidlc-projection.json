@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "distribution": "codex",
+  "productName": "Codex CLI",
+  "initNextStep": "run `codex`, then `$aidlc --doctor`",
+  "harnessDir": ".codex",
+  "managedDirectories": [
+    ".agents",
+    ".codex",
+    "aidlc"
+  ],
+  "rootIntegrations": [
+    {
+      "path": ".gitignore",
+      "policy": "managed-block",
+      "marker": "gitignore"
+    },
+    {
+      "path": "AGENTS.md",
+      "policy": "managed-block",
+      "marker": "agents"
+    }
+  ]
+}

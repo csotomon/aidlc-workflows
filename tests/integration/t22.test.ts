@@ -64,7 +64,7 @@ const DRIVE_TIMEOUT_MS = Math.max(120_000, TEST_TIMEOUT_MS - 15_000);
 
 // Known-answer doctor strings, read from the shipped handler (see header).
 const DOCTOR_HEADER = "AI-DLC Health Check";
-const DOCTOR_BUN_LABEL = "bun installed (required for CLI tools and hooks)";
+const DOCTOR_BUN_LABEL = "bun installed (required for copy-install CLI tools and hooks)";
 const DOCTOR_HOOK_LABEL = "aidlc-audit-logger.ts present";
 // handleDoctor emits a separate `${h}.ts present` line per hook (utility.ts:356);
 // the .sh checked BOTH audit-logger (tests 1,4) AND session-start (tests 2,5),
@@ -133,7 +133,7 @@ describe("t22 /aidlc --doctor (SDK port)", () => {
         // settings check (was .sh tests 3,6):
         assertToolResultContains(r, "Bash", DOCTOR_SETTINGS_LABEL);
 
-        // The footer shape "N passed, M failed" is verbatim tool stdout
+        // The footer shape "N passed, W warnings, M failed" is verbatim tool stdout
         // (utility.ts:1371) — a structure the LLM prose does not reliably
         // reproduce. Locate it in the SAME Bash tool_result that carried the
         // header (so an unrelated Bash call can't satisfy it).
@@ -142,7 +142,7 @@ describe("t22 /aidlc --doctor (SDK port)", () => {
         );
         expect(doctorCall).toBeDefined();
         expect(doctorCall?.isError).toBe(false);
-        expect(doctorCall!.resultText).toMatch(/\d+ passed, \d+ failed/);
+        expect(doctorCall!.resultText).toMatch(/\d+ passed, \d+ warnings, \d+ failed/);
 
         // .sh test 8: audit file grew. Re-expressed on auditEvents: the doctor
         // appends exactly HEALTH_CHECKED, so the post-run log must contain it

@@ -173,7 +173,7 @@ The user-facing walk-through (with a worked example) is in [Rules and the Learni
 
 | Section | Contents |
 |---------|----------|
-| Prerequisites | `bun` (only runtime dependency); `mkdir`-based locking |
+| Prerequisites | Copy channel: `bun`; native release channel: self-contained `aidlc`; atomic filesystem locking |
 | AI-DLC Structure | Skill, agent, rules, knowledge, and hook locations |
 | Conventions | Artifacts go to the intent's record dir under `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/`; application code goes to workspace root |
 | Session Resumption | Check for `aidlc-state.md` on startup, offer resume options |

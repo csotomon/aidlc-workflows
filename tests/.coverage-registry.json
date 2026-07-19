@@ -5147,10 +5147,6 @@
           "mechanism": "cli"
         },
         {
-          "file": "tests/unit/t231-handler-additions.test.ts",
-          "mechanism": "cli"
-        },
-        {
           "file": "tests/unit/t27.test.ts",
           "mechanism": "cli"
         }

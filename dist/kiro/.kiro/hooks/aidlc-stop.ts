@@ -105,6 +105,7 @@ import {
   stopHookDir,
   harnessDir,
 } from "../tools/aidlc-lib.ts";
+import { aidlcToolInvocation } from "../tools/aidlc-runtime-paths.ts";
 
 const HOOK_NAME = "stop";
 
@@ -766,11 +767,11 @@ function continuationReason(kind: string, stage: string): string {
   return (
     `The AIDLC workflow has a pending step (a ${kind} directive${where}). ` +
     "You haven't finished the forwarding loop yet. Run " +
-    `\`bun ${harnessDir()}/tools/aidlc-orchestrate.ts next\`, act on the directive it ` +
+    `\`${aidlcToolInvocation("orchestrate")} next\`, act on the directive it ` +
     "emits, then run `aidlc-orchestrate report --stage <stage> --result <outcome>` to commit " +
     "the transition. Repeat until the engine answers `done`. " +
     "If instead you mean to pause this workflow for now (and resume in a later " +
-    `session), run \`bun ${harnessDir()}/tools/aidlc-orchestrate.ts park\` to park it ` +
+    `session), run \`${aidlcToolInvocation("orchestrate")} park\` to park it ` +
     "cleanly at this inter-stage boundary - never mark stages complete just to end the turn."
   );
 }

@@ -64,11 +64,37 @@ export type OnboardingSpec = {
   fills: OnboardingFills;
 };
 
+export type RootIntegration = {
+  /** Project-root path emitted by this distribution. */
+  path: string;
+  /** Merge policy used by `aidlc init`; never inferred from the filename. */
+  policy: "managed-block" | "json-map" | "json-array" | "whole-file";
+  /** Stable marker identity for managed-block integrations. */
+  marker?: string;
+  /** Top-level object key merged for json-map integrations. */
+  jsonKey?: string;
+  /** Optional integrations may be omitted by an init mode such as --mcp none. */
+  optional?: boolean;
+};
+
+export type ReleaseRootIntegration = RootIntegration & {
+  /** Authored file below harness/<name>/ copied only into dist-release/<name>/. */
+  src: string;
+};
+
 export type HarnessManifest = {
   /** Harness name; matches the dist/<name>/ and harness/<name>/ dir. */
   name: string;
+  /** User-facing product name used by lifecycle output. */
+  productName: string;
+  /** Exact host action printed after `aidlc init` completes. */
+  initNextStep: string;
   /** The harness directory the token substitutes to (".claude" | ".kiro" | ".codex" | ".aidlc"). */
   harnessDir: string;
+  /** Explicit project-root reconciliation policies consumed by `aidlc init`. */
+  rootIntegrations: RootIntegration[];
+  /** Binary-channel-only project-root integrations such as host trust seeds. */
+  releaseRootIntegrations?: ReleaseRootIntegration[];
   /**
    * Which tier-projection flavor this harness's agent surfaces use
    * (core/tools/aidlc-tiers.ts TIER_PROJECTIONS column). Declared here so a

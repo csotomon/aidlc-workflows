@@ -70,11 +70,9 @@ const DEFAULT_TIMEOUT_SECONDS = 60;
 const DEFAULT_TIMEOUT_GRACE_MS = 100;
 
 // Resolve sibling per-sensor script paths relative to THIS file's location,
-// not cwd. Mirrors aidlc-bolt.ts:84's spawnSibling pattern. The manifest
-// `command:` is `bun <harness>/tools/aidlc-sensor-<id>.ts` — the dispatcher
-// extracts the basename and resolves it next to itself, then spawns bun
-// with cwd=projectDir so the script's own file I/O resolves under the
-// user's project.
+// not cwd. The copy projection names `bun <harness>/tools/aidlc-sensor-<id>.ts`;
+// the release projection names `aidlc __delegate sensor-<id>`. Both resolve to
+// the same bundled module identity.
 const __FILE_DIR = dirname(fileURLToPath(import.meta.url));
 
 // --- Types ---
@@ -127,8 +125,8 @@ function dispatchError(msg: string): never {
 
 // --- Sibling-script resolver ---
 //
-// Manifest `command:` is `bun <harness>/tools/aidlc-sensor-<id>.ts`. The
-// dispatcher extracts the .ts basename and resolves it next to itself.
+// The dispatcher extracts either the .ts basename or the native delegate name
+// and resolves it next to itself.
 // This decouples script discovery from cwd — works in tests where
 // projectDir doesn't carry a .claude/tools/ tree, AND in production where
 // it does. Sibling resolution mirrors aidlc-bolt.ts:84.
@@ -144,14 +142,18 @@ function resolveScriptPath(command: string): string {
 	const tokens = command.trim().split(/\s+/);
 	// Find the first .ts token (drops the "bun" prefix or any flags).
 	const tsToken = tokens.find((t) => t.endsWith(".ts"));
-	if (!tsToken) {
+	const delegateIndex = tokens.indexOf("__delegate");
+	const nativeDelegate = delegateIndex >= 0 ? tokens[delegateIndex + 1] : undefined;
+	if (!tsToken && !nativeDelegate?.startsWith("sensor-")) {
 		dispatchError(`manifest command lacks a .ts script: "${command}"`);
 	}
 	// String.split always returns a non-empty array, so the last element
 	// is always defined — indexed access keeps the basename typed as
 	// string without a non-null assertion.
-	const parts = tsToken.split("/");
-	const basename = parts[parts.length - 1];
+	const parts = tsToken?.split("/") ?? [];
+	const basename = tsToken
+		? parts[parts.length - 1]
+		: `aidlc-${nativeDelegate}.ts`;
 	const scriptDir = process.env.AIDLC_SENSOR_SCRIPT_DIR
 		?? (compiledExecutable() ? resolveHarnessPath(["tools"]) : __FILE_DIR);
 	return join(scriptDir, basename);

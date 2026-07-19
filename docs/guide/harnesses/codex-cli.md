@@ -12,8 +12,8 @@ never hand-edit it (the drift guard fails CI).
 - **Codex CLI ≥ 0.139.0** — earlier releases do not surface the real agent
   role in subagent hook payloads and do not resolve hyphenated agent TOMLs.
   `/aidlc --doctor` enforces the pin. Check with `codex --version`.
-- **bun** — same requirement as the Claude harness; every tool and hook runs
-  via bun.
+- **bun** for the copy channel; its tools and hooks run through Bun. The
+  native channel is self-contained.
 - **A model provider** — the shipped `config.toml` defaults to **Amazon
   Bedrock** (`openai.gpt-5.5`; agents on `openai.gpt-5.4`). Set the AWS
   profile/region in `[model_providers.amazon-bedrock.aws]`. For OpenAI auth,
@@ -21,6 +21,8 @@ never hand-edit it (the drift guard fails CI).
   Bedrock; the market-research stage degrades gracefully.
 
 ## Install
+
+### Copy channel
 
 1. Copy the distribution into your project (which must be a **git
    repository** — Codex only discovers a project `.codex/hooks.json` inside
@@ -84,6 +86,27 @@ never hand-edit it (the drift guard fails CI).
    ```bash
    bun .codex/tools/aidlc-utility.ts doctor
    ```
+
+### Native macOS/Linux channel
+
+```bash
+curl -fsSL https://github.com/awslabs/aidlc-workflows/releases/latest/download/install.sh \
+  | sh -s -- --harness codex
+cd your-project
+aidlc init
+aidlc doctor
+codex
+```
+
+This channel verifies release checksums and does not require Bun or Node.js.
+The release projection wires hooks through `aidlc adapter codex ...` and
+ships a `trust-seed.toml` template with matching hashes. Either choose
+**Trust all and continue** in the first Codex session, or replace
+`<PROJECT_DIR>` in that template and merge its complete `[hooks.state]` set
+into `$CODEX_HOME/config.toml`; the source-checkout trust generator used by
+copy installs is not required. Merge the generated `.codex/config.toml`
+settings into your user config as needed. For an air-gapped install, use
+`install.sh --from <release-directory> --offline --harness codex`.
 
 ## Use
 

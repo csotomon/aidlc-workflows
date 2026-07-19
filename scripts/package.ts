@@ -57,6 +57,7 @@ import {
   readEnvCap,
   readMemoryCap,
 } from "../core/tools/aidlc-tiers.ts";
+import { AIDLC_VERSION } from "../core/tools/aidlc-version.ts";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const CORE_ROOT = join(REPO_ROOT, "core");
@@ -96,6 +97,7 @@ if (TIER_CAP) {
 // The shared onboarding-doc skeleton, rendered per harness (scripts/onboarding.ts).
 const ONBOARDING_SKELETON = join(CORE_ROOT, "templates", "onboarding.md");
 const HARNESS_TOKEN = /\{\{HARNESS_DIR\}\}/g;
+const INVOKE_TOKEN = /\{\{INVOKE\}\}/g;
 
 // Harnesses the packager builds = every harness/<name>/ that carries a
 // manifest.ts. DISCOVERED, not hardcoded: adding harness #N is one harness/<n>/
@@ -110,12 +112,11 @@ function discoverHarnessNames(): string[] {
 }
 
 // ---------------------------------------------------------------------------
-// Transform: the ONE class. Token substitution on .md prose; .json + .ts copied
-// verbatim (compiled JSON is regenerated per-tree by graph compile, never
-// token-bearing in core; .ts uses the runtime harnessDir() seam).
+// Transform: the ONE class. Token substitution on authored prose and the
+// TypeScript invocation seam; compiled JSON is regenerated per tree.
 // ---------------------------------------------------------------------------
-function substituteToken(s: string, harnessDir: string): string {
-  return s.replace(HARNESS_TOKEN, harnessDir);
+function substituteToken(s: string, harnessDir: string, invoke = `bun ${harnessDir}/tools/aidlc.ts`): string {
+  return s.replace(HARNESS_TOKEN, harnessDir).replace(INVOKE_TOKEN, invoke);
 }
 
 // Rewrite in-prose `<harnessDir>/rules/` → `<harnessDir>/<rulesRename>/` for a
@@ -241,12 +242,21 @@ function transform(
   harnessDir: string,
   rulesRename: string | null,
   harness?: "claude" | "codex" | "kiro" | "opencode",
+  invoke = `bun ${harnessDir}/tools/aidlc.ts`,
 ): Buffer {
   if (srcPath.endsWith(".md")) {
-    let s = substituteToken(content.toString("utf-8"), harnessDir);
+    let s = substituteToken(content.toString("utf-8"), harnessDir, invoke);
     s = applyRulesRename(s, harnessDir, rulesRename);
-    if (harness) s = projectTierFrontmatter(s, srcPath, harness);
+    if (harness) {
+      s = projectTierFrontmatter(s, srcPath, harness);
+    }
     return Buffer.from(s, "utf-8");
+  }
+  if (srcPath.endsWith(".ts")) {
+    return Buffer.from(
+      content.toString("utf-8").replace(INVOKE_TOKEN, invoke),
+      "utf-8",
+    );
   }
   return content;
 }
@@ -334,6 +344,8 @@ const COMPILED_DATA = ["tools/data/stage-graph.json", "tools/data/scope-grid.jso
 // runtime reads tools/data/harness.json to learn this harness's rules-subdir
 // without a hardcoded map. Derived from the manifest, written into every tree.
 const HARNESS_DATA = "tools/data/harness.json";
+const STAMP_DATA = "tools/data/aidlc-stamp.json";
+const PROJECTION_DATA = "tools/data/aidlc-projection.json";
 
 // The relocated method ("memory") — the single hand-editable source of truth
 // for the layered practices (org/team/project + phases/). It is HARNESS-NEUTRAL
@@ -380,10 +392,61 @@ const ACTIVE_SPACE_VALUE = "default\n";
 // leaves room for future per-harness runtime facts. Pretty-printed + trailing
 // newline so the committed file is diff-friendly and stable under --check.
 function writeHarnessData(treeRoot: string, m: HarnessManifest): void {
-  const data = { harnessDir: m.harnessDir, rulesSubdir: m.rulesRename ?? "rules" };
+  const data = {
+    schemaVersion: 1,
+    distribution: m.name,
+    productName: m.productName,
+    initNextStep: m.initNextStep,
+    harnessDir: m.harnessDir,
+    rulesSubdir: m.rulesRename ?? "rules",
+  };
   const dst = join(treeRoot, HARNESS_DATA);
   mkdirSync(dirname(dst), { recursive: true });
   writeFileSync(dst, `${JSON.stringify(data, null, 2)}\n`);
+}
+
+function writeProjectionData(outRoot: string, treeRoot: string, m: HarnessManifest): void {
+  const rootIntegrationPaths = new Set(m.rootIntegrations.map((item) => item.path));
+  if (rootIntegrationPaths.size !== m.rootIntegrations.length) {
+    throw new Error(`[${m.name}] duplicate root integration path`);
+  }
+  for (const integration of m.rootIntegrations) {
+    if (!existsSync(join(outRoot, integration.path))) {
+      throw new Error(`[${m.name}] root integration is not projected: ${integration.path}`);
+    }
+  }
+  const managedDirectories = readdirSync(outRoot)
+    .filter((entry) => statSync(join(outRoot, entry)).isDirectory())
+    .filter((entry) => !rootIntegrationPaths.has(entry))
+    .sort();
+  const allowedTopLevel = new Set([
+    ...managedDirectories,
+    ...m.rootIntegrations.map((item) => item.path.split("/")[0]),
+  ]);
+  const unclassified = readdirSync(outRoot)
+    .filter((entry) => !allowedTopLevel.has(entry))
+    .sort();
+  if (unclassified.length > 0) {
+    throw new Error(`[${m.name}] unclassified projection entries: ${unclassified.join(", ")}`);
+  }
+  const projection = {
+    schemaVersion: 1,
+    distribution: m.name,
+    productName: m.productName,
+    initNextStep: m.initNextStep,
+    harnessDir: m.harnessDir,
+    managedDirectories,
+    rootIntegrations: m.rootIntegrations,
+  };
+  const stamp = {
+    schemaVersion: 1,
+    frameworkVersion: AIDLC_VERSION,
+    distribution: m.name,
+    harnessDir: m.harnessDir,
+  };
+  mkdirSync(join(treeRoot, "tools", "data"), { recursive: true });
+  writeFileSync(join(treeRoot, PROJECTION_DATA), `${JSON.stringify(projection, null, 2)}\n`);
+  writeFileSync(join(treeRoot, STAMP_DATA), `${JSON.stringify(stamp, null, 2)}\n`);
 }
 
 // Emit the method ("memory") tree at the WORKSPACE ROOT of the dist tree
@@ -397,6 +460,7 @@ function emitMemory(
   harnessDir: string,
   rulesRename: string | null,
   harness: "claude" | "codex" | "kiro" | "opencode",
+  invoke: string,
 ): void {
   const srcDir = join(CORE_ROOT, MEMORY_SRC);
   if (!existsSync(srcDir)) return;
@@ -404,7 +468,7 @@ function emitMemory(
     const rel = relative(srcDir, file);
     const outPath = join(outRoot, MEMORY_DST, rel);
     mkdirSync(dirname(outPath), { recursive: true });
-    writeFileSync(outPath, transform(file, readFileSync(file), harnessDir, rulesRename, harness));
+    writeFileSync(outPath, transform(file, readFileSync(file), harnessDir, rulesRename, harness, invoke));
   }
 }
 
@@ -420,6 +484,7 @@ function emitMemorySeed(
   harnessDir: string,
   rulesRename: string | null,
   harness: "claude" | "codex" | "kiro" | "opencode",
+  invoke: string,
 ): void {
   const srcDir = join(CORE_ROOT, MEMORY_SRC);
   if (!existsSync(srcDir)) return;
@@ -427,7 +492,7 @@ function emitMemorySeed(
     const rel = relative(srcDir, file);
     const outPath = join(treeRoot, MEMORY_SEED_DST, rel);
     mkdirSync(dirname(outPath), { recursive: true });
-    writeFileSync(outPath, transform(file, readFileSync(file), harnessDir, rulesRename, harness));
+    writeFileSync(outPath, transform(file, readFileSync(file), harnessDir, rulesRename, harness, invoke));
   }
 }
 
@@ -472,7 +537,12 @@ function seedCompiledData(treeRoot: string, seedFrom: string): void {
 // `seedFrom` is the committed <harnessDir> tree the compiled-data seed is read
 // from (the same tree under --check; a pre-sweep stash under write).
 // ---------------------------------------------------------------------------
-function buildTree(m: HarnessManifest, outRoot: string, seedFrom: string): string[] {
+function buildTree(
+  m: HarnessManifest,
+  outRoot: string,
+  seedFrom: string,
+  invoke = `bun ${m.harnessDir}/tools/aidlc.ts`,
+): string[] {
   const harnessDir = m.harnessDir;
   const treeRoot = join(outRoot, harnessDir);
   // Every harness projects onto ONE of the three flavors the tier module
@@ -495,7 +565,14 @@ function buildTree(m: HarnessManifest, outRoot: string, seedFrom: string): strin
       const rel = relative(srcDir, file);
       const outPath = join(treeRoot, finalDst, rel);
       mkdirSync(dirname(outPath), { recursive: true });
-      let out = transform(file, readFileSync(file), harnessDir, m.rulesRename, harnessKind);
+      let out = transform(
+        file,
+        readFileSync(file),
+        harnessDir,
+        m.rulesRename,
+        harnessKind,
+        invoke,
+      );
       // Manifest keys are POSIX; normalize the platform separator so the
       // lookup works on Windows too.
       const harnessRel = join(finalDst, rel).split(sep).join("/");
@@ -530,7 +607,14 @@ function buildTree(m: HarnessManifest, outRoot: string, seedFrom: string): strin
     if (!existsSync(srcPath)) continue;
     const outPath = projectRoot ? join(outRoot, dst) : join(treeRoot, dst);
     mkdirSync(dirname(outPath), { recursive: true });
-    let out = transform(srcPath, readFileSync(srcPath), harnessDir, m.rulesRename, harnessKind);
+    let out = transform(
+      srcPath,
+      readFileSync(srcPath),
+      harnessDir,
+      m.rulesRename,
+      harnessKind,
+      invoke,
+    );
     if (harnessKind === "kiro") {
       if (src.startsWith("agents/") && src.endsWith(".json")) {
         out = projectKiroAgentJson(srcPath, out);
@@ -551,7 +635,17 @@ function buildTree(m: HarnessManifest, outRoot: string, seedFrom: string): strin
     const rendered = renderOnboarding(readFileSync(ONBOARDING_SKELETON, "utf-8"), fills);
     const outPath = projectRoot ? join(outRoot, dst) : join(treeRoot, dst);
     mkdirSync(dirname(outPath), { recursive: true });
-    writeFileSync(outPath, transform(dst, Buffer.from(rendered, "utf-8"), harnessDir, m.rulesRename, harnessKind));
+    writeFileSync(
+      outPath,
+      transform(
+        dst,
+        Buffer.from(rendered, "utf-8"),
+        harnessDir,
+        m.rulesRename,
+        harnessKind,
+        invoke,
+      ),
+    );
   }
 
   // 2c. Emit the relocated method ("memory") tree at the workspace root
@@ -559,7 +653,7 @@ function buildTree(m: HarnessManifest, outRoot: string, seedFrom: string): strin
   //     the compile step's loadRules resolves rules_in_context from this tree
   //     (AIDLC_RULES_DIR points there below), so it has to exist first.
   const memoryDir = join(outRoot, MEMORY_DST);
-  emitMemory(outRoot, harnessDir, m.rulesRename, harnessKind);
+  emitMemory(outRoot, harnessDir, m.rulesRename, harnessKind, invoke);
 
   // 2d. Emit the active-space cursor (aidlc/active-space -> "default") — part of
   //     the shipped shell so a fresh copy resolves the default space with no
@@ -571,7 +665,7 @@ function buildTree(m: HarnessManifest, outRoot: string, seedFrom: string): strin
   //     install (no sibling aidlc/ shell) can self-heal — the first /aidlc copies
   //     it out via ensureWorkspaceDirs. Inside <harnessDir>, so the generated
   //     root inventory byte-diffs it under --check.
-  emitMemorySeed(treeRoot, harnessDir, m.rulesRename, harnessKind);
+  emitMemorySeed(treeRoot, harnessDir, m.rulesRename, harnessKind, invoke);
 
   // 3. Compile the stage graph into the assembled tree (writes harness-correct
   //    stage-graph.json + scope-grid.json). compileStageGraph() bootstraps each
@@ -623,11 +717,232 @@ function buildTree(m: HarnessManifest, outRoot: string, seedFrom: string): strin
       harnessRoot: harnessSrcRoot,
       distRoot: outRoot,
       harnessDir,
-      substituteToken: (s: string) => substituteToken(s, harnessDir),
+      substituteToken: (s: string) => substituteToken(s, harnessDir, invoke),
       tierCap: TIER_CAP,
     });
   }
+  writeProjectionData(outRoot, treeRoot, m);
   return [...walk(outRoot)];
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function rewriteKiroReleaseAllowlists(outRoot: string, m: HarnessManifest): void {
+  if (m.name !== "kiro" && m.name !== "kiro-ide") return;
+  const agentsDir = join(outRoot, m.harnessDir, "agents");
+  for (const file of walk(agentsDir)) {
+    if (!file.endsWith(".json")) continue;
+    const value = JSON.parse(readFileSync(file, "utf-8")) as {
+      toolsSettings?: {
+        execute_bash?: {
+          allowedCommands?: unknown;
+        };
+      };
+    };
+    const allowed = value.toolsSettings?.execute_bash?.allowedCommands;
+    if (!Array.isArray(allowed)) continue;
+    const rewritten = allowed.map((command) =>
+      typeof command === "string" &&
+        command.startsWith("bun ") &&
+        command.includes(`${m.harnessDir.replace(".", "\\.")}/tools/`)
+        ? "aidlc .*"
+        : command
+    );
+    value.toolsSettings!.execute_bash!.allowedCommands = [...new Set(rewritten)];
+    writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
+  }
+}
+
+function rewriteClaudeReleasePermissions(outRoot: string, m: HarnessManifest): void {
+  if (m.name !== "claude") return;
+  const settingsPath = join(outRoot, m.harnessDir, "settings.json");
+  const value = JSON.parse(readFileSync(settingsPath, "utf-8")) as {
+    permissions?: { allow?: unknown };
+  };
+  const allow = value.permissions?.allow;
+  if (!Array.isArray(allow)) throw new Error("[claude] settings.json has no permissions.allow list");
+  value.permissions!.allow = [
+    ...allow.filter((entry) =>
+      entry !== "Bash" &&
+      !(typeof entry === "string" && entry.startsWith("Bash(bun "))
+    ),
+    "Bash(aidlc *)",
+  ];
+  writeFileSync(settingsPath, `${JSON.stringify(value, null, 2)}\n`);
+}
+
+function rewriteReleaseOnboarding(value: string): string {
+  return value
+    .replace(
+      /^- \*\*bun\*\*:.*$/gm,
+      "- **Runtime**: Native installs use the self-contained `aidlc` binary; Bun is not required.",
+    )
+    .replace(
+      /^- \*\*Hook permissions\*\*:.*$/gm,
+      "- **Hook permissions**: Framework hooks run through the self-contained `aidlc` binary. No separate script runtime or executable bits are required.",
+    )
+    .replace(
+      /TypeScript, run via bun/g,
+      "TypeScript sources invoked through the self-contained `aidlc` runtime",
+    )
+    .replace(
+      /pre-approves ONLY `bun \.kiro\/tools\/\*` shell commands/g,
+      "pre-approves only `aidlc` shell commands",
+    )
+    .replace(
+      /pre-allows the deterministic core's exact command prefixes — `bun \.codex\/tools\/`, `bun \.codex\/hooks\/`, and/g,
+      "pre-allows the deterministic core's `aidlc` command prefix and",
+    )
+    .replace(
+      /^\*\*CWD drift warning\*\*: If a stage runs `cd` in Bash.*$/gm,
+      "**CWD drift warning**: Native release commands resolve `aidlc` from `PATH`, so changing directories does not change the engine path. Keep project-relative file arguments anchored to the project root, or run `cd` commands in subshells: `(cd subdir && npm install)`.",
+    );
+}
+
+function projectReleaseRootIntegrations(outRoot: string, m: HarnessManifest): void {
+  const additions = m.releaseRootIntegrations ?? [];
+  if (additions.length === 0) return;
+  const descriptorPath = join(outRoot, m.harnessDir, PROJECTION_DATA);
+  const descriptor = JSON.parse(readFileSync(descriptorPath, "utf-8")) as {
+    rootIntegrations: Array<Record<string, unknown>>;
+  };
+  const paths = new Set(descriptor.rootIntegrations.map((item) => String(item.path)));
+  for (const { src, ...integration } of additions) {
+    if (paths.has(integration.path)) {
+      throw new Error(`[${m.name}] duplicate release root integration path: ${integration.path}`);
+    }
+    const source = join(HARNESS_ROOT, m.name, src);
+    if (!existsSync(source) || !lstatSync(source).isFile()) {
+      throw new Error(`[${m.name}] release root integration source is missing: ${src}`);
+    }
+    const destination = join(outRoot, integration.path);
+    mkdirSync(dirname(destination), { recursive: true });
+    cpSync(source, destination);
+    descriptor.rootIntegrations.push(integration);
+    paths.add(integration.path);
+  }
+  writeFileSync(descriptorPath, `${JSON.stringify(descriptor, null, 2)}\n`);
+}
+
+function rewriteReleaseInvocations(outRoot: string, m: HarnessManifest): void {
+  projectReleaseRootIntegrations(outRoot, m);
+  const harnessDir = escapeRegExp(m.harnessDir);
+  const delegateNames = [
+    "audit",
+    "bolt",
+    "graph",
+    "init",
+    "jump",
+    "learnings",
+    "lifecycle",
+    "log",
+    "orchestrate",
+    "runner-gen",
+    "runtime",
+    "sensor",
+    "sensor-linter",
+    "sensor-required-sections",
+    "sensor-type-check",
+    "sensor-upstream-coverage",
+    "state",
+    "swarm",
+    "utility",
+    "validate",
+    "worktree",
+  ].join("|");
+  const projectPrefix = String.raw`(?:"?(?:\$\{?CLAUDE_PROJECT_DIR\}?/)?`;
+  const suffix = `"?)`;
+  const toolPattern = new RegExp(
+    String.raw`\bbun\s+${projectPrefix}${harnessDir}/tools/aidlc(?:-([a-z0-9-]+))?\.ts${suffix}`,
+    "gi",
+  );
+  const hookPattern = new RegExp(
+    String.raw`\bbun\s+${projectPrefix}${harnessDir}/hooks/aidlc-([a-z0-9-]+)\.ts${suffix}`,
+    "gi",
+  );
+  const bareToolPattern = new RegExp(
+    String.raw`\bbun\s+aidlc-(${delegateNames})\.ts`,
+    "gi",
+  );
+  const bareToolCheck = new RegExp(bareToolPattern.source, "i");
+  for (const file of walk(outRoot)) {
+    if (!/\.(?:md|json|toml|hook|ts)$/.test(file)) continue;
+    let value = readFileSync(file, "utf-8");
+    const escapedJsonHook = new RegExp(
+      String.raw`\bbun\s+\\"\$CLAUDE_PROJECT_DIR/${harnessDir}/hooks/aidlc-([a-z0-9-]+)\.ts\\"`,
+      "gi",
+    );
+    value = value.replace(escapedJsonHook, (_match, hook: string) =>
+      hook === "statusline" ? "aidlc statusline" : `aidlc hook ${hook}`
+    );
+    value = value.replace(toolPattern, (_match, delegate: string | undefined) =>
+      delegate ? `aidlc __delegate ${delegate}` : "aidlc"
+    );
+    value = value.replace(
+      bareToolPattern,
+      (_match, delegate: string) => `aidlc __delegate ${delegate}`,
+    );
+    value = value.replace(hookPattern, (_match, hook: string) => {
+      if (hook === "kiro-adapter" || hook === "codex-adapter") {
+        return `aidlc adapter ${m.name}`;
+      }
+      if (hook === "statusline") return "aidlc statusline";
+      return `aidlc hook ${hook}`;
+    });
+    value = value.replaceAll(
+      `"bun \\\\${m.harnessDir}/tools/.*"`,
+      `"aidlc .*"`,
+    );
+    value = value.replaceAll(
+      `"bun \\\\$\\\\{?KIRO_PROJECT_DIR\\\\}?/${m.harnessDir}/tools/.*"`,
+      `"aidlc .*"`,
+    );
+    value = value.replace(INVOKE_TOKEN, "aidlc");
+    value = rewriteReleaseOnboarding(value);
+    writeFileSync(file, value);
+  }
+  rewriteKiroReleaseAllowlists(outRoot, m);
+  rewriteClaudeReleasePermissions(outRoot, m);
+  if (m.name === "codex") {
+    const { emitDefaultRules, emitTrustSeed } = require(join(HARNESS_ROOT, "codex", "emit.ts")) as {
+      emitDefaultRules: (harnessDir: string, release?: boolean) => string;
+      emitTrustSeed: (harnessDir: string, release?: boolean) => string;
+    };
+    writeFileSync(
+      join(outRoot, m.harnessDir, "rules", "default.rules"),
+      emitDefaultRules(m.harnessDir, true),
+    );
+    writeFileSync(
+      join(outRoot, m.harnessDir, "trust-seed.toml"),
+      emitTrustSeed(m.harnessDir, true),
+    );
+  }
+
+  const leftovers: string[] = [];
+  for (const file of walk(outRoot)) {
+    if (!/\.(?:md|json|toml|hook|ts)$/.test(file)) continue;
+    const value = readFileSync(file, "utf-8");
+    if (value.includes("{{INVOKE}}")) {
+      leftovers.push(`${relative(outRoot, file)}: unexpanded {{INVOKE}}`);
+    }
+    if (new RegExp(String.raw`\bbun\s+[^\n]*${harnessDir}/(?:tools|hooks)/aidlc`).test(value)) {
+      leftovers.push(`${relative(outRoot, file)}: bun invocation survived release projection`);
+    }
+    if (bareToolCheck.test(value)) {
+      leftovers.push(`${relative(outRoot, file)}: bare bun invocation survived release projection`);
+    }
+    if (
+      relative(outRoot, file).split(sep).join("/").includes("/agents/") &&
+      /"allowedCommands"\s*:\s*\[[\s\S]*?"bun [^"]*tools\//.test(value)
+    ) {
+      leftovers.push(`${relative(outRoot, file)}: bun allowlist survived release projection`);
+    }
+  }
+  if (leftovers.length > 0) {
+    throw new Error(`[${m.name}] release invocation projection failed:\n${leftovers.join("\n")}`);
+  }
 }
 
 // Run an in-tree tool (bun <treeRoot>/<rel> ...) with the harness env seams set
@@ -743,6 +1058,34 @@ function checkHarness(name: string): string[] {
   }
   console.log(`[${name}] --check: ${problems.length === 0 ? "OK" : `${problems.length} problem(s)`}`);
   return problems;
+}
+
+function writeReleaseHarness(name: string): void {
+  const m = loadManifest(name);
+  const releaseDir = join(REPO_ROOT, "dist-release", name);
+  const seedFrom = join(REPO_ROOT, "dist", name, m.harnessDir);
+  if (existsSync(releaseDir)) rmSync(releaseDir, { recursive: true, force: true });
+  buildTree(m, releaseDir, seedFrom, "aidlc");
+  rewriteReleaseInvocations(releaseDir, m);
+  console.log(`[${name}] regenerated dist-release/${name}/${m.harnessDir}`);
+}
+
+function checkReleaseHarness(name: string): string[] {
+  const m = loadManifest(name);
+  const committed = join(REPO_ROOT, "dist-release", name);
+  const seedFrom = join(REPO_ROOT, "dist", name, m.harnessDir);
+  const tmp = mkdtempSync(join(tmpdir(), `aidlc-release-${name}-`));
+  try {
+    buildTree(m, tmp, seedFrom, "aidlc");
+    rewriteReleaseInvocations(tmp, m);
+    const problems = diffTrees(tmp, committed, `dist-release/${name}`);
+    console.log(
+      `[${name}] release --check: ${problems.length === 0 ? "OK" : `${problems.length} problem(s)`}`,
+    );
+    return problems;
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1108,7 +1451,10 @@ if (named && !existsSync(join(HARNESS_ROOT, named, "manifest.ts"))) {
 
 if (check) {
   let problems: string[] = [];
-  for (const n of targets) problems = problems.concat(checkHarness(n));
+  for (const n of targets) {
+    problems = problems.concat(checkHarness(n));
+    problems = problems.concat(checkReleaseHarness(n));
+  }
   // drift-guard dist/plugins/ too; the top-level orphan sweep runs only on a
   // whole-repo check (no named target), never a single-harness one.
   problems = problems.concat(checkPlugins(targets, !named));
@@ -1119,7 +1465,10 @@ if (check) {
   }
   console.log("package --check: all harness trees in sync with core/ + harness/.");
 } else {
-  for (const n of targets) writeHarness(n);
+  for (const n of targets) {
+    writeHarness(n);
+    writeReleaseHarness(n);
+  }
   // Emit plugin projections (the hybrid: per-harness host plugins from plugins/<name>/)
   emitPlugins(targets);
 }

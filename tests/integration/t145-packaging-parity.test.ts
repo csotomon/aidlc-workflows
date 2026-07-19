@@ -296,6 +296,11 @@ describe("t145 packager contract regressions", () => {
         '    { src: ".mcp.json", dst: ".mcp.json", projectRoot: true },\n',
         "",
       );
+      replaceOnce(
+        manifest,
+        '    { path: ".mcp.json", policy: "json-map", jsonKey: "mcpServers", optional: true },\n',
+        "",
+      );
       const run = runPackage(root, "claude", "--check");
       expect(run.status).not.toBe(0);
       expect(output(run)).toContain("ORPHAN in dist: claude/.mcp.json");
@@ -309,6 +314,7 @@ describe("t145 packager contract regressions", () => {
     try {
       const manifest = join(root, "harness", "claude", "manifest.ts");
       replaceOnce(manifest, 'dst: ".gitignore"', 'dst: ".gitignore.next"');
+      replaceOnce(manifest, 'path: ".gitignore"', 'path: ".gitignore.next"');
       const run = runPackage(root, "claude", "--check");
       const combined = output(run);
       expect(run.status).not.toBe(0);
@@ -324,6 +330,7 @@ describe("t145 packager contract regressions", () => {
     try {
       const manifest = join(root, "harness", "kiro", "manifest.ts");
       replaceOnce(manifest, 'onboarding: { dst: "AGENTS.md"', 'onboarding: { dst: "AGENTS.next.md"');
+      replaceOnce(manifest, 'path: "AGENTS.md"', 'path: "AGENTS.next.md"');
       const run = runPackage(root, "kiro", "--check");
       const combined = output(run);
       expect(run.status).not.toBe(0);

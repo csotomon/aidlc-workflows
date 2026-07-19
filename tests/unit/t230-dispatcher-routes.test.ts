@@ -4,7 +4,9 @@ import { spawnSync } from "node:child_process";
 import {
   cpSync,
   existsSync,
+  mkdirSync,
   mkdtempSync,
+  readFileSync,
   readdirSync,
   rmSync,
   statSync,
@@ -20,6 +22,7 @@ import {
   renderAllHelp,
   renderHumanHelp,
   resolveAction,
+  routePolicyFor,
 } from "../../core/tools/aidlc.ts";
 import {
   cleanupTestProject,
@@ -51,6 +54,12 @@ afterAll(() => {
 
 function makeProject(): string {
   const project = createTestProject();
+  const dataDir = join(project, ".claude", "tools", "data");
+  mkdirSync(dataDir, { recursive: true });
+  cpSync(
+    join(REPO_ROOT, "dist", "claude", ".claude", "tools", "data", "aidlc-stamp.json"),
+    join(dataDir, "aidlc-stamp.json"),
+  );
   tempProjects.add(project);
   return project;
 }
@@ -347,16 +356,16 @@ describe("t230 dispatcher route parity", () => {
       fixture: true,
     },
     {
-      name: "init maps to utility transition handler",
+      name: "init maps to its project lifecycle delegate",
       routerArgs: ["init"],
-      tool: "aidlc-utility.ts",
+      tool: "aidlc-init.ts",
       toolArgs: ["init"],
       fixture: true,
     },
     {
-      name: "upgrade maps to utility transition handler",
+      name: "upgrade maps to its machine lifecycle delegate",
       routerArgs: ["upgrade"],
-      tool: "aidlc-utility.ts",
+      tool: "aidlc-lifecycle.ts",
       toolArgs: ["upgrade"],
       fixture: true,
     },
@@ -449,6 +458,22 @@ describe("t230 dispatcher route parity", () => {
     expect(existsSync(join(routedProject, "aidlc", "spaces", "legacy-space"))).toBe(true);
   });
 
+  test("internal utility intent-birth receives project mutation policy", () => {
+    const projectDir = makeProject();
+    const result = viaDispatcher(
+      ["__delegate", "utility", "intent-birth", "--scope", "poc"],
+      projectDir,
+      { AIDLC_DISPATCH_TOOLS_DIR: DIST_TOOLS_DIR },
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr.toString()).not.toContain("does not permit filesystem mutation");
+    const intentsDir = join(projectDir, "aidlc", "spaces", "default", "intents");
+    const activeIntent = readFileSync(join(intentsDir, "active-intent"), "utf-8").trim();
+    const state = readFileSync(join(intentsDir, activeIntent, "aidlc-state.md"), "utf-8");
+    expect(state).toContain("- **Scope**: poc");
+  });
+
   test("--project-dir is global and may be interleaved with workspace tokens", () => {
     const projectDir = makeProject();
     const routed = viaDispatcher(
@@ -458,6 +483,40 @@ describe("t230 dispatcher route parity", () => {
 
     expect(routed.exitCode).toBe(0);
     expect(existsSync(join(projectDir, "aidlc", "spaces", "interleaved-space"))).toBe(true);
+  });
+});
+
+describe("t230 version-aware startup", () => {
+  test("unpinned engine routes refuse a project from another major", () => {
+    const project = makeProject();
+    const stampPath = join(project, ".claude", "tools", "data", "aidlc-stamp.json");
+    mkdirSync(dirname(stampPath), { recursive: true });
+    cpSync(join(DIST_TOOLS_DIR, "data", "aidlc-stamp.json"), stampPath);
+    const stamp = JSON.parse(readFileSync(stampPath, "utf-8")) as { frameworkVersion: string };
+    stamp.frameworkVersion = "99.0.0";
+    writeFileSync(stampPath, `${JSON.stringify(stamp, null, 2)}\n`);
+    const result = viaDispatcher(["status", "--json"], project);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr.toString()).toBe("");
+    expect(JSON.parse(result.stdout.toString())).toEqual(expect.objectContaining({
+      schemaVersion: 1,
+      ok: false,
+      code: 1,
+      message: expect.stringContaining("is incompatible with selected engine"),
+      remediation: "aidlc use <installed-version> or aidlc init",
+    }));
+  });
+
+  test("pinned dispatch rejects a path-only incomplete retained release", () => {
+    const project = makeProject();
+    const machine = mkdtempSync(join(tmpdir(), "aidlc-t230-machine-"));
+    const versionRoot = join(machine, "versions", "9.9.9");
+    mkdirSync(join(versionRoot, "runtime", "claude"), { recursive: true });
+    writeFileSync(join(versionRoot, "aidlc"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    writeFileSync(join(project, ".aidlc-version"), "9.9.9\n");
+    const result = viaDispatcher(["status"], project, { AIDLC_INSTALL_ROOT: machine });
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr.toString()).toContain("not installed completely");
   });
 });
 
@@ -478,6 +537,11 @@ describe("t230 dispatcher global flag translation", () => {
       tool: "aidlc-bolt.ts",
       args: ["start", "--project-dir", resolve(process.cwd(), "relative/project")],
     });
+    expect(resolveAction(["--json", "versions", "list"])).toEqual({
+      type: "delegate",
+      tool: TOOLS.lifecycle,
+      args: ["versions", "list", "--json"],
+    });
   });
 
   test("carries --project-dir into routing-only actions", () => {
@@ -489,6 +553,43 @@ describe("t230 dispatcher global flag translation", () => {
     ]) {
       expect("projectDir" in action ? action.projectDir : undefined).toBe(projectDir);
     }
+  });
+
+  test("pin policy is route-aware when --project-dir precedes the command", () => {
+    const projectDir = makeProject();
+    writeFileSync(join(projectDir, ".aidlc-version"), "99.0.0\n");
+
+    const active = viaDispatcher(["--project-dir", projectDir, "version"], projectDir);
+    expect(active.exitCode).toBe(0);
+    expect(active.stdout.toString()).toMatch(/^aidlc \d+\.\d+\.\d+\n$/);
+    expect(active.stderr.toString()).not.toContain("this project requires");
+
+    const pinned = viaDispatcher(["--json", "--project-dir", projectDir, "status"], projectDir);
+    expect(pinned.exitCode).toBe(1);
+    expect(pinned.stderr.toString()).toBe("");
+    expect(JSON.parse(pinned.stdout.toString())).toEqual(expect.objectContaining({
+      schemaVersion: 1,
+      ok: false,
+      code: 1,
+      message: "this project requires 99.0.0, which is not installed completely",
+      remediation: "aidlc versions install 99.0.0",
+    }));
+
+    const bootstrap = viaDispatcher(
+      ["--project-dir", projectDir, "__delegate", "lifecycle", "install-apply"],
+      projectDir,
+      { AIDLC_INSTALL_ROOT: join(projectDir, "machine") },
+    );
+    expect(bootstrap.stderr.toString()).not.toContain("this project requires");
+    expect(bootstrap.stdout.toString()).toContain("at least one --harness is required");
+
+    const versions = viaDispatcher(
+      ["--json", "versions", "list"],
+      projectDir,
+      { AIDLC_INSTALL_ROOT: join(projectDir, "empty-machine") },
+    );
+    expect(versions.exitCode).toBe(0);
+    expect(versions.stdout.toString()).toContain('"versions":[]');
   });
 
   test("sensor worker routes by registered id, never by caller-supplied path", () => {
@@ -520,6 +621,109 @@ describe("t230 dispatcher dev and compiled in-process modes", () => {
 });
 
 describe("t230 dispatcher route completeness", () => {
+  test("every route declares the complete normative execution policy", () => {
+    for (const route of ROUTES) {
+      expect(["public", "hidden", "legacy"]).toContain(route.visibility);
+      expect(["none", "optional", "required"]).toContain(route.projectRequirement);
+      expect(["active", "inspect", "pinned"]).toContain(route.pinPolicy);
+      expect(["forbidden", "explicit-only", "interactive-bounded", "required"])
+        .toContain(route.networkPolicy);
+      expect(["none", "project", "machine", "project-and-machine"])
+        .toContain(route.mutationScope);
+      expect(route.outputModes.length).toBeGreaterThan(0);
+    }
+    expect(ROUTES.find((route) => route.id === "top-doctor"))
+      .toEqual(expect.objectContaining({ pinPolicy: "inspect", mutationScope: "project" }));
+    expect(ROUTES.find((route) => route.id === "top-use"))
+      .toEqual(expect.objectContaining({ pinPolicy: "inspect", mutationScope: "project-and-machine" }));
+    const publicPolicy = new Map(
+      ROUTES.filter((route) => route.visibility === "public")
+        .map((route) => [route.id, {
+          networkPolicy: route.networkPolicy,
+          mutationScope: route.mutationScope,
+        }]),
+    );
+    expect(Object.fromEntries(publicPolicy)).toEqual(expect.objectContaining({
+      "top-init": { networkPolicy: "forbidden", mutationScope: "project" },
+      "top-upgrade": { networkPolicy: "explicit-only", mutationScope: "machine" },
+      "top-rollback": { networkPolicy: "forbidden", mutationScope: "machine" },
+      "versions-list": { networkPolicy: "forbidden", mutationScope: "none" },
+      "versions-install": { networkPolicy: "explicit-only", mutationScope: "machine" },
+      "package-create": { networkPolicy: "explicit-only", mutationScope: "machine" },
+      "package-verify": { networkPolicy: "forbidden", mutationScope: "none" },
+      "harness-add-later-release": { networkPolicy: "explicit-only", mutationScope: "machine" },
+      "harness-list-later-release": { networkPolicy: "forbidden", mutationScope: "none" },
+    }));
+    for (const noun of ["state", "audit", "graph", "runtime", "sensor", "plugin"]) {
+      expect(ROUTES.filter((route) => route.group === noun).every((route) => route.pinPolicy === "pinned"))
+        .toBe(true);
+    }
+  });
+
+  test("aliases and internal delegates resolve policy from the route registry", () => {
+    expect(routePolicyFor(["--status"])?.id).toBe("top-status");
+    expect(routePolicyFor(["--project-dir", "/tmp/example", "graph", "compile"])?.id)
+      .toBe("graph");
+    expect(routePolicyFor(["__delegate", "lifecycle", "install-apply", "--quiet"])?.id)
+      .toBe("delegate");
+    expect(routePolicyFor(["__delegate", "lifecycle", "package", "verify", "/tmp/release"])?.id)
+      .toBe("package-verify");
+    const utilityRoutes: Readonly<Record<string, string>> = {
+      help: "top-help",
+      version: "top-version",
+      status: "top-status",
+      doctor: "top-doctor",
+      "intent-birth": "intent",
+      intent: "intent",
+      space: "space",
+      "space-create": "space",
+      "codekb-path": "workspace",
+      detect: "workspace",
+      "select-plugins": "plugin",
+      "plugin-list": "plugin",
+      "plugin-sync": "plugin",
+      init: "top-init",
+      "state-init": "state-utility",
+      upgrade: "top-upgrade",
+      "scope-change": "scope",
+      recompose: "top-recompose",
+      "config-change": "config",
+      "config-get": "config",
+      "config-list": "config",
+      "set-status": "state-utility",
+      "detect-scope": "scope",
+      "resolve-env-scope": "scope",
+      "scope-table": "gen",
+      "stage-table": "gen",
+    };
+    for (const [command, routeId] of Object.entries(utilityRoutes)) {
+      expect(routePolicyFor(["__delegate", "utility", command])?.id, command).toBe(routeId);
+    }
+    expect(routePolicyFor(["__delegate", "utility", "unknown"])?.id).toBe("delegate");
+  });
+
+  test("unsupported output modes are refused before delegate execution", () => {
+    const projectDir = makeProject();
+    const result = viaDispatcher(["version", "--quiet"], projectDir);
+    expect(result.exitCode).toBe(2);
+    expect(result.stdout.toString("utf-8")).toBe("top-version does not support --quiet\n");
+    expect(result.stderr.toString("utf-8")).toBe("");
+  });
+
+  test("unknown commands render one JSON failure before delegation", () => {
+    const projectDir = makeProject();
+    const result = viaDispatcher(["unknown-command", "--json"], projectDir);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr.toString()).toBe("");
+    expect(JSON.parse(result.stdout.toString())).toEqual({
+      schemaVersion: 1,
+      ok: false,
+      code: 1,
+      status: "failed",
+      message: "unknown command or noun 'unknown-command'; try 'aidlc --help'",
+    });
+  });
+
   test("help --all is generated from the route table", () => {
     const groups = parseAllHelp();
     for (const route of ROUTES) {
@@ -574,7 +778,7 @@ describe("t230 dispatcher route completeness", () => {
 describe("t230 dispatcher help and errors", () => {
   test("human help stays short and hides plumbing nouns", () => {
     const text = renderHumanHelp();
-    expect(text.trimEnd().split("\n").length).toBeLessThanOrEqual(20);
+    expect(text.trimEnd().split("\n").length).toBeLessThanOrEqual(30);
     for (const noun of [
       "state",
       "audit",

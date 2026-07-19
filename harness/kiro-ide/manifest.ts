@@ -19,8 +19,22 @@ import onboardingFills from "./onboarding.fills.ts";
 
 const manifest: HarnessManifest = {
   name: "kiro-ide",
+  productName: "Kiro IDE",
+  initNextStep: "open this project in Kiro IDE, then run `/aidlc --doctor`",
   harnessDir: ".kiro",
   tierFlavor: "kiro",
+  rootIntegrations: [
+    { path: ".gitignore", policy: "managed-block", marker: "gitignore" },
+    { path: "AGENTS.md", policy: "managed-block", marker: "agents" },
+  ],
+  releaseRootIntegrations: [
+    {
+      src: "settings/release.json",
+      path: ".vscode/settings.json",
+      policy: "json-array",
+      jsonKey: "kiroAgent.trustedCommands",
+    },
+  ],
 
   // Same core projection as kiro CLI.
   coreDirs: [

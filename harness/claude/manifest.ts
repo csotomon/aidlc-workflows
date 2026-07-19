@@ -17,8 +17,14 @@ import onboardingFills from "./onboarding.fills.ts";
 
 const manifest: HarnessManifest = {
   name: "claude",
+  productName: "Claude Code",
+  initNextStep: "open Claude Code in this project and run `/aidlc --doctor`",
   harnessDir: ".claude",
   tierFlavor: "claude",
+  rootIntegrations: [
+    { path: ".gitignore", policy: "managed-block", marker: "gitignore" },
+    { path: ".mcp.json", policy: "json-map", jsonKey: "mcpServers", optional: true },
+  ],
 
   // core/<src> → <harnessDir>/<dst>. Claude keeps every core dir name as-is.
   // The method ("memory") is NO LONGER a core dir projected into the harness

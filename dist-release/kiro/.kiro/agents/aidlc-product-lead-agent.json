@@ -1,0 +1,56 @@
+{
+  "$schema": "https://raw.githubusercontent.com/aws/amazon-q-developer-cli/refs/heads/main/schemas/agent-v1.json",
+  "name": "aidlc-product-lead-agent",
+  "description": "AI-DLC Product Lead Reviewer — delegation target for reviewing requirements, user stories, and mockups.",
+  "prompt": "file://aidlc-product-lead-agent.md",
+  "tools": [
+    "fs_read",
+    "fs_write",
+    "execute_bash",
+    "thinking"
+  ],
+  "allowedTools": [
+    "fs_read",
+    "fs_write",
+    "thinking"
+  ],
+  "toolsSettings": {
+    "execute_bash": {
+      "allowedCommands": [
+        "aidlc .*",
+        "date -u .*"
+      ]
+    },
+    "fs_write": {
+      "allowedPaths": [
+        "aidlc/spaces/**"
+      ]
+    }
+  },
+  "resources": [
+    "file://.kiro/agents/aidlc-product-lead-agent.md",
+    "file://.kiro/knowledge/aidlc-product-lead-agent/*.md",
+    "file://.kiro/knowledge/aidlc-shared/*.md",
+    "file://aidlc/spaces/default/memory/**/*.md"
+  ],
+  "hooks": {
+    "preToolUse": [
+      {
+        "matcher": "fs_read",
+        "command": "aidlc adapter kiro reviewer-scope aidlc-product-lead-agent",
+        "timeout_ms": 15000
+      },
+      {
+        "matcher": "fs_write",
+        "command": "aidlc adapter kiro reviewer-scope aidlc-product-lead-agent",
+        "timeout_ms": 15000
+      },
+      {
+        "matcher": "execute_bash",
+        "command": "aidlc adapter kiro reviewer-scope aidlc-product-lead-agent",
+        "timeout_ms": 15000
+      }
+    ]
+  },
+  "model": "claude-sonnet-4.5"
+}

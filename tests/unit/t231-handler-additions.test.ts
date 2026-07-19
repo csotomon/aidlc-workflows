@@ -1,5 +1,5 @@
 // covers: subcommand:aidlc-utility:config-get, subcommand:aidlc-utility:config-list, subcommand:aidlc-utility:config-change
-// covers: subcommand:aidlc-utility:plugin-list, subcommand:aidlc-utility:plugin-sync, subcommand:aidlc-utility:init, subcommand:aidlc-utility:upgrade
+// covers: subcommand:aidlc-utility:plugin-list, subcommand:aidlc-utility:plugin-sync, subcommand:aidlc-utility:upgrade
 // covers: tool:aidlc, file:scripts/package.ts
 
 import { afterAll, describe, expect, test } from "bun:test";
@@ -23,10 +23,6 @@ const UTILITY = join(CORE_TOOLS_DIR, "aidlc-utility.ts");
 const DISPATCHER = join(CORE_TOOLS_DIR, "aidlc.ts");
 const PACKAGE_TS = join(REPO_ROOT, "scripts", "package.ts");
 const STATE_FIXTURE = join(FIXTURES_DIR, "state-mid-ideation.md");
-const INIT_MESSAGE =
-  "init now lays down the project data tree and is not yet available in this release. To start work, describe what to build: /aidlc \"build the auth service\".";
-const UPGRADE_MESSAGE =
-  "upgrade is not available in this install; it arrives with the packaged binary distribution.";
 const NO_STATE_MESSAGE =
   "No state file found. Start a workflow first by describing what to build (/aidlc \"build the auth service\").";
 
@@ -251,19 +247,25 @@ describe("t231 plugin list and sync handlers", () => {
   });
 });
 
-describe("t231 init and upgrade transition handlers", () => {
-  test("init errors loudly and does not create an intent record", () => {
+describe("t231 init and upgrade lifecycle routing", () => {
+  test("init reaches the dedicated delegate and does not create an intent record on source failure", () => {
     const project = emptyProject();
-    const result = utility(["init"], project);
+    const result = run(
+      [BUN, join(CORE_TOOLS_DIR, "aidlc-init.ts"), "init", "--project-dir", project],
+      project,
+    );
 
-    expect(result.status).toBe(1);
-    expect(stderrError(result)).toBe(INIT_MESSAGE);
+    expect(result.status).toBe(4);
+    expect(result.stdout).toContain("no installed harness runtime");
     expect(existsSync(join(project, "aidlc", "spaces", "default", "intents"))).toBe(false);
   });
 
-  test("dispatcher init shows the same transition error", () => {
+  test("dispatcher init matches its dedicated delegate", () => {
     const project = emptyProject();
-    const direct = utility(["init"], project);
+    const direct = run(
+      [BUN, join(CORE_TOOLS_DIR, "aidlc-init.ts"), "init", "--project-dir", project],
+      project,
+    );
     const routed = dispatcher(["init"], project);
 
     expect(routed.status).toBe(direct.status);
@@ -271,16 +273,23 @@ describe("t231 init and upgrade transition handlers", () => {
     expect(routed.stderr).toBe(direct.stderr);
   });
 
-  test("upgrade errors through utility, dispatcher, and slash alias", () => {
+  test("upgrade reaches the lifecycle delegate through command and slash alias", () => {
     const project = emptyProject();
-    const direct = utility(["upgrade"], project);
+    const direct = run([BUN, join(CORE_TOOLS_DIR, "aidlc-lifecycle.ts"), "upgrade"], project);
     const routed = dispatcher(["upgrade"], project);
     const alias = dispatcher(["--upgrade"], project);
 
     for (const result of [direct, routed, alias]) {
-      expect(result.status).toBe(1);
-      expect(stderrError(result)).toBe(UPGRADE_MESSAGE);
+      expect(result.status).toBe(2);
+      expect(result.stdout).toContain("at least one --harness is required");
     }
+  });
+
+  test("legacy direct utility upgrade remains an explicit unavailable error", () => {
+    const project = emptyProject();
+    const result = utility(["upgrade"], project);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("upgrade is not available in this install");
   });
 });
 

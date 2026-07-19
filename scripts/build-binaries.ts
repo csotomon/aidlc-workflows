@@ -77,7 +77,7 @@ type TargetResult = {
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const DEFAULT_ENTRY = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc.ts");
 const DEFAULT_OUT_DIR = join(REPO_ROOT, "build", "binaries");
-const RUNTIME_ASSET_ROOT = join(REPO_ROOT, "dist", "claude", ".claude");
+const RUNTIME_ASSET_ROOT = join(REPO_ROOT, "dist-release", "claude", ".claude");
 const RUNTIME_DISTRIBUTIONS = ["claude", "codex", "kiro", "kiro-ide"] as const;
 const MIN_CROSS_BYTES = 10 * 1024 * 1024;
 const DEV_SPAWN_MARKER = "/* dev-mode bun spawn */";
@@ -278,7 +278,7 @@ function pathlessEnv(projectDir?: string): NodeJS.ProcessEnv {
 
 function installedProject(prefix: string): string {
   const project = mkdtempSync(join(tmpdir(), prefix));
-  cpSync(join(REPO_ROOT, "dist", "claude"), project, { recursive: true });
+  cpSync(join(REPO_ROOT, "dist-release", "claude"), project, { recursive: true });
   return project;
 }
 
@@ -551,6 +551,7 @@ function conductorPersonaGate(artifact: string): GateResult {
 function workspaceFlagsGate(artifact: string): GateResult {
   const project = mkdtempSync(join(tmpdir(), "aidlc-binary-workspace-"));
   try {
+    mkdirSync(join(project, ".git"));
     const interleaved = run(
       artifact,
       ["space", "--project-dir", project, "create", "teamB"],
@@ -805,7 +806,7 @@ function realPluginSyncGate(artifact: string): GateResult {
   const pluginRoot = join(REPO_ROOT, "dist", "plugins", "test-pro", "claude");
   try {
     cpSync(RUNTIME_ASSET_ROOT, join(project, ".claude"), { recursive: true });
-    cpSync(join(REPO_ROOT, "dist", "claude", "aidlc"), join(project, "aidlc"), {
+    cpSync(join(REPO_ROOT, "dist-release", "claude", "aidlc"), join(project, "aidlc"), {
       recursive: true,
     });
     const result = run(artifact, ["plugin", "sync", "--project-dir", project], {
@@ -828,6 +829,15 @@ function realPluginSyncGate(artifact: string): GateResult {
       "test-pro-integration.md",
     );
     const graphPath = join(project, ".claude", "tools", "data", "stage-graph.json");
+    const composeDrops = join(
+      project,
+      "aidlc",
+      "spaces",
+      "default",
+      "intents",
+      ".aidlc-hooks-health",
+      "plugin-compose-test-pro.drops",
+    );
     let graphContainsPlugin = false;
     try {
       const graph = JSON.parse(readFileSync(graphPath, "utf-8")) as Array<{ slug?: string }>;
@@ -843,12 +853,14 @@ function realPluginSyncGate(artifact: string): GateResult {
         result.stdout.trim() === "plugin sync complete: 1 plugin(s)" &&
         existsSync(composedStage) &&
         graphContainsPlugin &&
+        !existsSync(composeDrops) &&
         !/unknown command|Cannot find module|\/\$bunfs\//.test(output),
       {
-        expected: "real plugin compose and graph compile succeed without PATH bun",
-        actual: existsSync(composedStage) && graphContainsPlugin
+        expected:
+          "real plugin compose and generated-region refresh succeed without PATH bun or drops",
+        actual: existsSync(composedStage) && graphContainsPlugin && !existsSync(composeDrops)
           ? result.stdout.trim()
-          : result.stderr.trim() || "composed graph entry missing",
+          : result.stderr.trim() || `graph=${graphContainsPlugin}; drops=${existsSync(composeDrops)}`,
       },
     );
   } finally {
@@ -863,9 +875,11 @@ function pathlessOrchestrateGate(
   env: NodeJS.ProcessEnv,
   expectedKind: string,
   expectedText: string,
+  forbiddenText = "",
 ): GateResult {
   const project = mkdtempSync(join(tmpdir(), `aidlc-binary-${name}-`));
   try {
+    mkdirSync(join(project, ".git"));
     const result = run(artifact, [...args, "--project-dir", project], {
       cwd: project,
       env: {
@@ -896,9 +910,12 @@ function pathlessOrchestrateGate(
       result.status === 0 &&
         kind === expectedKind &&
         directiveText.includes(expectedText) &&
+        (forbiddenText === "" || !directiveText.includes(forbiddenText)) &&
         !/Executable not found|unknown command|Cannot find module|\/\$bunfs\//.test(output),
       {
-        expected: `${expectedKind} directive containing ${expectedText}`,
+        expected:
+          `${expectedKind} directive containing ${expectedText}` +
+          (forbiddenText ? ` and not ${forbiddenText}` : ""),
         actual: kind ? `${kind}: ${directiveText}` : result.stderr.trim() || result.stdout.trim(),
       },
     );
@@ -945,6 +962,7 @@ function hookGate(artifact: string): GateResult {
 function statuslineGate(artifact: string): GateResult {
   const project = mkdtempSync(join(tmpdir(), "aidlc-binary-statusline-"));
   try {
+    mkdirSync(join(project, ".git"));
     const input = JSON.stringify({
       workspace: { project_dir: project },
       model: { id: "claude-test" },
@@ -1239,7 +1257,7 @@ function runtimeAssetsGate(artifact: string): GateResult {
   const artifactDir = dirname(artifact);
   const runtimeDir = join(artifactDir, "runtime");
   const assets = RUNTIME_DISTRIBUTIONS.map((distribution) => ({
-    source: join(REPO_ROOT, "dist", distribution),
+    source: join(REPO_ROOT, "dist-release", distribution),
     destination: join(runtimeDir, distribution),
   }));
 
@@ -1386,6 +1404,15 @@ function buildTarget(target: TargetConfig): TargetResult {
       { AWS_AIDLC_DEFAULT_SCOPE: "feature" },
       "error",
       "No workflow state found",
+    ));
+    result.gates.push(pathlessOrchestrateGate(
+      actual.artifact,
+      "native-directive-invocation",
+      ["next", "--status"],
+      {},
+      "print",
+      "aidlc __delegate utility status",
+      "bun ",
     ));
     result.gates.push(pathlessOrchestrateGate(
       actual.artifact,

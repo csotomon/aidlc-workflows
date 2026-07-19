@@ -11,7 +11,7 @@ This implementation requires two tools on your system:
 | Prerequisite | Purpose | Install |
 |-------------|---------|---------|
 | **Claude Code** | This implementation runs as a Claude Code command. The orchestrator, agents, and hooks all execute within Claude Code. | Native install (recommended, auto-updates): macOS/Linux/WSL `curl -fsSL https://claude.ai/install.sh \| bash`; Windows PowerShell `irm https://claude.ai/install.ps1 \| iex`. Or `brew install --cask claude-code`. ([docs](https://code.claude.com/docs/en/quickstart)) |
-| **bun** | Required for all CLI tools and all 12 hooks (state management, audit logging, sensor dispatch, runtime-graph compile, loop enforcement, reviewer scope enforcement, statusline, human-turn mint). Everything is TypeScript, run via bun (~20ms startup). No additional dependencies — works identically on macOS, Linux, and native Windows PowerShell. | `curl -fsSL https://bun.sh/install \| bash` ([docs](https://bun.sh)). On Windows: `npm install -g bun` or `powershell -c "irm bun.sh/install.ps1 \| iex"` |
+| **bun** | Required by the documented copy-install channel. The self-contained macOS/Linux binary installer does not require bun. | `curl -fsSL https://bun.sh/install \| bash` ([docs](https://bun.sh)). On Windows: `npm install -g bun` or `powershell -c "irm bun.sh/install.ps1 \| iex"` |
 
 > **Important**: `bun` must be on your `PATH` for non-interactive shells. Claude Code runs your shell non-interactively, so it sources `~/.zshenv` (zsh) or `~/.bashrc` (bash) — NOT `~/.zshrc`. On Windows with Git Bash, `~/.bashrc` is the correct file. If `which bun` fails inside Claude Code, add the bun PATH export to the appropriate file.
 
@@ -141,7 +141,7 @@ other distributions, see [Running on Kiro CLI](harnesses/kiro-cli.md),
 [AI-DLC on opencode](harnesses/opencode.md). The Claude Code implementation
 ships as a `.claude/` directory that you copy into your project.
 
-### Step 1: Copy the implementation
+### Step 1
 
 ```bash
 cp -r dist/claude/.claude/ your-project/.claude/
@@ -150,7 +150,7 @@ cp -r dist/claude/aidlc/   your-project/aidlc/     # the workspace shell — a s
 
 The first line copies the engine — the orchestrator, stage files, agent personas, hooks, knowledge files, and default settings. The second copies the **workspace shell**: the pre-built `aidlc/spaces/default/memory/` method tree the engine reads. It ships as a **sibling** of `.claude/` (not inside it), so it must be copied separately — or copy the whole `dist/claude/` tree at once. `/aidlc --doctor` fails its "workspace shell ready" check if `aidlc/spaces/default/memory/` is missing.
 
-### Step 2: Navigate to your project
+### Step 2
 
 ```bash
 cd your-project
@@ -158,11 +158,32 @@ cd your-project
 
 All `/aidlc` commands run relative to the project root.
 
+### Alternative: self-contained macOS/Linux channel
+
+Published releases also carry a native installer. It installs a checksum-
+verified binary and the selected harness runtime without bun, Node.js, or git:
+
+```bash
+curl -fsSL https://github.com/awslabs/aidlc-workflows/releases/latest/download/install.sh \
+  | sh -s -- --harness claude
+cd your-project
+aidlc init --mcp none
+aidlc doctor
+```
+
+Use `--harness kiro`, `kiro-ide`, or `codex` for another distribution.
+`aidlc init --dry-run` previews project changes, and
+`install.sh --from <release-directory> --offline --harness <name>` installs an
+air-gapped package. Pass `--profile "$HOME/.profile"` only when the installer
+should add its marked PATH block; profiles are never edited by default.
+Windows self-install arrives in the next lifecycle release; the copy-install
+instructions above remain supported on every platform.
+
 ---
 
 ## The Workspace Shell
 
-There is no scaffold step. The distribution you copied in already ships the
+For a manual copy install, there is no scaffold step. The distribution you copied in already ships the
 workspace shell — the `.claude/` engine plus a pre-built `aidlc/spaces/default/`
 holding the memory layer (`aidlc/spaces/default/memory/`, where team-affirmed
 practices and learnings live). You do not run any init command.
@@ -184,6 +205,10 @@ To add [team knowledge](08-knowledge.md) or team practices before your first run
 edit the shipped `aidlc/spaces/default/memory/` files; the space-level
 `aidlc/knowledge/` directory is created (empty) once your first `/aidlc` runs.
 
+For a self-contained machine install, `aidlc init` creates this shell and its
+refresh baseline before the first harness session. It does not create a
+workflow intent and never uses the network.
+
 For the full picture of the workspace layout — how it holds many intents at once,
 what spaces are for, and the commands to move between them — see
 [Spaces and Intents](03-spaces-and-intents.md).
@@ -204,7 +229,9 @@ Run the health check to confirm everything is in place:
 
 | Check | What It Validates |
 |-------|-------------------|
-| Prerequisites | `bun` is installed and on `$PATH` |
+| Prerequisites | Self-contained binary, or `bun` installed and on `$PATH` for copy installs |
+| Installed runtime | Active machine version and selected harness runtime for binary installs |
+| Project stamp | Project distribution/version compared with the selected engine |
 | Hook presence | Every hook `settings.json` wires (its `hooks` blocks + the `statusLine` command — all 12 framework hooks) exists in `.claude/hooks/`; a wired-but-missing hook fails loudly. Sourcing the expected roster from `settings.json` means adding a hook there auto-checks it |
 | Project structure | `.claude/settings.json` exists with expected configuration |
 | Workspace shell | `.claude/` + `aidlc/spaces/default/memory/` are present (the shipped shell) |

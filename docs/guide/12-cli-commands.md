@@ -38,9 +38,71 @@ All AI-DLC commands start with the orchestrator invocation. This chapter is a co
 | `/aidlc config list` | List active workflow config (`--json` for structured output) |
 | `/aidlc plugin list` | List installed plugins and enabled state |
 | `/aidlc plugin sync` | Compose installed plugin roots into the current install |
+| `aidlc init [options]` | Initialize or refresh a project from an installed or local harness projection |
+| `aidlc upgrade [options]` | Install and activate a complete release |
+| `aidlc rollback [--version <v>]` | Activate a retained complete release without network access |
+| `aidlc use <version\|current>` | Set or clear the project's `.aidlc-version` pin |
+| `aidlc versions list\|install` | Inspect retained versions or install an exact version side-by-side |
+| `aidlc package create\|verify` | Create or verify a flat offline release set |
 | `/aidlc --version` | Print the framework version |
 | `/aidlc --help` | Display usage information |
 | `bun .claude/tools/aidlc-utility.ts select-plugins [names]` | Direct-only: show or set the enabled plugin list for this install |
+
+---
+
+## Native Install And Lifecycle
+
+The machine-level `aidlc` command is available in the self-contained binary
+install channel. It is distinct from the harness chat invocation shown above.
+
+```bash
+install.sh --harness claude
+cd your-project
+aidlc init --mcp none
+aidlc doctor
+```
+
+`init` is local-only. It reads the installed runtime or `--from <dir|tgz>`,
+previews the exact change set with `--dry-run`, preserves project-owned method
+and workflow data, and refuses locally modified framework files unless
+`--force` is explicit.
+
+For scripted approval, read `data.planToken` from
+`aidlc init --dry-run --json`, then rerun the same command without
+`--dry-run` and with `--plan-token <token>`. Apply refuses if source bytes,
+options, or current project state changed after the preview.
+
+Machine lifecycle commands never follow a project pin. Engine commands do:
+a valid `.aidlc-version` re-executes that retained binary before project data
+loads, while a missing retained version fails with
+`aidlc versions install <version>` remediation.
+
+Commit `.aidlc-version`: it is a team-shared toolchain pin and the managed
+AI-DLC `.gitignore` block deliberately does not ignore it. A fresh clone or CI
+runner must install that exact version with
+`install.sh --version "$(cat .aidlc-version)" --harness <name>`, use
+`aidlc versions install "$(cat .aidlc-version)" --harness <name>` when an
+active binary already exists, or consume a reviewed offline package in a
+restricted pipeline.
+
+```bash
+aidlc versions list
+aidlc versions install 2.5.0 --harness claude
+aidlc use 2.5.0
+aidlc upgrade --version 2.5.1
+aidlc rollback
+aidlc package create --version 2.5.0 --harness claude --target linux-x64 --output ./aidlc-offline
+aidlc package verify ./aidlc-offline
+```
+
+All lifecycle commands support human output and `--json`; mutating commands
+also support `--dry-run` where listed by `aidlc help --all`.
+The installer also accepts `--quiet`, `--json`, `--no-color`, and `--yes`.
+Human mode reports each completed download with a fixed-width TTY display;
+quiet and JSON modes suppress download progress.
+It never edits a startup file unless `--profile <absolute-startup-file>` is
+explicit; that opt-in writes one marked PATH block through a separate
+transaction.
 
 ---
 
@@ -166,9 +228,9 @@ If no state file exists, the framework treats this as a new workflow and asks fo
 
 ---
 
-### Initialization — automatic, no command
+### Workflow Initialization — automatic
 
-There is no scaffold command. The shipped `dist/<harness>/` workspace shell
+For copy installs, there is no scaffold command. The shipped `dist/<harness>/` workspace shell
 arrives pre-built (the `.claude/` engine plus `aidlc/spaces/default/memory/`),
 and the engine **auto-births** the first intent on your first `/aidlc` (or when
 you describe what to build). Birth runs the three Initialization stages
@@ -185,6 +247,10 @@ seeds the initial scope; absent one it defaults to `poc`. To add team knowledge
 or guardrails before the first run, edit the shipped `aidlc/spaces/default/memory/`
 files; the space-level `aidlc/knowledge/` directory is created (empty) once the
 first intent exists, and you add free-form files to it from there.
+
+For native machine installs, run `aidlc init` once before opening the harness.
+That command lays down the same shell and records a refresh baseline; workflow
+intent birth remains automatic on the first chat invocation.
 
 The welcome message is rendered at session start via the `companyAnnouncements`
 entry in `settings.json`.
@@ -255,7 +321,9 @@ Validate that all of this implementation's prerequisites, configuration, and sta
 
 | Check | What it validates |
 |-------|-------------------|
-| Prerequisites | `bun` is installed and on PATH |
+| Prerequisites | Self-contained binary, or `bun` on PATH for a copy install |
+| Installed runtime | Active machine version and installed harness distributions, when using the binary channel |
+| Project stamp | Project distribution/version compared with the selected engine |
 | Hook presence | Every hook `settings.json` wires (its `hooks` blocks + the `statusLine` command — all 12 framework hooks) exists in `.claude/hooks/`; a wired-but-missing hook fails loudly. Sourcing the expected roster from `settings.json` means adding a hook there auto-checks it |
 | Project structure | `.claude/settings.json` exists (file presence only, no content validation) |
 | Workspace shell | `.claude/` + `aidlc/spaces/default/memory/` are present (the shipped shell) |

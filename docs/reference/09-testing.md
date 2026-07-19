@@ -30,6 +30,22 @@ integration** (so the integration level rides along on every local
 shows where each level sits conceptually — the profile flags below are how you
 actually select them.
 
+Native distribution coverage spans `t238-build-binaries.test.ts` and
+`t240-install-mechanism.test.ts`. t238 compiles and probes the standalone
+binary closure; t240 exercises archive rejection, transaction rollback and
+contention, project init/refresh, checksums, side-by-side lifecycle, pins,
+offline packages, and release projections. Release CI runs the target-matrix
+build lane in addition to the normal unit suite.
+
+`tests/harness/release-fixture.ts` builds deterministic release directories
+from the generated projection manifests and can serve them locally with
+redirect, delay, truncation, captive-portal, oversized-metadata, and
+missing-asset faults. Run
+`bun tests/harness/release-fixture.ts --output <dir>` to author a fixture.
+The normal suite stays offline; set `AIDLC_RELEASE_CONTRACT_LIVE=1` when
+running t240 to opt into the public release metadata and checksum contract
+check.
+
 **Filename convention.** A test's filename is `t<NN>[-description].test.ts` —
 just the level directory it lives in and an optional human description. There
 is **no mechanism segment** in the name: a test's mechanism (whether it spawns

@@ -270,8 +270,10 @@ scripts/package.ts     # the build: copy core (token→.claude/.kiro/.codex) +
 scripts/build-binaries.ts # release-only binary compiler + smoke gate, writing
                        #   per-target executable + runtime/<harness>/ bundles
                        #   under ignored build/binaries/
+scripts/package-release.ts # flat release data archives, checksums, version.json
 dist/<harness>/        # GENERATED + committed: claude/.claude, kiro/.kiro,
                        #   kiro-ide/.kiro, codex/{.codex,.agents} — never hand-edited
+dist-release/<harness>/ # GENERATED + committed binary-invocation projection
 ```
 
 `core/` `.ts` is byte-copied untransformed; the runtime `harnessDir()` seam
@@ -281,6 +283,12 @@ list, so a new harness needs no edit here — and its rules-dir rename ships
 per-tree in a generated `tools/data/harness.json` the `rulesSubdir()` seam
 reads. One set of tool sources runs in every harness. See
 [Porting to a New Harness](../harness-engineering/09-porting-to-a-new-harness.md).
+
+The copy-install and binary-install channels are projections of the same
+authored tree. `dist/` retains bun-shaped invocation for existing projects;
+`dist-release/` routes hooks and tools through the statically embedded `aidlc`
+dispatcher. Both trees carry `aidlc-stamp.json` and
+`aidlc-projection.json`, and both are checked by `package.ts --check`.
 
 ## Directory Structure
 
