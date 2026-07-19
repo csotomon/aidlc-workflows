@@ -4,7 +4,7 @@
 
 {{SLOT:prereq_bullets}}
 - **Locking**: Audit log file locking is handled portably using mkdir-based locking in the system temp directory (no external dependencies).
-- **Hook runtime**: Framework hooks run through the self-contained `aidlc` binary. No separate script runtime or executable bits are required.
+- **Hook runtime**: Framework hooks run through `{{INVOKE}}`; keep that command and its runtime available.
 {{SLOT:prereq_bullets_tail}}
 
 ## AI-DLC Structure
@@ -17,7 +17,7 @@
 - **Sensors**: `{{HARNESS_DIR}}/sensors/` — Deterministic verification manifests (advisory). Ships with framework defaults (`aidlc-required-sections.md`, `aidlc-upstream-coverage.md`, `aidlc-linter.md`, `aidlc-type-check.md`); forks may add custom `aidlc-<id>.md` manifests. Stages declare which sensors fire via the frontmatter `sensors: [<id>]` list — a pull import resolved at compile time. The PostToolUse hook reads the compile-resolved `sensors_applicable` array off the stage graph node.
 - **Knowledge**: `{{HARNESS_DIR}}/knowledge/` — Methodology reference. Per-agent under `aidlc-<agent>-agent/` subfolders; `aidlc-shared/` holds cross-agent material. Ships with framework.
 - **Team Knowledge**: `aidlc/knowledge/` (i.e. `aidlc/spaces/<space>/knowledge/`) — User-managed team and domain knowledge, a space-level sibling of `memory/`/`codekb/`/`intents/` that accumulates across every intent in the space. Free-form and empty at bootstrap (no fixed file set, no seeded READMEs); the engine ensure-exists the empty dir on your first `{{SKILL_INVOKE}}`. Agents read `aidlc/knowledge/aidlc-shared/` (all agents) and `aidlc/knowledge/<agent>/` (that agent) if the team creates them.
-- **Tools**: `{{HARNESS_DIR}}/tools/` — Deterministic TypeScript sources invoked through the self-contained `aidlc` runtime. All framework files prefixed `aidlc-*.ts`. They cover state management, audit emission, the orchestration engine (`aidlc-orchestrate.ts` with exactly three subcommands: `next`, `report`, and `park`), graph compile, runner generation, sensor firing, the §13 learnings gate (`aidlc-learnings.ts`), and the swarm convergence referee (`aidlc-swarm.ts`).
+- **Tools**: `{{HARNESS_DIR}}/tools/` — Deterministic TypeScript sources invoked through `{{INVOKE}}`. All framework files prefixed `aidlc-*.ts`. They cover state management, audit emission, the orchestration engine (`aidlc-orchestrate.ts` with exactly three subcommands: `next`, `report`, and `park`), graph compile, runner generation, sensor firing, the §13 learnings gate (`aidlc-learnings.ts`), and the swarm convergence referee (`aidlc-swarm.ts`).
 - **Hooks**: `{{HARNESS_DIR}}/hooks/` — Framework hooks for audit emission, session lifecycle, state sync, state validation, subagent tracking, and statusline rendering. All framework files prefixed `aidlc-*.ts`.
 {{SLOT:structure_extra}}
 ## Conventions

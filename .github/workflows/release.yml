@@ -51,7 +51,7 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun test tests/unit/t238-build-binaries.test.ts
       - if: runner.os == 'Windows'
-        run: bun test tests/unit/t241-install-management.test.ts -t "t241 Windows and completion release surfaces"
+        run: bun test tests/unit/t244-install-management.test.ts -t "t244 Windows and completion release surfaces"
       - name: PSScriptAnalyzer installer
         if: runner.os == 'Windows'
         shell: pwsh
@@ -70,18 +70,25 @@ jobs:
         include:
           - runner: ubuntu-latest
             target: bun-linux-x64
+            directory: linux-x64
           - runner: ubuntu-latest
             target: bun-linux-x64-musl
+            directory: linux-x64-musl
           - runner: ubuntu-24.04-arm
             target: bun-linux-arm64
+            directory: linux-arm64
           - runner: ubuntu-24.04-arm
             target: bun-linux-arm64-musl
+            directory: linux-arm64-musl
           - runner: macos-15-intel
             target: bun-darwin-x64
+            directory: darwin-x64
           - runner: macos-15
             target: bun-darwin-arm64
+            directory: darwin-arm64
           - runner: windows-latest
             target: bun-windows-x64
+            directory: windows-x64
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
@@ -96,7 +103,9 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: binary-${{ matrix.target }}
-          path: build/binaries
+          path: |
+            build/binaries/${{ matrix.directory }}
+            build/binaries/build-results-${{ matrix.directory }}.json
 
   musl-smoke:
     needs: build
@@ -304,6 +313,9 @@ jobs:
       - run: test "$RELEASE_TAG" = "v$(jq -r .version build/release/version.json)"
         env:
           RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+      - name: Re-verify staged release checksums
+        working-directory: build/release
+        run: sha256sum -c checksums.txt
       - run: gh release create "$RELEASE_TAG" build/release/* --verify-tag --generate-notes ${{ inputs.draft && '--draft' || '' }}
         env:
           GH_TOKEN: ${{ github.token }}

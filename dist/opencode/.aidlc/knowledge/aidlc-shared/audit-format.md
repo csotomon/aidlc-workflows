@@ -201,7 +201,7 @@ All six swarm events emit from the swarm referee `aidlc-swarm.ts` — the determ
 
 ## Hook-Generated Format
 
-Hooks that emit events use the same CLI as orchestrator-driven emissions: `aidlc __delegate audit append EVENT --field Key=Value`. Hook-emitted events are first-class taxonomy members (`ARTIFACT_CREATED`, `ARTIFACT_UPDATED`, `SUBAGENT_COMPLETED`, all `SESSION_*`) — there is no longer a separate "free-form hook entry" format. A hook with no active workflow in `cwd` is a no-op; session events only append to a workflow's audit.md when one exists.
+Hooks that emit events use the same CLI as orchestrator-driven emissions: `bun .aidlc/tools/aidlc.ts __delegate audit append EVENT --field Key=Value`. Hook-emitted events are first-class taxonomy members (`ARTIFACT_CREATED`, `ARTIFACT_UPDATED`, `SUBAGENT_COMPLETED`, all `SESSION_*`) — there is no longer a separate "free-form hook entry" format. A hook with no active workflow in `cwd` is a no-op; session events only append to a workflow's audit.md when one exists.
 
 ## Format Standards
 

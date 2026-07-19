@@ -31,8 +31,8 @@ shows where each level sits conceptually — the profile flags below are how you
 actually select them.
 
 Native distribution coverage spans `t238-build-binaries.test.ts` and
-`t240-install-mechanism.test.ts`. t238 compiles and probes the standalone
-binary closure; t240 exercises archive rejection, transaction rollback and
+`t243-install-mechanism.test.ts`. t238 compiles and probes the standalone
+binary closure; t243 exercises archive rejection, transaction rollback and
 contention, project init/refresh, checksums, side-by-side lifecycle, pins,
 offline packages, and release projections. Release CI runs the target-matrix
 build lane in addition to the normal unit suite.
@@ -43,7 +43,7 @@ redirect, delay, truncation, captive-portal, oversized-metadata, and
 missing-asset faults. Run
 `bun tests/harness/release-fixture.ts --output <dir>` to author a fixture.
 The normal suite stays offline; set `AIDLC_RELEASE_CONTRACT_LIVE=1` when
-running t240 to opt into the public release metadata and checksum contract
+running t243 to opt into the public release metadata and checksum contract
 check.
 
 **Filename convention.** A test's filename is `t<NN>[-description].test.ts` —

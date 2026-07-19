@@ -289,6 +289,54 @@ describe("t242 fixture-proved host inventories", () => {
     }));
   });
 
+  test("Codex rejects traversal marketplace IDs before reading outside its cache", () => {
+    const codexHome = temp("aidlc-codex-traversal-");
+    writeFileSync(
+      join(codexHome, "config.toml"),
+      '[plugins."aidlc-test-pro@.."]\nenabled = true\n',
+    );
+    process.env.AIDLC_CODEX_HOME = codexHome;
+    process.env.AIDLC_HARNESS_DIR = ".codex";
+
+    const result = discoverPluginInventory(".codex");
+    expect(result.installed).toEqual([]);
+    expect(result.invalid).toEqual([
+      expect.objectContaining({
+        paths: [join(codexHome, "config.toml")],
+        message: expect.stringContaining("is not name@marketplace"),
+      }),
+    ]);
+  });
+
+  test("Codex collapses stale semver cache directories to the newest version", () => {
+    const oldRoot = pluginRoot("codex", "0.1.0");
+    const newRoot = pluginRoot("codex", "0.2.0");
+    const codexHome = temp("aidlc-codex-stale-versions-");
+    const cacheRoot = join(
+      codexHome,
+      "plugins",
+      "cache",
+      "fixture-marketplace",
+      "aidlc-test-pro",
+    );
+    mkdirSync(cacheRoot, { recursive: true });
+    cpSync(oldRoot, join(cacheRoot, "0.1.0"), { recursive: true });
+    cpSync(newRoot, join(cacheRoot, "0.2.0"), { recursive: true });
+    cpSync(join(FIXTURES, "codex-config.toml"), join(codexHome, "config.toml"));
+    process.env.AIDLC_CODEX_HOME = codexHome;
+    process.env.AIDLC_HARNESS_DIR = ".codex";
+
+    const result = discoverPluginInventory(".codex");
+    expect(result.invalid).toEqual([]);
+    expect(result.installed).toEqual([
+      expect.objectContaining({
+        key: "test-pro",
+        version: "0.2.0",
+        root: join(cacheRoot, "0.2.0"),
+      }),
+    ]);
+  });
+
   test("Codex uses config disablement and ignores a cache retained after removal", () => {
     const root = pluginRoot("codex");
     const codexHome = temp("aidlc-codex-uninstall-");
@@ -462,6 +510,24 @@ describe("t242 transactional sync and ownership-safe prune", () => {
     ]);
     const second = await syncPlugins(project, [], ".claude");
     expect(second.operations).toBe(0);
+  }, 60_000);
+
+  test("concurrent syncs converge and the loser replans as an idempotent no-op", async () => {
+    const project = installedProject();
+    withClaudeFixture(TEST_PRO);
+
+    const results = await Promise.all([
+      syncPlugins(project, [], ".claude"),
+      syncPlugins(project, [], ".claude"),
+    ]);
+    expect(results.map((result) => result.synced)).toEqual([
+      ["test-pro"],
+      ["test-pro"],
+    ]);
+    expect(results.some((result) => result.operations > 0)).toBe(true);
+    expect(collectPluginStatus(project, ".claude").statuses).toEqual([
+      expect.objectContaining({ key: "test-pro", state: "current" }),
+    ]);
   }, 60_000);
 
   test("public JSON and doctor expose the shared exact comparator state", () => {

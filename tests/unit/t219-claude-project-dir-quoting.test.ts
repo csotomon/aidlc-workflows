@@ -1,14 +1,13 @@
 // covers: file:settings.json
 //
-// t219 - Claude settings must use native aidlc commands.
+// t219 - Claude settings must use channel-correct commands without project paths.
 //
 // Regression pin for issue 519: Claude Code expands settings commands through a
 // shell, so project-relative Bun script paths could split when the workspace
-// path contained spaces. Native installs remove that path argument entirely.
-// The authored settings use the projection token and the generated settings use
-// `aidlc`; neither executable surface may retain Bun or CLAUDE_PROJECT_DIR.
+// path contained spaces. Both generated channels use project-relative or
+// PATH-resolved commands and must never interpolate CLAUDE_PROJECT_DIR.
 //
-// Mechanism: none. This reads and parses the two static JSON files on disk,
+// Mechanism: none. This reads and parses the static JSON files on disk,
 // walks only command fields and permission entries (the executable surfaces),
 // and checks the exact bug shape cannot reappear.
 
@@ -22,11 +21,22 @@ const SUBJECTS = [
     label: "authored Claude harness settings",
     path: join(REPO_ROOT, "harness", "claude", "settings.json"),
     invoke: "{{INVOKE}}",
+    permission: "Bash({{TOOL_PREFIX}}*)",
+    usesBun: false,
   },
   {
-    label: "generated Claude dist settings",
+    label: "generated Claude copy-channel settings",
     path: join(REPO_ROOT, "dist", "claude", ".claude", "settings.json"),
+    invoke: "bun .claude/tools/aidlc.ts",
+    permission: "Bash(bun .claude/tools/*)",
+    usesBun: true,
+  },
+  {
+    label: "generated Claude native-release settings",
+    path: join(REPO_ROOT, "dist-release", "claude", ".claude", "settings.json"),
     invoke: "aidlc",
+    permission: "Bash(aidlc *)",
+    usesBun: false,
   },
 ] as const;
 
@@ -70,18 +80,18 @@ function executableSettingsStrings(settings: unknown): string[] {
   return [...collectCommandStrings(settings), ...permissionEntries(settings)];
 }
 
-describe("t219 Claude settings use native commands without project paths", () => {
+describe("t219 Claude settings use channel-correct commands without project paths", () => {
   for (const subject of SUBJECTS) {
-    test(`${subject.label}: every executable setting uses the projected native invocation`, () => {
+    test(`${subject.label}: every executable setting uses its projected invocation`, () => {
       const settings = readSettings(subject.path);
       const commands = collectCommandStrings(settings);
       const values = executableSettingsStrings(settings);
 
       expect(commands).toHaveLength(EXPECTED_COMMANDS);
       expect(commands.every((value) => value.startsWith(subject.invoke))).toBe(true);
-      expect(permissionEntries(settings)).toContain(`Bash(${subject.invoke} *)`);
+      expect(permissionEntries(settings)).toContain(subject.permission);
       expect(values.some((value) => value.includes("CLAUDE_PROJECT_DIR"))).toBe(false);
-      expect(values.some((value) => /\bbun\b/.test(value))).toBe(false);
+      expect(values.some((value) => /\bbun\b/.test(value))).toBe(subject.usesBun);
     });
   }
 });

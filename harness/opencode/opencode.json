@@ -10,7 +10,7 @@
     },
     "bash": {
       "*": "ask",
-      "{{INVOKE}} *": "allow"
+      "{{TOOL_PREFIX}}*": "allow"
     }
   }
 }

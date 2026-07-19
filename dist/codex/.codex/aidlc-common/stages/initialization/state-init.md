@@ -53,8 +53,8 @@ from the compiled stage graph and scope grid:
 - Total Stages: count EXECUTE stages only (not SKIP). Authoritative counts come
   from the compiled scope grid (`.codex/tools/data/scope-grid.json`),
   transposed from each stage's `scopes:` frontmatter. Run
-  `aidlc __delegate utility scope-table` for the live scope
-  counts and `aidlc __delegate utility stage-table` for the
+  `bun .codex/tools/aidlc.ts __delegate utility scope-table` for the live scope
+  counts and `bun .codex/tools/aidlc.ts __delegate utility stage-table` for the
   live compiled stage list.
 - Completed: set to number of completed INITIALIZATION stages (typically 3)
 - In Progress: set to first post-initialization stage name

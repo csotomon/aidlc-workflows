@@ -98,6 +98,7 @@ if (TIER_CAP) {
 const ONBOARDING_SKELETON = join(CORE_ROOT, "templates", "onboarding.md");
 const HARNESS_TOKEN = /\{\{HARNESS_DIR\}\}/g;
 const INVOKE_TOKEN = /\{\{INVOKE\}\}/g;
+const TOOL_PREFIX_TOKEN = /\{\{TOOL_PREFIX\}\}/g;
 const TEXT_PROJECTION_FILE = /\.(?:md|ts|json|toml|hook)$/;
 
 // Harnesses the packager builds = every harness/<name>/ that carries a
@@ -116,8 +117,16 @@ function discoverHarnessNames(): string[] {
 // Transform: the ONE class. Token substitution on authored prose and the
 // TypeScript invocation seam; compiled JSON is regenerated per tree.
 // ---------------------------------------------------------------------------
-function substituteToken(s: string, harnessDir: string, invoke = "aidlc"): string {
-  return s.replace(HARNESS_TOKEN, harnessDir).replace(INVOKE_TOKEN, invoke);
+function sourceInvocation(harnessDir: string): string {
+  return `bun ${harnessDir}/tools/aidlc.ts`;
+}
+
+function substituteToken(s: string, harnessDir: string, invoke = sourceInvocation(harnessDir)): string {
+  const toolPrefix = invoke === "aidlc" ? "aidlc " : `bun ${harnessDir}/tools/`;
+  return s
+    .replace(HARNESS_TOKEN, harnessDir)
+    .replace(INVOKE_TOKEN, invoke)
+    .replace(TOOL_PREFIX_TOKEN, toolPrefix);
 }
 
 // Rewrite in-prose `<harnessDir>/rules/` → `<harnessDir>/<rulesRename>/` for a
@@ -538,7 +547,7 @@ function buildTree(
   m: HarnessManifest,
   outRoot: string,
   seedFrom: string,
-  invoke = "aidlc",
+  invoke = sourceInvocation(m.harnessDir),
 ): string[] {
   const harnessDir = m.harnessDir;
   const treeRoot = join(outRoot, harnessDir);
@@ -765,6 +774,9 @@ function validateInvocationProjection(outRoot: string, m: HarnessManifest): void
     if (value.includes("{{SKILL_INVOKE}}")) {
       leftovers.push(`${relative(outRoot, file)}: unexpanded {{SKILL_INVOKE}}`);
     }
+    if (value.includes("{{TOOL_PREFIX}}")) {
+      leftovers.push(`${relative(outRoot, file)}: unexpanded {{TOOL_PREFIX}}`);
+    }
     if (rawFrameworkInvocation.test(value)) {
       leftovers.push(`${relative(outRoot, file)}: bun invocation survived native projection`);
     }
@@ -879,8 +891,7 @@ function writeHarness(name: string): void {
     // Siblings at dist/ (plugins, specifications, and unrelated assets) remain
     // outside this harness-owned boundary.
     if (existsSync(distDir)) rmSync(distDir, { recursive: true, force: true });
-    buildTree(m, distDir, seedStash, "aidlc");
-    validateInvocationProjection(distDir, m);
+    buildTree(m, distDir, seedStash);
     console.log(`[${name}] regenerated dist/${name}/${m.harnessDir}`);
   } finally {
     rmSync(seedStash, { recursive: true, force: true });
@@ -898,8 +909,7 @@ function checkHarness(name: string): string[] {
   let problems: string[] = [];
   try {
     // Seed compile from the committed tree (untouched under --check).
-    buildTree(m, tmp, committedTreeRoot, "aidlc");
-    validateInvocationProjection(tmp, m);
+    buildTree(m, tmp, committedTreeRoot);
     // The whole harness distribution is generated, not just <harnessDir>.
     // Diffing its root makes every generated file part of the same
     // bidirectional contract: missing/modified root onboarding and config are

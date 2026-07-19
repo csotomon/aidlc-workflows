@@ -74,6 +74,10 @@ import {
   recoverWindowsUninstallContinuations,
   scheduleWindowsUninstall as scheduleWindowsUninstallContinuation,
 } from "./aidlc-windows-uninstall.ts";
+import {
+  discoverProjectHarnesses,
+  runtimeHarnessDir,
+} from "./aidlc-runtime-paths.ts";
 
 class LifecycleCommandError extends Error {
   constructor(
@@ -204,21 +208,36 @@ function commandOwnedByInstaller(version: string): boolean {
   }
 }
 
-function registeredPins(): Record<string, string> {
+function registeredPins(strict = false): {
+  pins: Record<string, string>;
+  warnings: string[];
+} {
   const path = join(installRoot(), "pins.json");
-  if (!existsSync(path)) return {};
-  const value = JSON.parse(readFileSync(path, "utf-8")) as unknown;
+  if (!existsSync(path)) return { pins: {}, warnings: [] };
+  let value: unknown;
+  try {
+    value = JSON.parse(readFileSync(path, "utf-8"));
+  } catch (error) {
+    const warning = `${path} is invalid JSON: ${error instanceof Error ? error.message : String(error)}`;
+    if (strict) commandError(warning, EXIT.integrity);
+    return { pins: {}, warnings: [warning] };
+  }
   if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`${path} must contain a project-to-version object`);
+    const warning = `${path} must contain a project-to-version object`;
+    if (strict) commandError(warning, EXIT.integrity);
+    return { pins: {}, warnings: [warning] };
   }
   const pins: Record<string, string> = {};
+  const warnings: string[] = [];
   for (const [project, version] of Object.entries(value as Record<string, unknown>)) {
     if (!isAbsolute(project) || typeof version !== "string" || !/^\d+\.\d+\.\d+$/.test(version)) {
-      throw new Error(`${path} contains an invalid pin entry`);
+      warnings.push(`${path} contains an invalid pin entry for ${project}`);
+      continue;
     }
     pins[project] = version;
   }
-  return pins;
+  if (strict && warnings.length > 0) commandError(warnings.join("; "), EXIT.integrity);
+  return { pins, warnings };
 }
 
 function treesMatch(left: string, right: string): boolean {
@@ -231,22 +250,25 @@ function treesMatch(left: string, right: string): boolean {
   );
 }
 
-function retainedVersions(): Array<{
-  version: string;
-  active: boolean;
-  rollback: boolean;
-  distributions: string[];
-  complete: boolean;
-  pinPaths: string[];
-  stalePinPaths: string[];
-}> {
-  if (!existsSync(versionsRoot())) return [];
+function retainedVersions(): {
+  versions: Array<{
+    version: string;
+    active: boolean;
+    rollback: boolean;
+    distributions: string[];
+    complete: boolean;
+    pinPaths: string[];
+    stalePinPaths: string[];
+  }>;
+  pinWarnings: string[];
+} {
+  const { pins, warnings } = registeredPins();
+  if (!existsSync(versionsRoot())) return { versions: [], pinWarnings: warnings };
   const active = activeVersion();
   const rollback = existsSync(rollbackVersionPath())
     ? readFileSync(rollbackVersionPath(), "utf-8").trim()
     : null;
-  const pins = registeredPins();
-  return readdirSync(versionsRoot()).filter((entry) => /^\d+\.\d+\.\d+$/.test(entry)).sort()
+  const versions = readdirSync(versionsRoot()).filter((entry) => /^\d+\.\d+\.\d+$/.test(entry)).sort()
     .map((version) => ({
       version,
       active: version === active,
@@ -262,16 +284,13 @@ function retainedVersions(): Array<{
         .map(([project]) => project)
         .sort(),
     }));
+  return { versions, pinWarnings: warnings };
 }
 
 function projectDistribution(projectDir: string): string | null {
-  for (const harness of [".claude", ".kiro", ".codex"]) {
-    const stamp = join(projectDir, harness, "tools", "data", "aidlc-stamp.json");
-    if (!existsSync(stamp)) continue;
-    const value = JSON.parse(readFileSync(stamp, "utf-8")) as { distribution?: string };
-    if (value.distribution) return value.distribution;
-  }
-  return null;
+  const harnessDir = runtimeHarnessDir(projectDir);
+  return discoverProjectHarnesses(projectDir)
+    .find((candidate) => candidate.harnessDir === harnessDir)?.distribution ?? null;
 }
 
 export function activate(version: string, options: { failAfter?: number } = {}): void {
@@ -554,23 +573,30 @@ async function installVersion(options: {
 async function versionsCommand(argv: string[]): Promise<ReturnType<typeof success>> {
   const verb = argv[1];
   if (verb === "list") {
-    const versions = retainedVersions();
+    const { versions, pinWarnings } = retainedVersions();
     if (argv.includes("--completion-values")) {
       return success(
         versions.filter((item) => item.complete).map((item) => item.version).join("\n"),
       );
     }
     return success(
-      versions.length
+      (versions.length
         ? versions.map((item) =>
             `${item.version}${item.active ? " active" : ""}${item.rollback ? " rollback" : ""} [${item.distributions.join(",")}] pins=${item.pinPaths.length} stale-pins=${item.stalePinPaths.length}${item.complete ? "" : " incomplete"}`
           ).join("\n")
-        : "no retained versions",
-      { versions },
+        : "no retained versions") +
+        (pinWarnings.length > 0 ? `\nwarning: ${pinWarnings.join("; ")}` : ""),
+      { versions, pinWarnings },
     );
   }
   if (verb === "prune") {
-    const versions = retainedVersions();
+    const { versions, pinWarnings } = retainedVersions();
+    if (pinWarnings.length > 0) {
+      commandError(
+        `cannot prune while pin registry is invalid: ${pinWarnings.join("; ")}`,
+        EXIT.integrity,
+      );
+    }
     const protectedVersions = versions.filter((item) =>
       item.active ||
       item.rollback ||
@@ -599,6 +625,32 @@ async function versionsCommand(argv: string[]): Promise<ReturnType<typeof succes
       argv,
       `Prune retained versions ${removable.map((item) => item.version).join(", ")}?`,
     );
+    const refreshed = retainedVersions();
+    if (refreshed.pinWarnings.length > 0) {
+      commandError(
+        `prune cancelled because pin registry changed: ${refreshed.pinWarnings.join("; ")}`,
+        EXIT.failure,
+      );
+    }
+    const refreshedByVersion = new Map(
+      refreshed.versions.map((item) => [item.version, item]),
+    );
+    const newlyProtected = removable.filter((item) => {
+      const current = refreshedByVersion.get(item.version);
+      return !current ||
+        current.active ||
+        current.rollback ||
+        current.pinPaths.length > 0 ||
+        current.stalePinPaths.length > 0;
+    });
+    if (newlyProtected.length > 0) {
+      commandError(
+        `prune cancelled because version protection changed: ${
+          newlyProtected.map((item) => item.version).join(", ")
+        }`,
+        EXIT.failure,
+      );
+    }
     const root = machineTransactionRoot();
     executePlan({
       schemaVersion: 1,
@@ -870,7 +922,7 @@ function uninstallCommand(argv: string[]): CommandResult {
     );
   }
   const purge = argv.includes("--purge");
-  const versions = retainedVersions();
+  const { versions } = retainedVersions();
   const preserved = purge ? "nothing" : "global config, update cache, pins, and harness default";
   requireConfirmation(
     argv,
@@ -952,7 +1004,7 @@ async function upgradeCommand(argv: string[]): Promise<CommandResult> {
     } catch (error) {
       commandError(
         error instanceof Error ? error.message : String(error),
-        EXIT.usage,
+        error instanceof ReleaseUnavailableError ? EXIT.unavailable : EXIT.failure,
       );
     }
     if (state.state === "behind") {
@@ -967,10 +1019,12 @@ async function upgradeCommand(argv: string[]): Promise<CommandResult> {
     }
     if (
       state.state === "unavailable" ||
-      state.state === "offline" ||
-      state.state === "disabled"
+      state.state === "offline"
     ) {
       return failure(state.message, EXIT.unavailable);
+    }
+    if (state.state === "disabled") {
+      return failure(state.message, EXIT.failure);
     }
     return success(state.message, state);
   }
@@ -997,10 +1051,14 @@ async function upgradeCommand(argv: string[]): Promise<CommandResult> {
 
 function rollbackCommand(argv: string[]): ReturnType<typeof success> {
   if (argv.includes("--list")) {
-    const eligible = retainedVersions().filter((item) => item.complete && !item.active);
+    const { versions, pinWarnings } = retainedVersions();
+    const eligible = versions.filter((item) => item.complete && !item.active);
     return success(
-      eligible.length ? eligible.map((item) => `${item.version} [${item.distributions.join(",")}]`).join("\n") : "no rollback target",
-      { versions: eligible },
+      (eligible.length
+        ? eligible.map((item) => `${item.version} [${item.distributions.join(",")}]`).join("\n")
+        : "no rollback target") +
+        (pinWarnings.length > 0 ? `\nwarning: ${pinWarnings.join("; ")}` : ""),
+      { versions: eligible, pinWarnings },
     );
   }
   const target = valueAfter(argv, "--version") ||
@@ -1036,7 +1094,7 @@ function useCommand(argv: string[]): ReturnType<typeof success> {
   if (!value) return usage("usage: aidlc use <version|current>");
   const projectDir = projectDirFrom(argv);
   const pinPath = join(projectDir, ".aidlc-version");
-  const pins = registeredPins();
+  const pins = registeredPins(true).pins;
   const project = existsSync(projectDir) ? realpathSync(projectDir) : resolve(projectDir);
   if (value === "current") {
     if (existsSync(pinPath)) {
@@ -1068,7 +1126,10 @@ function useCommand(argv: string[]): ReturnType<typeof success> {
   }
   const distribution = projectDistribution(projectDir);
   if (distribution && !inspectInstalledVersion(version, distribution).complete) {
-    throw new Error(`${version} does not contain this project's ${distribution} runtime`);
+    commandError(
+      `${version} does not contain this project's ${distribution} runtime`,
+      EXIT.usage,
+    );
   }
   pins[project] = version;
   executePlan({
@@ -1096,7 +1157,15 @@ async function packageCommand(argv: string[]): Promise<ReturnType<typeof success
   if (argv[1] === "verify") {
     const directory = argv[2];
     if (!directory) return usage("package verify requires a directory");
-    const manifest = verifyReleaseDirectory(directory);
+    let manifest: ReleaseManifest;
+    try {
+      manifest = verifyReleaseDirectory(directory);
+    } catch (error) {
+      commandError(
+        error instanceof Error ? error.message : String(error),
+        EXIT.integrity,
+      );
+    }
     return success(`verified release package ${manifest.version} (${manifest.assets.length} assets)`, manifest);
   }
   if (argv[1] !== "create") return usage("usage: aidlc package <create|verify>");
@@ -1267,7 +1336,7 @@ export async function main(input: string[]): Promise<void> {
       ? error.exitCode
       : error instanceof ReleaseUnavailableError
       ? EXIT.unavailable
-      : EXIT.integrity;
+      : EXIT.failure;
     emitResult(failure(
       message,
       code,

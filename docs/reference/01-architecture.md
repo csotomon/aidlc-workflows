@@ -271,7 +271,8 @@ scripts/build-binaries.ts # release-only binary compiler + smoke gate, writing
                        #   per-target executable + runtime/<harness>/ bundles
                        #   under ignored build/binaries/
 scripts/package-release.ts # flat release data archives, checksums, version.json
-dist/<harness>/        # GENERATED + committed: claude/.claude, kiro/.kiro,
+dist/<harness>/        # GENERATED + committed Bun copy projection:
+                       #   claude/.claude, kiro/.kiro,
                        #   kiro-ide/.kiro, codex/{.codex,.agents} — never hand-edited
 dist-release/<harness>/ # GENERATED + committed binary-invocation projection
 ```
@@ -284,11 +285,13 @@ per-tree in a generated `tools/data/harness.json` the `rulesSubdir()` seam
 reads. One set of tool sources runs in every harness. See
 [Porting to a New Harness](../harness-engineering/09-porting-to-a-new-harness.md).
 
-`dist/` and `dist-release/` are byte-identical native projections of the same
-authored tree. Hooks, generated commands, adapters, and host trust entries all
-route through the statically embedded `aidlc` dispatcher. Both roots remain
-committed and independently checked by `package.ts --check`; `dist-release/`
-is the stable staging input for release archive assembly.
+`dist/` and `dist-release/` are separate projections of the same authored
+tree. The copy channel under `dist/` invokes the generated TypeScript
+dispatcher through Bun. The release channel under `dist-release/` routes
+hooks, generated commands, adapters, and host trust entries through the
+statically embedded `aidlc` dispatcher. Both roots remain committed and
+independently checked by `package.ts --check`; `dist-release/` is the stable
+staging input for release archive assembly.
 
 ## Directory Structure
 

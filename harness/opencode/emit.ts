@@ -107,7 +107,9 @@ export default function emit(ctx: EmitContext): void {
   emissions.push({
     path: join(SHELL, "plugin", "aidlc-opencode-adapter.ts"),
     content: () =>
-      readFileSync(join(harnessRoot, "plugin", "aidlc-opencode-adapter.ts"), "utf-8"),
+      substituteToken(
+        readFileSync(join(harnessRoot, "plugin", "aidlc-opencode-adapter.ts"), "utf-8"),
+      ),
   });
 
   // Clean-sweep the shell so a removed persona/command cannot linger. In

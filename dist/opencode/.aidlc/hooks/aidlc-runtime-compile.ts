@@ -63,7 +63,7 @@ const command: string = parsed.tool_input?.command ?? "";
 //    legacy tool-file commands and the new `aidlc ...` grammar.
 //    aidlc-runtime.ts / aidlc runtime is rejected explicitly (recursion guard
 //    at the command level - a positive-only allowlist would let composites like
-//    `aidlc __delegate runtime compile && aidlc __delegate state approve` through and
+//    `bun .aidlc/tools/aidlc.ts __delegate runtime compile && bun .aidlc/tools/aidlc.ts __delegate state approve` through and
 //    loop). aidlc-log.ts emits only chatty in-stage events
 //    (DECISION_RECORDED / QUESTION_ANSWERED / ERROR_LOGGED), none
 //    transition-class. aidlc-worktree.ts emits only WORKTREE_* events.

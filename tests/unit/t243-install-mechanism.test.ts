@@ -61,6 +61,7 @@ const CLAUDE_RELEASE = join(REPO_ROOT, "dist-release", "claude");
 const CODEX_RELEASE = join(REPO_ROOT, "dist-release", "codex");
 const KIRO_IDE_COPY = join(REPO_ROOT, "dist", "kiro-ide");
 const KIRO_IDE_RELEASE = join(REPO_ROOT, "dist-release", "kiro-ide");
+const OPENCODE_RELEASE = join(REPO_ROOT, "dist-release", "opencode");
 const KIRO_RELEASES = [
   join(REPO_ROOT, "dist-release", "kiro"),
   join(REPO_ROOT, "dist-release", "kiro-ide"),
@@ -136,7 +137,7 @@ function fixtureRelease(
   return root;
 }
 
-describe("t240 archive and transaction safety", () => {
+describe("t243 archive and transaction safety", () => {
   test("tar round-trip is deterministic and rejects traversal", () => {
     const entries: ArchiveEntry[] = [
       { path: "root/a.txt", type: "file", mode: 0o644, data: Buffer.from("alpha\n") },
@@ -318,7 +319,7 @@ describe("t240 archive and transaction safety", () => {
       .toThrow("expanded archive exceeds the extraction byte limit");
   });
 
-  test("transaction sweeps dead-process staging without replaying a journal", () => {
+  test("transaction quarantines dead-process staging instead of deleting recovery evidence", () => {
     const root = temp("aidlc-t240-recovery-");
     const stagingName = ".aidlc-txn-00000000-0000-4000-8000-000000000000";
     const staging = join(root, stagingName);
@@ -339,6 +340,33 @@ describe("t240 archive and transaction safety", () => {
     expect(readFileSync(join(root, "a.txt"), "utf-8")).toBe("still-live");
     expect(readFileSync(join(root, "b.txt"), "utf-8")).toBe("next");
     expect(existsSync(staging)).toBe(false);
+    const recovery = readdirSync(root).find((entry) => entry.startsWith(".aidlc-recovery-"));
+    expect(recovery).toBeDefined();
+    expect(readFileSync(join(root, recovery as string, "orphan.txt"), "utf-8")).toBe("unused");
+  });
+
+  test("rollback continues after a restore failure and preserves remaining evidence", () => {
+    const root = temp("aidlc-t240-rollback-recovery-");
+    writeFileSync(join(root, "a.txt"), "old-a");
+    writeFileSync(join(root, "b.txt"), "old-b");
+    expect(() => executePlan({
+      schemaVersion: 1,
+      root,
+      operations: [
+        writeOperation("a.txt", "new-a", transactionState(join(root, "a.txt"))),
+        writeOperation("b.txt", "new-b", transactionState(join(root, "b.txt"))),
+      ],
+    }, {
+      failAfter: 2,
+      failAt: "during-rollback:b.txt",
+    })).toThrow("transaction rollback incomplete");
+
+    expect(readFileSync(join(root, "a.txt"), "utf-8")).toBe("old-a");
+    expect(readFileSync(join(root, "b.txt"), "utf-8")).toBe("new-b");
+    const staging = readdirSync(root).find((entry) => entry.startsWith(".aidlc-txn-"));
+    expect(staging).toBeDefined();
+    expect(readFileSync(join(root, staging as string, "backups", "b.txt"), "utf-8"))
+      .toBe("old-b");
   });
 
   test("transaction never reclaims a live lock with complete metadata", () => {
@@ -480,7 +508,96 @@ describe("t240 archive and transaction safety", () => {
   });
 });
 
-describe("t240 project initialization", () => {
+describe("t243 project initialization", () => {
+  test("OpenCode metadata selects refresh source and refuses a different harness", () => {
+    const project = temp("aidlc-t240-opencode-init-");
+    mkdirSync(join(project, ".git"));
+    const initialized = run(INIT, [
+      "init",
+      "--project-dir",
+      project,
+      "--from",
+      OPENCODE_RELEASE,
+      "--harness",
+      "opencode",
+      "--mcp",
+      "none",
+    ], project);
+    expect(initialized.status, initialized.stdout + initialized.stderr).toBe(0);
+
+    const refreshed = run(INIT, [
+      "init",
+      "--project-dir",
+      project,
+      "--from",
+      OPENCODE_RELEASE,
+    ], project);
+    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+
+    const wrongHarness = run(INIT, [
+      "init",
+      "--project-dir",
+      project,
+      "--from",
+      CLAUDE_RELEASE,
+      "--harness",
+      "claude",
+    ], project);
+    expect(wrongHarness.status).toBe(4);
+    expect(wrongHarness.stdout).toContain("project uses opencode; refusing claude");
+    expect(existsSync(join(project, ".claude"))).toBe(false);
+  });
+
+  test("an explicit installed harness never silently yields to the existing project harness", () => {
+    const project = temp("aidlc-t240-explicit-harness-");
+    mkdirSync(join(project, ".git"));
+    const initialized = run(INIT, [
+      "init",
+      "--project-dir",
+      project,
+      "--from",
+      CLAUDE_RELEASE,
+      "--harness",
+      "claude",
+    ], project);
+    expect(initialized.status, initialized.stdout + initialized.stderr).toBe(0);
+
+    const runtimes = temp("aidlc-t240-installed-runtimes-");
+    cpSync(CLAUDE_RELEASE, join(runtimes, "claude"), { recursive: true });
+    cpSync(OPENCODE_RELEASE, join(runtimes, "opencode"), { recursive: true });
+    const wrongHarness = run(INIT, [
+      "init",
+      "--project-dir",
+      project,
+      "--harness",
+      "opencode",
+    ], project, { AIDLC_RUNTIME_ROOT: runtimes });
+    expect(wrongHarness.status).toBe(4);
+    expect(wrongHarness.stdout).toContain("project uses claude; refusing opencode");
+    expect(existsSync(join(project, ".aidlc"))).toBe(false);
+  }, 60_000);
+
+  test("--force cannot overwrite an unowned whole-file root integration", () => {
+    const project = temp("aidlc-t240-whole-file-");
+    mkdirSync(join(project, ".git"));
+    const config = join(project, "opencode.json");
+    writeFileSync(config, '{"userOwned":true}\n');
+    const initialized = run(INIT, [
+      "init",
+      "--project-dir",
+      project,
+      "--from",
+      OPENCODE_RELEASE,
+      "--harness",
+      "opencode",
+      "--force",
+    ], project);
+    expect(initialized.status).toBe(4);
+    expect(initialized.stdout).toContain("unowned whole file");
+    expect(readFileSync(config, "utf-8")).toBe('{"userOwned":true}\n');
+    expect(existsSync(join(project, ".aidlc"))).toBe(false);
+  });
+
   test("dry-run against a missing explicit target creates no directory", () => {
     const parent = temp("aidlc-t240-dry-parent-");
     const project = join(parent, "not-created");
@@ -981,9 +1098,60 @@ describe("t240 project initialization", () => {
     expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
     expect(readFileSync(stagePath, "utf-8")).toContain("test-pro-refresh-artifact");
     expect(readFileSync(stagePath, "utf-8")).toContain("Upstream refresh marker.");
+
+    const refreshedAgain = run(INIT, [
+      "init",
+      "--project-dir",
+      project,
+      "--from",
+      newer,
+    ], project);
+    expect(refreshedAgain.status, refreshedAgain.stdout + refreshedAgain.stderr).toBe(0);
+    expect(readFileSync(stagePath, "utf-8")).toContain("test-pro-refresh-artifact");
   }, 60_000);
 
-  test("Kiro IDE native projections merge and own only the native command entry", () => {
+  test("refresh planning never mutates generated runners on dry-run or conflict", () => {
+    const project = temp("aidlc-t240-refresh-isolation-");
+    mkdirSync(join(project, ".git"));
+    const installed = run(INIT, [
+      "init",
+      "--project-dir",
+      project,
+      "--from",
+      CLAUDE_RELEASE,
+      "--harness",
+      "claude",
+    ], project);
+    expect(installed.status, installed.stdout + installed.stderr).toBe(0);
+
+    const runner = join(project, ".claude", "skills", "aidlc-build-and-test", "SKILL.md");
+    writeFileSync(runner, `${readFileSync(runner, "utf-8")}\nlocal runner edit\n`);
+    const before = readFileSync(runner);
+    const dry = run(INIT, [
+      "init",
+      "--project-dir",
+      project,
+      "--from",
+      CLAUDE_RELEASE,
+      "--dry-run",
+    ], project);
+    expect(dry.status, dry.stdout + dry.stderr).toBe(0);
+    expect(readFileSync(runner)).toEqual(before);
+
+    const framework = join(project, ".claude", "tools", "aidlc-command.ts");
+    writeFileSync(framework, `${readFileSync(framework, "utf-8")}\nlocal conflict\n`);
+    const conflict = run(INIT, [
+      "init",
+      "--project-dir",
+      project,
+      "--from",
+      CLAUDE_RELEASE,
+    ], project);
+    expect(conflict.status).toBe(4);
+    expect(readFileSync(runner)).toEqual(before);
+  }, 60_000);
+
+  test("Kiro IDE release trust is removed when returning to the Bun copy channel", () => {
     const project = temp("aidlc-t240-kiro-trust-");
     mkdirSync(join(project, ".git"));
     mkdirSync(join(project, ".vscode"));
@@ -1017,12 +1185,45 @@ describe("t240 project initialization", () => {
     ], project);
     expect(switched.status, switched.stdout + switched.stderr).toBe(0);
     settings = JSON.parse(readFileSync(join(project, ".vscode", "settings.json"), "utf-8"));
-    expect(settings["kiroAgent.trustedCommands"]).toEqual(["user-tool *", "aidlc *"]);
+    expect(settings["kiroAgent.trustedCommands"]).toEqual(["user-tool *"]);
     expect(settings["editor.formatOnSave"]).toBe(true);
   }, 60_000);
 });
 
-describe("t240 release lifecycle", () => {
+describe("t243 release lifecycle", () => {
+  test("project pins require the retained OpenCode runtime selected by project metadata", () => {
+    const release = fixtureRelease();
+    const machine = temp("aidlc-t240-opencode-pin-machine-");
+    const project = temp("aidlc-t240-opencode-pin-project-");
+    cpSync(join(REPO_ROOT, "dist", "opencode"), project, { recursive: true });
+    const env = {
+      AIDLC_BIN_DIR: join(machine, "bin"),
+      AIDLC_INSTALL_ROOT: machine,
+    };
+    const installed = run(LIFECYCLE, [
+      "versions",
+      "install",
+      AIDLC_VERSION,
+      "--harness",
+      "claude",
+      "--from",
+      release,
+    ], project, env);
+    expect(installed.status, installed.stdout + installed.stderr).toBe(0);
+
+    const pin = run(LIFECYCLE, [
+      "use",
+      AIDLC_VERSION,
+      "--project-dir",
+      project,
+    ], project, env);
+    expect(pin.status).toBe(2);
+    expect(pin.stdout).toContain(
+      `${AIDLC_VERSION} does not contain this project's opencode runtime`,
+    );
+    expect(existsSync(join(project, ".aidlc-version"))).toBe(false);
+  });
+
   test("installer renders order-independent usage failures as valid JSON", () => {
     const invalidHarness = "invalid\u0001\nharness";
     const result = spawnSync("sh", [
@@ -1723,8 +1924,8 @@ describe("t240 release lifecycle", () => {
   }, 60_000);
 });
 
-describe("t240 projection channel", () => {
-  test("copy and release projections converge on the stamped native invocation", () => {
+describe("t243 projection channel", () => {
+  test("copy projections stay Bun-invoked while release projections are native", () => {
     const stamp = JSON.parse(
       readFileSync(join(CLAUDE_RELEASE, ".claude", "tools", "data", "aidlc-stamp.json"), "utf-8"),
     ) as { frameworkVersion: string; distribution: string };
@@ -1748,10 +1949,31 @@ describe("t240 projection channel", () => {
     for (const harness of distributions) {
       const copy = join(REPO_ROOT, "dist", harness);
       const release = join(REPO_ROOT, "dist-release", harness);
-      expect(walkFiles(copy)).toEqual(walkFiles(release));
-      for (const path of walkFiles(copy)) {
-        expect(sha256Bytes(readFileSync(join(copy, path))), `${harness}/${path}`)
-          .toBe(sha256Bytes(readFileSync(join(release, path))));
+      const manifest = JSON.parse(
+        readFileSync(
+          walkFiles(copy)
+            .map((path) => join(copy, path))
+            .find((path) => path.endsWith("/tools/data/aidlc-stamp.json")) as string,
+          "utf-8",
+        ),
+      ) as { harnessDir: string };
+      const copyText = walkFiles(copy)
+        .filter((path) => /\.(md|json|toml|hook|ts)$/.test(path))
+        .map((path) => readFileSync(join(copy, path), "utf-8"))
+        .join("\n");
+      const releaseText = walkFiles(release)
+        .filter((path) => /\.(md|json|toml|hook|ts)$/.test(path))
+        .map((path) => readFileSync(join(release, path), "utf-8"))
+        .join("\n");
+      expect(copyText).toContain(`bun ${manifest.harnessDir}/tools/aidlc.ts`);
+      expect(releaseText).not.toMatch(
+        new RegExp(`\\bbun\\s+[^\\n]*${manifest.harnessDir.replace(".", "\\.")}/(?:tools|hooks)/aidlc`),
+      );
+      expect(copyText).not.toContain("{{INVOKE}}");
+      expect(releaseText).not.toContain("{{INVOKE}}");
+      if (harness === "kiro-ide") {
+        expect(existsSync(join(copy, ".vscode", "settings.json"))).toBe(false);
+        expect(existsSync(join(release, ".vscode", "settings.json"))).toBe(true);
       }
     }
   });
@@ -1890,7 +2112,9 @@ describe("t240 projection channel", () => {
         expect(allowed.some((command) => command.startsWith("bun "))).toBe(false);
       }
       expect(readFileSync(join(root, "AGENTS.md"), "utf-8"))
-        .toContain("Native installs use the self-contained `aidlc` binary");
+        .toContain(
+          "**Runtime**: Framework commands run through `aidlc`; keep that command and its runtime available.",
+        );
     }
     const ideSettings = JSON.parse(
       readFileSync(join(KIRO_IDE_RELEASE, ".vscode", "settings.json"), "utf-8"),
@@ -1906,7 +2130,8 @@ describe("t240 projection channel", () => {
     const hooks = readFileSync(join(CODEX_RELEASE, ".codex", "hooks.json"), "utf-8");
     const trust = readFileSync(join(CODEX_RELEASE, ".codex", "trust-seed.toml"), "utf-8");
     expect(hooks).toContain("aidlc adapter codex");
-    expect(trust).toContain("native `aidlc adapter codex ...`");
+    expect(trust).toContain("projected `aidlc adapter codex ...`");
+    expect(trust).not.toContain("bun .codex/tools/aidlc.ts");
     expect(trust).not.toContain("bun scripts/package.ts codex trust");
     const parsedHooks = JSON.parse(hooks) as {
       hooks: Record<string, Array<{ hooks: Array<{ command: string }> }>>;
@@ -1951,7 +2176,9 @@ describe("t240 projection channel", () => {
       }
     }
     expect(readFileSync(join(CODEX_RELEASE, "AGENTS.md"), "utf-8"))
-      .toContain("Native installs use the self-contained `aidlc` binary");
+      .toContain(
+        "**Runtime**: Framework commands run through `aidlc`; keep that command and its runtime available.",
+      );
   });
 
   test("projection descriptors cannot name paths outside the projection", async () => {

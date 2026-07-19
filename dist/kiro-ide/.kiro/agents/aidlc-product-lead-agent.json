@@ -17,7 +17,7 @@
   "toolsSettings": {
     "execute_bash": {
       "allowedCommands": [
-        "aidlc .*",
+        "bun .kiro/tools/.*",
         "date -u .*"
       ]
     },

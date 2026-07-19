@@ -8,7 +8,7 @@ A native implementation of the **AI-DLC methodology** (AI-Driven Development Lif
 
 The methodology lives once, in a harness-neutral `core/`; each harness adds a thin surface that decides how it shows up on that harness. So you edit the methodology in one place, and every harness distribution is generated from it — no harness gets special treatment. (See [Repository layout](#repository-layout) for how the pieces fit together.)
 
-![version](https://img.shields.io/badge/version-2.5.3-blue)
+![version](https://img.shields.io/badge/version-2.5.4-blue)
 ![license](https://img.shields.io/badge/license-MIT--0-green)
 ![Kiro IDE](https://img.shields.io/badge/harness-Kiro%20IDE-orange)
 ![Kiro CLI](https://img.shields.io/badge/harness-Kiro%20CLI-orange)
@@ -96,10 +96,10 @@ init, offline and proxy use, pins, upgrades, and rollback.
 ### Advanced Manual Projection
 
 The generated `dist/<harness>/` trees remain available for source checkouts.
-They now invoke the installed native `aidlc` command and do not form a
-standalone Bun installation. Install the matching binary first, copy the
-complete projection, and merge root files rather than replacing project-owned
-content.
+They retain the Bun-invoked copy channel, so install Bun before copying the
+complete projection. The installer-backed `aidlc init` path instead consumes
+the native `dist-release/<harness>/` projection and does not require Bun.
+Merge root files rather than replacing project-owned content.
 
 <details>
 <summary><b>Manual projection: Kiro IDE</b></summary>

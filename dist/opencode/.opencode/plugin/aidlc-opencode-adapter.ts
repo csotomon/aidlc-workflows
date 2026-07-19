@@ -5,8 +5,8 @@
 // opencode has no settings.json/hooks.json hook registry; its extension seam is
 // the PLUGIN API (auto-discovered from .opencode/plugin/*.ts, loaded in-process
 // by the opencode runtime). This one plugin maps opencode's hook surface onto
-// the core hook bodies, each run through `aidlc hook` and fed the ClaudeCodeHookInput
-// JSON shape the core hooks parse, routed through the native dispatcher
+// the core hook bodies, each run through the projected dispatcher and fed the
+// ClaudeCodeHookInput JSON shape the core hooks parse
 // (live-verified on opencode 1.17.18):
 //
 //   opencode moment                      → core hook (Claude event it mirrors)
@@ -46,6 +46,10 @@ import { spawn } from "node:child_process";
 import { isAbsolute, join } from "node:path";
 
 const NUDGE_SENTINEL = "[aidlc-forwarding-nudge]";
+const PROJECTED_INVOKE = "bun .aidlc/tools/aidlc.ts";
+const DEFAULT_AIDLC_COMMAND = PROJECTED_INVOKE.startsWith("{{")
+  ? ["aidlc"]
+  : PROJECTED_INVOKE.trim().split(/\s+/);
 
 function runCoreHook(
   hookFile: string,
@@ -93,11 +97,30 @@ export type PluginInput = {
     };
   };
   directory: string;
-  /** Unit-test seam. Production resolves the installed `aidlc` command. */
+  /** Unit-test seam. Production uses the projected framework dispatcher. */
   aidlcCommand?: readonly string[];
 };
 
-const AIDLC_PREFIX = /^aidlc(?:[ \t]|$)/;
+const PROJECTED_BUN_TOOLS = DEFAULT_AIDLC_COMMAND[0] === "bun"
+  ? (DEFAULT_AIDLC_COMMAND[1] ?? "").replace(/aidlc\.ts$/, "")
+  : null;
+
+function startsWithFrameworkPrefix(command: string): boolean {
+  if (PROJECTED_BUN_TOOLS !== null) {
+    return command.startsWith(`bun ${PROJECTED_BUN_TOOLS}`);
+  }
+  return /^aidlc(?:[ \t]|$)/.test(command);
+}
+
+function isDirectFrameworkInvocation(words: string[]): boolean {
+  if (PROJECTED_BUN_TOOLS !== null) {
+    return words[0] === "bun" &&
+      typeof words[1] === "string" &&
+      words[1].startsWith(PROJECTED_BUN_TOOLS) &&
+      /^aidlc(?:-[A-Za-z0-9_-]+)?\.ts$/.test(words[1].slice(PROJECTED_BUN_TOOLS.length));
+  }
+  return words[0] === "aidlc";
+}
 
 /** Parse one expansion-free shell command into argv, or reject shell syntax. */
 function directShellWords(command: string): string[] | null {
@@ -169,11 +192,11 @@ function directShellWords(command: string): string[] | null {
 function aidlcBashBoundaryViolation(
   command: string,
 ): string | null {
-  if (!AIDLC_PREFIX.test(command)) return null;
+  if (!startsWithFrameworkPrefix(command)) return null;
   const words = directShellWords(command);
-  if (words?.[0] === "aidlc") return null;
+  if (words && isDirectFrameworkInvocation(words)) return null;
   return (
-    "AIDLC bash permission allows one direct invocation of aidlc only. " +
+    "AIDLC bash permission allows one direct invocation of a framework tool only. " +
     "Do not use chaining, redirection, expansion, or command substitution."
   );
 }
@@ -268,7 +291,7 @@ function sessionStartHandled(stdout: string): boolean {
 export default async ({
   client,
   directory,
-  aidlcCommand = ["aidlc"],
+  aidlcCommand = DEFAULT_AIDLC_COMMAND,
 }: PluginInput) => {
   const runCore = (
     hookFile: string,

@@ -14,10 +14,10 @@ this protocol never name a harness tool.
 
 ### Critical Compliance Checklist (most commonly missed steps)
 Before and during EVERY stage, verify:
-1. [ ] **Use the engine for forward gate transitions** — `aidlc __delegate state gate-start <slug>` may be used before the approval gate (`[-]` → `[?]`) so status shows the held gate, but the approve path is `aidlc __delegate orchestrate report --stage <slug> --result approved --user-input "<choice>"`. The report command opens a missing gate when needed, emits the correct audit events through the state route, and advances. Request-changes still uses `aidlc __delegate state reject <slug> --feedback "<text>"`. Do NOT call `aidlc __delegate audit append` separately. (§2)
-2. [ ] **Log questions through the native `log` route** — before presenting a structured question: `aidlc __delegate log decision --stage <slug> --decision "<summary>" --options "<csv>"`. After response: `aidlc __delegate log answer --stage <slug> --details "<exact choice>"`. (§3)
+1. [ ] **Use the engine for forward gate transitions** — `bun .claude/tools/aidlc.ts __delegate state gate-start <slug>` may be used before the approval gate (`[-]` → `[?]`) so status shows the held gate, but the approve path is `bun .claude/tools/aidlc.ts __delegate orchestrate report --stage <slug> --result approved --user-input "<choice>"`. The report command opens a missing gate when needed, emits the correct audit events through the state route, and advances. Request-changes still uses `bun .claude/tools/aidlc.ts __delegate state reject <slug> --feedback "<text>"`. Do NOT call `bun .claude/tools/aidlc.ts __delegate audit append` separately. (§2)
+2. [ ] **Log questions through the native `log` route** — before presenting a structured question: `bun .claude/tools/aidlc.ts __delegate log decision --stage <slug> --decision "<summary>" --options "<csv>"`. After response: `bun .claude/tools/aidlc.ts __delegate log answer --stage <slug> --details "<exact choice>"`. (§3)
 3. [ ] **Never summarize User Input** — use exact option labels. (§2, §3)
-4. [ ] **Task transitions + state sync** — Mark previous task `completed`, then `TaskUpdate({ ..., status: "in_progress", activeForm: "Running [Stage] [slug]" })`. The `[slug]` suffix triggers the PostToolUse hook that syncs the state file. `aidlc __delegate orchestrate report --stage <slug> --result approved` auto-advances to the next in-scope stage (or completes the workflow on the final stage) — do NOT call `advance` separately after approval. (§4)
+4. [ ] **Task transitions + state sync** — Mark previous task `completed`, then `TaskUpdate({ ..., status: "in_progress", activeForm: "Running [Stage] [slug]" })`. The `[slug]` suffix triggers the PostToolUse hook that syncs the state file. `bun .claude/tools/aidlc.ts __delegate orchestrate report --stage <slug> --result approved` auto-advances to the next in-scope stage (or completes the workflow on the final stage) — do NOT call `advance` separately after approval. (§4)
 5. [ ] **Stage ritual is ATOMIC** — once a stage starts, EVERY step in its protocol fires: questions → artifact → reviewer (if declared) → learnings → gate. No step is skippable based on inferred user intent. "Skip to stage X" means skip INTERMEDIATE stages, NOT shortcut the TARGET stage's ritual. If a user jumps forward from a stage at its gate, the current stage's learnings ritual (§13) MUST fire before the jump executes.
 6. [ ] **Autonomy is NEVER inferred** — a user saying "go with recommended" or "pick the best answers" for one stage is a ONE-TIME instruction for THAT stage only. It does NOT create a standing rule. The next stage starts fresh with its declared autonomy mode. The ONLY way to get autonomous mode is: (a) the directive explicitly carries `autonomy: autonomous`, OR (b) the human explicitly says "run this autonomous" for the specific stage being proposed. NEVER carry forward an autonomy inference from a previous stage. NEVER self-answer questions without explicit permission for THIS stage.
 
@@ -133,7 +133,7 @@ When a Bolt's code-generation returns failure, **always halt and present the hal
 - Skip: mark `[S]` in state with reason, proceed to next batch. Worktree at `<path>` is preserved.
 - Abort: stop Construction; user can resume later. Worktree at `<path>` is preserved.
 
-The orchestrator runs `aidlc __delegate worktree info --slug <slug>` to obtain the worktree `<path>` and `<branch_name>` deterministically before composing the halt-and-ask question. See `SKILL.md` § "Halt-and-ask failure handling" for the full tool-call sequence and the `worktree-info-schema.md` knowledge file for the JSON contract.
+The orchestrator runs `bun .claude/tools/aidlc.ts __delegate worktree info --slug <slug>` to obtain the worktree `<path>` and `<branch_name>` deterministically before composing the halt-and-ask question. See `SKILL.md` § "Halt-and-ask failure handling" for the full tool-call sequence and the `worktree-info-schema.md` knowledge file for the JSON contract.
 
 ```question
 prompt: "Bolt [Z] failed during code generation: [short error]. Worktree at [path] on branch [branch_name]. How would you like to proceed?"
@@ -156,11 +156,11 @@ Every stage ends with this 5-part structure:
 
 ### Part 0: Enter the approval gate (mandatory — before presenting completion)
 Before showing the completion message:
-1. Optional before the human prompt: `aidlc __delegate state gate-start <slug>` — marks the stage `[-]` → `[?]` and emits `STAGE_AWAITING_APPROVAL`. The stage is now on-hold waiting for the user; `/aidlc --status` will show "Awaiting your approval on <stage-name>". If this step is missed, the later `report --stage <slug> --result approved` opens the missing gate before approval, and `reject <slug>` likewise backfills it before the rejection (both backfilled rows carry `Recovered: true`).
+1. Optional before the human prompt: `bun .claude/tools/aidlc.ts __delegate state gate-start <slug>` — marks the stage `[-]` → `[?]` and emits `STAGE_AWAITING_APPROVAL`. The stage is now on-hold waiting for the user; `/aidlc --status` will show "Awaiting your approval on <stage-name>". If this step is missed, the later `report --stage <slug> --result approved` opens the missing gate before approval, and `reject <slug>` likewise backfills it before the rejection (both backfilled rows carry `Recovered: true`).
 2. Present Parts 1-3 (announcement, summary, approval question).
 3. Based on the user response:
-   - **Approve** → `aidlc __delegate orchestrate report --stage <slug> --result approved --user-input "<exact choice>"`. The engine emits any missing `STAGE_AWAITING_APPROVAL`, then `GATE_APPROVED` + `STAGE_COMPLETED`, and auto-advances to the next in-scope stage (or completes the workflow on the final stage). No separate `advance` call required.
-   - **Request Changes** → `aidlc __delegate state reject <slug> --feedback "<text>"`. The tool emits `GATE_REJECTED` + `STAGE_REVISING`, marks `[?]` → `[R]`, increments Revision Count. If gate-start was skipped (stage still `[-]`), reject backfills the missing `STAGE_AWAITING_APPROVAL` first — mirroring the approve-side backfill. After re-running the stage work, call `aidlc __delegate state revise <slug>` to re-enter the gate (emits a fresh `STAGE_AWAITING_APPROVAL`, marks `[R]` → `[?]`). If you revise the artifact at an open gate without running this verb, the engine backfills the `GATE_REJECTED` + `STAGE_REVISING` pair (tagged `Recovered: true`) at the next approve so the revision is not lost, but run the verb yourself so the feedback text is recorded.
+   - **Approve** → `bun .claude/tools/aidlc.ts __delegate orchestrate report --stage <slug> --result approved --user-input "<exact choice>"`. The engine emits any missing `STAGE_AWAITING_APPROVAL`, then `GATE_APPROVED` + `STAGE_COMPLETED`, and auto-advances to the next in-scope stage (or completes the workflow on the final stage). No separate `advance` call required.
+   - **Request Changes** → `bun .claude/tools/aidlc.ts __delegate state reject <slug> --feedback "<text>"`. The tool emits `GATE_REJECTED` + `STAGE_REVISING`, marks `[?]` → `[R]`, increments Revision Count. If gate-start was skipped (stage still `[-]`), reject backfills the missing `STAGE_AWAITING_APPROVAL` first — mirroring the approve-side backfill. After re-running the stage work, call `bun .claude/tools/aidlc.ts __delegate state revise <slug>` to re-enter the gate (emits a fresh `STAGE_AWAITING_APPROVAL`, marks `[R]` → `[?]`). If you revise the artifact at an open gate without running this verb, the engine backfills the `GATE_REJECTED` + `STAGE_REVISING` pair (tagged `Recovered: true`) at the next approve so the revision is not lost, but run the verb yourself so the feedback text is recorded.
    - **Accept as-is** (after 3 rejection cycles) → same as Approve; include `--user-input "Accept as-is after N cycles"`.
 
 ### Part 1: Announcement (mandatory)
@@ -204,7 +204,7 @@ in-scope progress with overall shown parenthetically:
 Progress: [X]/[S] in-scope stages complete ([N]/32 overall) | [phase-N]/[phase-total] [Phase]. Next: [Next Stage Name]
 ```
 Where `S` = total `EXECUTE` stages for the current scope, derived from the
-compiled scope grid. Use `aidlc __delegate utility
+compiled scope grid. Use `bun .claude/tools/aidlc.ts __delegate utility
 scope-table` when you need the current totals; never carry a hand-maintained
 per-scope count table in this protocol.
 
@@ -372,7 +372,7 @@ When the orchestrator runs a Bolt in phased mode:
 
 **Engine-driven per-unit iteration.** The orchestration engine now drives the per-Unit loop for the inline per-Unit design stages (functional-design, nfr-requirements, nfr-design, infrastructure-design) the same way it always has for code-generation: on a `next` that lands on an in-flight per-Unit stage (off the swarm path), the engine emits ONE `run-stage` directive per Unit, in Bolt build order, carrying the resolved Unit name in `directive.unit` and its artifact paths. The per-Unit ARTIFACTS on disk are the coverage ledger (a Unit is done for a stage once all of the stage's `produces` exist under `construction/<unit>/<stage>/`); the engine substitutes the next uncovered Unit on each `next`. The stage's per-Unit gate is **suppressed** (`gate: false`) on every not-yet-covered Unit, and the stage's real gate is presented exactly once, on the re-entry after the LAST Unit's artifacts land on disk, so a single stage-level approval covers all Units and cannot be reached until every Unit is built (the same "per-Unit gate suppressed, single gate replaces it" rule point 6 already states for code-generation, now applied across all five per-Unit stages, and enforced deterministically: `report --result approved` on a not-yet-completed per-Unit stage is refused while any Unit is uncovered). A workflow with no units-generation dependency artifact on disk degrades to one single-iteration directive (unchanged behaviour). When the artifact exists but the compiled graph is missing its bolt_dag (a stale runtime graph), the engine recomputes the unit batches from the artifact on the spot, so the per-unit loop never silently shrinks to one unit; an artifact whose units block does not parse is surfaced as an error instead.
 
-**Unit-major iteration (opt-in).** By default the walk above is stage-major: a design stage runs for every Unit, then the next stage runs for every Unit. When the state file records `Construction Iteration: unit-major` under `## Runtime State` (set at delivery-planning via `aidlc __delegate state set-construction-iteration unit-major`, or by a human), the engine instead walks the four inline design stages unit-major: for each Unit in Bolt build order (outer), for each design stage in graph order (inner), it emits the first uncovered (stage, Unit) pair with `gate: false`, so one Unit's four design documents are authored consecutively before the next Unit begins. code-generation (`mode: subagent`) is never part of this walk. The gates are UNCHANGED in count and machinery: the four per-stage gates still fire, but late and in a cascade at the end of the design block once the whole (stage x Unit) grid is covered, one human approval per stage per turn. Because a stage's per-Unit design work can run while `Current Stage` still points at an earlier design stage, a directive's `directive.stage` may name a LATER design stage than `Current Stage`, and a stage's `STAGE_STARTED` audit event may land after that stage's per-Unit artifacts were written; the audit trail stays complete and stage-keyed. Always act on the directive's own `directive.stage` + `directive.unit`, never on `Current Stage`.
+**Unit-major iteration (opt-in).** By default the walk above is stage-major: a design stage runs for every Unit, then the next stage runs for every Unit. When the state file records `Construction Iteration: unit-major` under `## Runtime State` (set at delivery-planning via `bun .claude/tools/aidlc.ts __delegate state set-construction-iteration unit-major`, or by a human), the engine instead walks the four inline design stages unit-major: for each Unit in Bolt build order (outer), for each design stage in graph order (inner), it emits the first uncovered (stage, Unit) pair with `gate: false`, so one Unit's four design documents are authored consecutively before the next Unit begins. code-generation (`mode: subagent`) is never part of this walk. The gates are UNCHANGED in count and machinery: the four per-stage gates still fire, but late and in a cascade at the end of the design block once the whole (stage x Unit) grid is covered, one human approval per stage per turn. Because a stage's per-Unit design work can run while `Current Stage` still points at an earlier design stage, a directive's `directive.stage` may name a LATER design stage than `Current Stage`, and a stage's `STAGE_STARTED` audit event may land after that stage's per-Unit artifacts were written; the audit trail stays complete and stage-keyed. Always act on the directive's own `directive.stage` + `directive.unit`, never on `Current Stage`.
 
 Each construction stage file (3.1–3.4) documents its execution modes (QUESTION-ONLY, ARTIFACT-ONLY, Full) and the step split points. See the individual stage files for details.
 
@@ -382,7 +382,7 @@ Each construction stage file (3.1–3.4) documents its execution modes (QUESTION
 
 After completing a stage:
 1. Advance state atomically via CLI tool (see "Silent bookkeeping writes" below):
-   `aidlc __delegate state advance "<completed-slug>" "<next-slug>"`
+   `bun .claude/tools/aidlc.ts __delegate state advance "<completed-slug>" "<next-slug>"`
    This marks `[x]`, updates Active Agent, increments Completed, updates all status fields.
 2. Hooks handle audit logging for file writes automatically
 
@@ -404,15 +404,15 @@ Rules:
 - For skipped stages, mark completed with skip note: TaskUpdate({ taskId: [ID], status: "completed", description: "[original] — Skipped: [reason]" })
 
 ### MANDATORY: Conversation event logging checklist
-The PostToolUse hook auto-logs file writes as `ARTIFACT_CREATED` / `ARTIFACT_UPDATED`. Conversation events (questions, approvals, user responses) are NOT hook-logged and MUST be recorded via the `log` / `state` delegate routes. Those routes own audit emission — do NOT call `aidlc __delegate audit append` by hand for these events.
+The PostToolUse hook auto-logs file writes as `ARTIFACT_CREATED` / `ARTIFACT_UPDATED`. Conversation events (questions, approvals, user responses) are NOT hook-logged and MUST be recorded via the `log` / `state` delegate routes. Those routes own audit emission — do NOT call `bun .claude/tools/aidlc.ts __delegate audit append` by hand for these events.
 
 At each approval gate — see §2 Part 0 for the full flow. Summary:
-1. BEFORE presenting the approval question: optionally `aidlc __delegate state gate-start <slug>` (emits `STAGE_AWAITING_APPROVAL` and makes status truthful while the prompt is open).
-2. AFTER user response: `aidlc __delegate orchestrate report --stage <slug> --result approved --user-input "<choice>"` or `aidlc __delegate state reject <slug> --feedback "<text>"`. `report` emits any missing gate row, then `GATE_APPROVED` + `STAGE_COMPLETED`, and auto-advances to the next in-scope stage (or completes the workflow if this was the final stage). `reject` likewise emits any missing gate row, then `GATE_REJECTED` + `STAGE_REVISING`, and leaves the stage in `[R]`.
+1. BEFORE presenting the approval question: optionally `bun .claude/tools/aidlc.ts __delegate state gate-start <slug>` (emits `STAGE_AWAITING_APPROVAL` and makes status truthful while the prompt is open).
+2. AFTER user response: `bun .claude/tools/aidlc.ts __delegate orchestrate report --stage <slug> --result approved --user-input "<choice>"` or `bun .claude/tools/aidlc.ts __delegate state reject <slug> --feedback "<text>"`. `report` emits any missing gate row, then `GATE_APPROVED` + `STAGE_COMPLETED`, and auto-advances to the next in-scope stage (or completes the workflow if this was the final stage). `reject` likewise emits any missing gate row, then `GATE_REJECTED` + `STAGE_REVISING`, and leaves the stage in `[R]`.
 
 At each question interaction:
-1. BEFORE presenting the question: `aidlc __delegate log decision --stage <slug> --decision "<summary>" --options "<A,B,C>"` (emits `DECISION_RECORDED`).
-2. AFTER response: `aidlc __delegate log answer --stage <slug> --details "<summary of answers>"` (emits `QUESTION_ANSWERED`).
+1. BEFORE presenting the question: `bun .claude/tools/aidlc.ts __delegate log decision --stage <slug> --decision "<summary>" --options "<A,B,C>"` (emits `DECISION_RECORDED`).
+2. AFTER response: `bun .claude/tools/aidlc.ts __delegate log answer --stage <slug> --details "<summary of answers>"` (emits `QUESTION_ANSWERED`).
 
 ### Stage progress notation
 - `[ ]` — Not started
@@ -420,12 +420,12 @@ At each question interaction:
 - `[x]` — Completed (approved by user)
 - `[S]` — Skipped via `--stage` or `--phase` jump (not executed, excluded from progress counts)
 
-**Enforcement:** State file updates happen automatically via the PostToolUse hook when `TaskUpdate` sets a stage task to `in_progress` with a `[slug]` suffix in `activeForm`. At stage END, `aidlc __delegate orchestrate report --stage <slug> --result approved` marks the completed stage `[x]`, auto-advances to the next in-scope stage, and handles completion bookkeeping. Do not skip the intermediate `[-]` state by going directly from `[ ]` to `[x]`.
+**Enforcement:** State file updates happen automatically via the PostToolUse hook when `TaskUpdate` sets a stage task to `in_progress` with a `[slug]` suffix in `activeForm`. At stage END, `bun .claude/tools/aidlc.ts __delegate orchestrate report --stage <slug> --result approved` marks the completed stage `[x]`, auto-advances to the next in-scope stage, and handles completion bookkeeping. Do not skip the intermediate `[-]` state by going directly from `[ ]` to `[x]`.
 
 **`[S]` behavior:**
-- Set by the Stage/Phase Jump handler (`aidlc __delegate jump execute`) for all in-scope stages before the jump target
+- Set by the Stage/Phase Jump handler (`bun .claude/tools/aidlc.ts __delegate jump execute`) for all in-scope stages before the jump target
 - Excluded from statusline progress counts (not counted in total or done)
-- Not modified by normal stage advancement (`aidlc __delegate state advance` only changes the completed and next stages)
+- Not modified by normal stage advancement (`bun .claude/tools/aidlc.ts __delegate state advance` only changes the completed and next stages)
 - On resume, treated as completed for task tracking (task created and immediately marked completed)
 - Never set during normal workflow execution — only by explicit `--stage`/`--phase` jumps
 
@@ -442,12 +442,12 @@ State and audit updates use the CLI tools in `.claude/tools/`. These tools handl
 # No manual state update needed at stage start.
 
 # Mark stage complete
-aidlc __delegate state checkbox "SLUG=completed"
+bun .claude/tools/aidlc.ts __delegate state checkbox "SLUG=completed"
 ```
 
 **Field updates** (aidlc-state.md) — the tool writes fields in `- **Field Name**: value` format:
 ```bash
-aidlc __delegate state set "Current Stage=STAGE_NAME" "Lifecycle Phase=PHASE" "Status=In Progress" "Last Updated=NOW" "Active Agent=AGENT_NAME" "In Progress=STAGE_NAME"
+bun .claude/tools/aidlc.ts __delegate state set "Current Stage=STAGE_NAME" "Lifecycle Phase=PHASE" "Status=In Progress" "Last Updated=NOW" "Active Agent=AGENT_NAME" "In Progress=STAGE_NAME"
 ```
 Special values: `NOW` auto-generates ISO timestamp, `+1`/`-1` increment/decrement numeric fields.
 
@@ -462,30 +462,30 @@ Fields managed by the tools (matching state template format `- **Field**: value`
 
 **Stage advancement** (the most common operation — replaces all sed + cat for normal stage transitions):
 ```bash
-aidlc __delegate state advance "completed-slug" "next-slug"
+bun .claude/tools/aidlc.ts __delegate state advance "completed-slug" "next-slug"
 ```
 Atomically: marks completed `[x]`, increments Completed count, updates completion fields (Last Completed Stage, Next Stage, Last Updated). Also sets up the next stage (`[-]`, Current Stage, Lifecycle Phase, Active Agent) as part of the atomic transition — the PostToolUse hook reinforces these fields when the next TaskUpdate fires.
 
 **Stage finalize** (complete-and-pause — used by jump handler when stopping after target stage):
 ```bash
-aidlc __delegate state finalize "completed-slug"
+bun .claude/tools/aidlc.ts __delegate state finalize "completed-slug"
 ```
 Like `advance` but does NOT mark next stage `[-]` or set `In Progress`. Marks completed `[x]`, syncs Completed counter, updates Current Stage to next, sets Last Completed Stage, Last Updated, Active Agent, Next Action. If there is no next stage, sets Status=Completed, Current Stage=none, In Progress=none.
 
 **Workflow complete** (final stage done — no next stage exists):
 ```bash
-aidlc __delegate state complete-workflow "completed-slug"
+bun .claude/tools/aidlc.ts __delegate state complete-workflow "completed-slug"
 ```
-Atomically: marks `[x]`, sets Status=Completed, updates Last Updated, sets Last Completed Stage, clears In Progress, sets Next Stage=none, sets Next Action=Workflow complete, AND emits `PHASE_COMPLETED` + `PHASE_VERIFIED` + `WORKFLOW_COMPLETED` to the audit. No separate `aidlc __delegate audit append` call is needed.
+Atomically: marks `[x]`, sets Status=Completed, updates Last Updated, sets Last Completed Stage, clears In Progress, sets Next Stage=none, sets Next Action=Workflow complete, AND emits `PHASE_COMPLETED` + `PHASE_VERIFIED` + `WORKFLOW_COMPLETED` to the audit. No separate `bun .claude/tools/aidlc.ts __delegate audit append` call is needed.
 
-**Event emission is tool-owned.** State transitions (`advance`, `approve`, `reject`, `skip`, `complete-workflow`, etc.) emit the correct audit events internally. Config changes (`scope-change`, `config-change`, `detect-scope`) likewise. Construction bolts use the `bolt` route. Questions and decisions use the `log` route. The `aidlc __delegate audit append` route is still available but should not be used by the orchestrator for canonical state transitions — direct use is reserved for hooks and for edge cases (e.g., logging an `ERROR_LOGGED` event where no specific tool owns it yet).
+**Event emission is tool-owned.** State transitions (`advance`, `approve`, `reject`, `skip`, `complete-workflow`, etc.) emit the correct audit events internally. Config changes (`scope-change`, `config-change`, `detect-scope`) likewise. Construction bolts use the `bolt` route. Questions and decisions use the `log` route. The `bun .claude/tools/aidlc.ts __delegate audit append` route is still available but should not be used by the orchestrator for canonical state transitions — direct use is reserved for hooks and for edge cases (e.g., logging an `ERROR_LOGGED` event where no specific tool owns it yet).
 
 **Stage graph lookups** (no state file needed):
 ```bash
-aidlc __delegate state lookup phase-of SLUG          # → phase name
-aidlc __delegate state lookup next-stage SLUG SCOPE   # → next in-scope slug
-aidlc __delegate state lookup agent-for SLUG          # → lead agent name
-aidlc __delegate state lookup validate-stage SLUG     # → JSON with slug, phase, number, valid
+bun .claude/tools/aidlc.ts __delegate state lookup phase-of SLUG          # → phase name
+bun .claude/tools/aidlc.ts __delegate state lookup next-stage SLUG SCOPE   # → next in-scope slug
+bun .claude/tools/aidlc.ts __delegate state lookup agent-for SLUG          # → lead agent name
+bun .claude/tools/aidlc.ts __delegate state lookup validate-stage SLUG     # → JSON with slug, phase, number, valid
 ```
 
 ### MANDATORY: Plan-Level Checkbox Enforcement
@@ -577,7 +577,7 @@ Use these templates for non-standard events. Each provides structured fields for
 - Log all user responses with ISO timestamps immediately after receiving them.
 - If this clone's audit shard does not exist, create it with a header: `# AI-DLC Audit Log`
 - If this clone's audit shard appears corrupted (no valid markdown structure), create a backup (`<record>/audit/<host>-<clone>.md.bak`) and start a new shard noting the corruption.
-- `ERROR_LOGGED` and `RECOVERY_COMPLETED` are declared in the taxonomy but reserved for the recovery workflow (not yet implemented). Do not hand-write them via `aidlc __delegate audit append` — the recovery flow will ship its own emitter. Canonical state transitions go through the state/log/bolt routes (see §4 "Silent bookkeeping writes").
+- `ERROR_LOGGED` and `RECOVERY_COMPLETED` are declared in the taxonomy but reserved for the recovery workflow (not yet implemented). Do not hand-write them via `bun .claude/tools/aidlc.ts __delegate audit append` — the recovery flow will ship its own emitter. Canonical state transitions go through the state/log/bolt routes (see §4 "Silent bookkeeping writes").
 
 ---
 
@@ -625,7 +625,7 @@ Create exactly the detail needed — no more, no less. Depth adapts to scope and
 The active scope file declares the default `depth` (the rows below mirror the
 shipped scope files' `depth:` frontmatter - name and depth only, no stage
 counts), and the compiled scope grid declares which stages execute. Use
-`aidlc __delegate utility scope-table` for the current
+`bun .claude/tools/aidlc.ts __delegate utility scope-table` for the current
 scope/depth/count table - never copy stage counts into this protocol.
 
 | Scope | Default Depth |
@@ -952,7 +952,7 @@ Trigger after Step N-1 (completion message rendered) and before Step N (approval
 
 2. **Surface candidates (the tool reads memory.md).** Run:
    ```bash
-   aidlc __delegate learnings surface --slug <stage-slug>
+   bun .claude/tools/aidlc.ts __delegate learnings surface --slug <stage-slug>
    ```
    The tool parses memory.md and emits structured JSON: one candidate per non-blank entry under **Interpretations / Deviations / Tradeoffs** (surfaced verbatim — no paraphrase, no "interesting" filtering), plus a read-only `parked_open_questions[]` list. Open questions are research items, not learnings to install — they never become candidates. Most runs surface nothing worth keeping; that's the most common outcome.
 
@@ -962,7 +962,7 @@ Trigger after Step N-1 (completion message rendered) and before Step N (approval
 
 5. **Persist (the tool writes + emits audit).** Build the selections file and call:
    ```bash
-   aidlc __delegate learnings persist --slug <stage-slug> --selections-json <path>
+   bun .claude/tools/aidlc.ts __delegate learnings persist --slug <stage-slug> --selections-json <path>
    ```
    The tool, inside one `withAuditLock` transaction (decide-inside-lock, content-presence idempotency via a `<!-- cid:<slug>:<id> -->` marker so a crashed run recovers without double-appending):
    - **Learning** → appends a practice line under the orchestrator-routed heading in `<scope>.md` (scope ∈ {project, team}): `- <text> (learned YYYY-MM-DD) <!-- cid:... -->`. Ensure-exists the heading first, so a routed heading the file doesn't yet carry is created rather than throwing. Emits `RULE_LEARNED` (with `Source: orchestrator | user_addition`, `Heading: <routed>`).
@@ -1022,7 +1022,7 @@ When a stage detects existing output artifacts in its artifact directory:
 **Audit logging**: After the user's choice, call the state tool (maps the "Redo from scratch" option to `--decision redo`):
 
 ```bash
-aidlc __delegate state reuse-artifact <stage-slug> \
+bun .claude/tools/aidlc.ts __delegate state reuse-artifact <stage-slug> \
   --decision <keep|modify|redo> \
   --artifacts "<comma-separated list of existing artifacts found>"
 ```

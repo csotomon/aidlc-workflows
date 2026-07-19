@@ -21,6 +21,11 @@ export type ReleaseAsset = {
   kind: "binary" | "data" | "installer";
   target?: string;
   distribution?: string;
+  verification?: {
+    status: "VERIFIED" | "UNVERIFIED";
+    mode: "full-runtime" | "inspection-only";
+    hostTarget: string;
+  };
 };
 
 export type ReleaseManifest = {
@@ -137,8 +142,20 @@ export function readReleaseManifest(directory: string): ReleaseManifest {
     if (!Number.isSafeInteger(asset.bytes) || asset.bytes < 0 || asset.bytes > MAX_ASSET_BYTES) {
       throw new Error(`${asset.name}: invalid byte length`);
     }
+    const verificationValid = asset.verification === undefined ||
+      (
+        asset.verification !== null &&
+        typeof asset.verification === "object" &&
+        asset.kind === "binary" &&
+        (asset.verification.status === "VERIFIED" ||
+          asset.verification.status === "UNVERIFIED") &&
+        (asset.verification.mode === "full-runtime" ||
+          asset.verification.mode === "inspection-only") &&
+        /^[a-z0-9][a-z0-9-]*$/.test(asset.verification.hostTarget)
+      );
     if (
       !["binary", "data", "installer"].includes(asset.kind) ||
+      !verificationValid ||
       (asset.kind === "binary" &&
         (!asset.target || asset.name !== `aidlc-${asset.target}${asset.target.startsWith("windows-") ? ".exe" : ""}`)) ||
       (asset.kind === "data" &&
@@ -220,14 +237,14 @@ function remainingTimeout(deadline: number, label: string): number {
   return remaining;
 }
 
-function assertReleaseUrl(url: string): URL {
+function assertReleaseUrl(url: string, allowQuery = false): URL {
   const parsed = new URL(url);
   if (parsed.username || parsed.password) {
     throw new Error(`release URL must not include credentials: ${redact(url)}`);
   }
-  if (parsed.search || parsed.hash) {
+  if ((!allowQuery && parsed.search) || parsed.hash) {
     throw new Error(
-      `release URL must not include a query or fragment: ${redact(url)}`,
+      `release URL must not include ${allowQuery ? "a fragment" : "a query or fragment"}: ${redact(url)}`,
     );
   }
   if (
@@ -287,7 +304,7 @@ async function download(
     let current = url;
     let response: Response | undefined;
     for (let redirects = 0; redirects <= 5; redirects++) {
-      const parsed = assertReleaseUrl(current);
+      const parsed = assertReleaseUrl(current, redirects > 0);
       const proxy = proxyFor(parsed);
       try {
         response = await fetch(current, {
@@ -316,7 +333,13 @@ async function download(
       }
       await response.body?.cancel();
       current = new URL(location, current).toString();
-      assertReleaseUrl(current);
+      try {
+        assertReleaseUrl(current, true);
+      } catch (error) {
+        throw new ReleaseUnavailableError(
+          error instanceof Error ? error.message : String(error),
+        );
+      }
     }
     if (!response) throw new ReleaseUnavailableError(`${redact(url)} returned no response`);
     if (!response.ok) {

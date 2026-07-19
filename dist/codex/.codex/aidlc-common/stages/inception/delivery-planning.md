@@ -137,7 +137,7 @@ unit-at-a-time or walking-skeleton-first plan typically calls for authoring one
 unit's four design documents consecutively before the next unit begins; a plan
 that reasons stage-by-stage across all units does not. Only when the plan calls
 for the unit-first order, record it:
-`aidlc __delegate state set-construction-iteration unit-major`.
+`bun .codex/tools/aidlc.ts __delegate state set-construction-iteration unit-major`.
 The default is `stage-major` (each design stage runs for every unit, then the
 next stage), needs no write, and is byte-identical to prior behaviour. Under
 `unit-major` the same four per-stage design gates still fire, but late and in a

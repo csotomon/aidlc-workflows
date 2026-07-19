@@ -130,7 +130,7 @@ describe("t06 SKILL.md frontmatter (migrated from t06-skill-frontmatter.sh, plan
     // (the .sh only proved each appears SOMEWHERE in the file independently).
     const postCmds = commandsForEvent("PostToolUse");
     expect(postCmds.length).toBeGreaterThan(0); // PostToolUse block present (.sh 6)
-    expect(postCmds).toContain("aidlc hook audit-logger");
+    expect(postCmds).toContain("bun .claude/tools/aidlc.ts hook audit-logger");
   });
 
   test("settings.json registers the validate-state hook on PreCompact [.sh 7 + 8]", () => {
@@ -138,13 +138,13 @@ describe("t06 SKILL.md frontmatter (migrated from t06-skill-frontmatter.sh, plan
     // STRONGER: validate-state is the PreCompact hook (not just present).
     const preCompactCmds = commandsForEvent("PreCompact");
     expect(preCompactCmds.length).toBeGreaterThan(0); // PreCompact block present (.sh 7)
-    expect(preCompactCmds).toContain("aidlc hook validate-state");
+    expect(preCompactCmds).toContain("bun .claude/tools/aidlc.ts hook validate-state");
   });
 
   test("settings.json registers the log-subagent hook on SubagentStop [.sh 9]", () => {
     // STRONGER: log-subagent is the SubagentStop hook, the event that owns it
     // (the .sh only proved the filename appears anywhere in settings.json).
     const subagentCmds = commandsForEvent("SubagentStop");
-    expect(subagentCmds).toContain("aidlc hook log-subagent");
+    expect(subagentCmds).toContain("bun .claude/tools/aidlc.ts hook log-subagent");
   });
 });

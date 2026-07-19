@@ -32,7 +32,7 @@ duration, approved/failed/pending tallies, learnings captured — come
 from the tool, not from eyeballing files:
 
 ```bash
-aidlc __delegate runtime summary --json
+bun .claude/tools/aidlc.ts __delegate runtime summary --json
 ```
 
 The narrative prose (what happened, key decisions, reasoning) is yours
@@ -44,7 +44,7 @@ already reports the figure.
 
 ### Step 1: Read the aggregates
 
-Run `aidlc __delegate runtime summary --json`.
+Run `bun .claude/tools/aidlc.ts __delegate runtime summary --json`.
 
 If it exits non-zero (no `runtime-graph.json` yet), print:
 

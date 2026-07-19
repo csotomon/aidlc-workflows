@@ -59,6 +59,7 @@ import { AIDLC_SRC } from "../harness/fixtures.ts";
 // here is the TS port of that same path (fixtures.ts:42).
 const SKILL_PATH = join(AIDLC_SRC, "skills", "aidlc", "SKILL.md");
 const SKILL = readFileSync(SKILL_PATH, "utf-8");
+const ORCHESTRATE_INVOKE = "bun .claude/tools/aidlc.ts __delegate orchestrate";
 
 describe("t41 SKILL.md forwarding-loop contract (migrated from t41-jump-flag-validation.sh, plan 15)", () => {
   test("SKILL.md exists and is non-empty (precondition)", () => {
@@ -70,15 +71,15 @@ describe("t41 SKILL.md forwarding-loop contract (migrated from t41-jump-flag-val
 
   // --- Tests 1-4: the forwarding loop is present and consults the engine ---
   test("1: loop invokes the orchestration engine [.sh test 1]", () => {
-    expect(SKILL.includes("aidlc __delegate orchestrate")).toBe(true);
+    expect(SKILL.includes(ORCHESTRATE_INVOKE)).toBe(true);
   });
 
   test("2: loop calls the engine's next subcommand [.sh test 2]", () => {
-    expect(SKILL.includes("aidlc __delegate orchestrate next")).toBe(true);
+    expect(SKILL.includes(`${ORCHESTRATE_INVOKE} next`)).toBe(true);
   });
 
   test("3: loop calls the engine's report subcommand [.sh test 3]", () => {
-    expect(SKILL.includes("aidlc __delegate orchestrate report")).toBe(true);
+    expect(SKILL.includes(`${ORCHESTRATE_INVOKE} report`)).toBe(true);
   });
 
   test("4: loop acts on the engine's directive [.sh test 4]", () => {

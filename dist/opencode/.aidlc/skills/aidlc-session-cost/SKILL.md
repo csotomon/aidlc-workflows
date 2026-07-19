@@ -21,7 +21,7 @@ cleared their gates, how much the orchestrator wrote to its observation
 diaries, how often sensors fired, and how many learnings were captured.
 
 Every number this skill prints comes from
-`aidlc __delegate runtime summary --json` — the materialised,
+`bun .aidlc/tools/aidlc.ts __delegate runtime summary --json` — the materialised,
 event-sourced view over `runtime-graph.json`. This skill does **no
 counting of its own**. It does not estimate tokens, does not walk the
 artefact tree, and does not read `audit.md`. If a number isn't in the
@@ -40,7 +40,7 @@ point in a workflow, including mid-stage.
 Run:
 
 ```bash
-aidlc __delegate runtime summary --json
+bun .aidlc/tools/aidlc.ts __delegate runtime summary --json
 ```
 
 If the command exits non-zero (no `runtime-graph.json` yet — the

@@ -90,7 +90,7 @@ Present structured questions to surface five practice areas, one per `aidlc-team
 
 **Re-run pre-fill**: if `aidlc-team.md` already has affirmed content, read each section via `extractMarkdownSection(content, "## Way of Working")` etc. and present the existing text as the default option.
 
-Log each question via `aidlc __delegate log decision` BEFORE presenting it. Log each answer via `aidlc __delegate log answer` after the user responds.
+Log each question via `bun .claude/tools/aidlc.ts __delegate log decision` BEFORE presenting it. Log each answer via `bun .claude/tools/aidlc.ts __delegate log answer` after the user responds.
 
 ### Step 4: Consolidate
 
@@ -104,29 +104,29 @@ Write four artifacts to `<record>/inception/practices-discovery/`:
 
 4. **practices-discovery-timestamp.md** — single line: `Discovered: <ISO-8601 timestamp> at commit <hash>`. Used by future doctor checks for staleness.
 
-After writing the four artifacts, emit `PRACTICES_DISCOVERED` via `aidlc __delegate state practices-event --type discovered --field "Sources Scanned: <list>" --field "Drafts: team-practices.md, discovered-rules.md"` (the tool wraps the audit emission so events stay tool-owned per the audit-first invariant).
+After writing the four artifacts, emit `PRACTICES_DISCOVERED` via `bun .claude/tools/aidlc.ts __delegate state practices-event --type discovered --field "Sources Scanned: <list>" --field "Drafts: team-practices.md, discovered-rules.md"` (the tool wraps the audit emission so events stay tool-owned per the audit-first invariant).
 
 ### Step 5: Affirmation Gate
 
 Compliance with `stage-protocol.md` checklist:
 
-1. `aidlc __delegate state gate-start practices-discovery` BEFORE the affirmation question.
-2. `aidlc __delegate log decision` for the affirmation question.
+1. `bun .claude/tools/aidlc.ts __delegate state gate-start practices-discovery` BEFORE the affirmation question.
+2. `bun .claude/tools/aidlc.ts __delegate log decision` for the affirmation question.
 3. A structured question presents `team-practices.md` and `discovered-rules.md` for review. Options:
    - **Approve** — promote affirmed content to `.claude/rules/aidlc-team.md` and `.claude/rules/aidlc-project.md` (Step 6).
    - **Edit-then-approve** — user revises the artifacts in `<record>/inception/practices-discovery/`, then re-enters this gate.
    - **Reject and rewrite** — discard the drafts, re-run Step 2 (if brownfield) or restart Step 3.
-4. `aidlc __delegate log answer` after the user answers.
-5. `aidlc __delegate orchestrate report --stage practices-discovery --result approved --user-input "<exact label>"` (or `aidlc __delegate state reject practices-discovery --feedback "<text>"`) — auto-emits the gate-approved/gate-rejected audit events through the owning tools.
+4. `bun .claude/tools/aidlc.ts __delegate log answer` after the user answers.
+5. `bun .claude/tools/aidlc.ts __delegate orchestrate report --stage practices-discovery --result approved --user-input "<exact label>"` (or `bun .claude/tools/aidlc.ts __delegate state reject practices-discovery --feedback "<text>"`) — auto-emits the gate-approved/gate-rejected audit events through the owning tools.
 
 ### Step 6: Promote (On Approve Only)
 
-Cross-row promotion of affirmed content from per-workflow audit trail into team-authored harness config is delegated to a single tool subcommand. The orchestrator does NOT read or write the target files directly — `aidlc __delegate state practices-promote` does the read+splice+write atomically and emits `PRACTICES_AFFIRMED` on success or `PRACTICES_OVERRIDE` on failure. This keeps the cross-row writes deterministic and out of the LLM's judgment path.
+Cross-row promotion of affirmed content from per-workflow audit trail into team-authored harness config is delegated to a single tool subcommand. The orchestrator does NOT read or write the target files directly — `bun .claude/tools/aidlc.ts __delegate state practices-promote` does the read+splice+write atomically and emits `PRACTICES_AFFIRMED` on success or `PRACTICES_OVERRIDE` on failure. This keeps the cross-row writes deterministic and out of the LLM's judgment path.
 
 Run:
 
 ```
-aidlc __delegate state practices-promote \
+bun .claude/tools/aidlc.ts __delegate state practices-promote \
   --team-practices <record>/inception/practices-discovery/team-practices.md \
   --discovered-rules <record>/inception/practices-discovery/discovered-rules.md \
   --affirming-user "<user>"
@@ -145,7 +145,7 @@ The subcommand:
 After Step 6 succeeds (the subcommand prints `{"emitted":"PRACTICES_AFFIRMED",...}` and exits 0):
 
 1. `PRACTICES_AFFIRMED` was already emitted by the Step 6 subcommand — do NOT re-emit it.
-2. Update `Practices Affirmed Timestamp` in `<record>/aidlc-state.md` via `aidlc __delegate state set "Practices Affirmed Timestamp=NOW"` (the `NOW` literal expands to the current ISO 8601 timestamp; the field is part of the v7 state template).
+2. Update `Practices Affirmed Timestamp` in `<record>/aidlc-state.md` via `bun .claude/tools/aidlc.ts __delegate state set "Practices Affirmed Timestamp=NOW"` (the `NOW` literal expands to the current ISO 8601 timestamp; the field is part of the v7 state template).
 3. Mark practices-discovery as `[x]` completed in the INCEPTION phase block.
 
 If Step 6 failed (`PRACTICES_OVERRIDE` was emitted by the subcommand and exit was non-zero), abort Step 7 entirely. Do NOT update the timestamp or mark the stage complete. The user re-enters the gate after addressing the failure.

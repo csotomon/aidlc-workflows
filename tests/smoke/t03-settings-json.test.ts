@@ -94,8 +94,8 @@ describe("settings.json — JSON validity [.sh test 1]", () => {
 });
 
 describe("permissions.allow — pre-approved tool list [.sh tests 2-9]", () => {
-  // Native projections grant the deterministic `aidlc` command instead of
-  // unrestricted Bash or harness-local Bun prefixes.
+  // The committed dist/ copy projection grants only its harness-local Bun
+  // dispatcher instead of unrestricted Bash or a native binary dependency.
   const allow = settings.permissions?.allow ?? [];
   const REQUIRED_TOOLS = [
     "Read",
@@ -112,17 +112,17 @@ describe("permissions.allow — pre-approved tool list [.sh tests 2-9]", () => {
       expect(allow).toContain(tool);
     });
   }
-  test("permissions.allow grants only the native aidlc Bash prefix", () => {
-    expect(allow).toContain("Bash(aidlc *)");
+  test("permissions.allow grants only the Bun copy-channel tool directory", () => {
+    expect(allow).toContain("Bash(bun .claude/tools/*)");
     expect(allow).not.toContain("Bash");
-    expect(allow.some((entry) => entry.startsWith("Bash(bun "))).toBe(false);
+    expect(allow).not.toContain("Bash(aidlc *)");
   });
 });
 
 describe("statusLine [.sh test 10]", () => {
-  test("statusLine.command routes through the native aidlc command", () => {
+  test("statusLine.command routes through the Bun copy-channel dispatcher", () => {
     const cmd = settings.statusLine?.command ?? "";
-    expect(cmd).toBe("aidlc statusline");
+    expect(cmd).toBe("bun .claude/tools/aidlc.ts statusline");
   });
 });
 

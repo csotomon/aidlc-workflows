@@ -124,7 +124,7 @@ function envFor(machine: string): NodeJS.ProcessEnv {
   };
 }
 
-describe("t241 machine configuration and update discovery", () => {
+describe("t244 machine configuration and update discovery", () => {
   test("global config works outside projects and precedence is flag, env, config, default", () => {
     const machine = temp("aidlc-t241-config-");
     const cwd = temp("aidlc-t241-config-cwd-");
@@ -356,6 +356,41 @@ describe("t241 machine configuration and update discovery", () => {
     }
   });
 
+  test("older authenticated metadata cannot replace a newer valid update cache", async () => {
+    const newerRelease = fixture(NEXT_VERSION);
+    const olderRelease = fixture("0.0.1");
+    const newerServer = serveReleaseFixture(newerRelease);
+    const olderServer = serveReleaseFixture(olderRelease);
+    const machine = temp("aidlc-t241-update-downgrade-");
+    const saved = Object.fromEntries(
+      ["AIDLC_INSTALL_ROOT", "AIDLC_BIN_DIR", "AIDLC_RELEASE_BASE_URL", "NO_PROXY"]
+        .map((key) => [key, process.env[key]]),
+    );
+    Object.assign(process.env, {
+      ...envFor(machine),
+      AIDLC_RELEASE_BASE_URL: newerServer.baseUrl,
+      NO_PROXY: "127.0.0.1",
+    });
+    try {
+      expect((await refreshUpdateState(15_000)).state).toBe("behind");
+      const before = readFileSync(join(machine, "update-check.json"), "utf-8");
+      process.env.AIDLC_RELEASE_BASE_URL = olderServer.baseUrl;
+
+      const state = await refreshUpdateState(15_000);
+      expect(state.state).toBe("unavailable");
+      expect(state.latestVersion).toBe(NEXT_VERSION);
+      expect(readFileSync(join(machine, "update-check.json"), "utf-8")).toBe(before);
+      expect(readUpdateCache()?.latestVersion).toBe(NEXT_VERSION);
+    } finally {
+      newerServer.stop();
+      olderServer.stop();
+      for (const [key, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
   test("disabled and offline update checks open no socket", async () => {
     const release = fixture(NEXT_VERSION);
     const server = serveReleaseFixture(release);
@@ -386,7 +421,7 @@ describe("t241 machine configuration and update discovery", () => {
         REPO_ROOT,
         env,
       );
-      expect(disabledCheck.status).toBe(3);
+      expect(disabledCheck.status).toBe(1);
       expect(server.requests).toHaveLength(0);
       expect(run(DISPATCHER, [
         "config", "global", "set", "update-check", "on",
@@ -413,7 +448,45 @@ describe("t241 machine configuration and update discovery", () => {
   });
 });
 
-describe("t241 management lifecycle", () => {
+describe("t244 management lifecycle", () => {
+  test("malformed pin entries warn without hiding valid registrations", () => {
+    const machine = temp("aidlc-t241-malformed-pins-");
+    const project = temp("aidlc-t241-malformed-pins-project-");
+    const pinnedProject = temp("aidlc-t241-valid-pin-project-");
+    const version = "9.8.7";
+    mkdirSync(join(machine, "versions", version), { recursive: true });
+    writeFileSync(
+      join(machine, "pins.json"),
+      `${JSON.stringify({
+        [pinnedProject]: version,
+        relative: "not-semver",
+      }, null, 2)}\n`,
+    );
+    const env = envFor(machine);
+
+    const list = run(LIFECYCLE, ["versions", "list", "--json"], project, env);
+    expect(list.status, list.stdout + list.stderr).toBe(0);
+    const data = JSON.parse(list.stdout).data as {
+      versions: Array<{ version: string; pinPaths: string[] }>;
+      pinWarnings: string[];
+    };
+    expect(data.versions).toContainEqual(expect.objectContaining({
+      version,
+      pinPaths: [pinnedProject],
+    }));
+    expect(data.pinWarnings).toEqual([
+      expect.stringContaining("invalid pin entry for relative"),
+    ]);
+
+    const rollback = run(LIFECYCLE, ["rollback", "--list"], project, env);
+    expect(rollback.status).toBe(0);
+    expect(rollback.stdout).toContain("warning:");
+    const prune = run(LIFECYCLE, ["versions", "prune", "--yes"], project, env);
+    expect(prune.status).toBe(4);
+    expect(prune.stdout).toContain("cannot prune while pin registry is invalid");
+    expect(existsSync(join(machine, "versions", version))).toBe(true);
+  });
+
   test("harness add/list/default/remove stays on the active release", () => {
     const release = fixture();
     const nextRelease = fixture(NEXT_VERSION);
@@ -625,7 +698,7 @@ describe("t241 management lifecycle", () => {
   }, 60_000);
 });
 
-describe("t241 Windows and completion release surfaces", () => {
+describe("t244 Windows and completion release surfaces", () => {
   test("strict Windows pointer accepts one versioned executable and rejects extra lines", () => {
     const machine = temp("aidlc-t241-pointer-");
     const saved = process.env.AIDLC_INSTALL_ROOT;
@@ -887,8 +960,12 @@ describe("t241 Windows and completion release surfaces", () => {
     expect(workflow).toContain("unix-lifecycle:");
     expect(workflow).toContain("Exercise the interactive harness picker through a PTY");
     expect(workflow).toContain("name: release-candidate");
+    expect(workflow).toContain("build-results-${{ matrix.directory }}.json");
     const publish = workflow.slice(workflow.indexOf("  publish:"));
     expect(publish).toContain("name: release-candidate");
+    expect(publish).toContain("sha256sum -c checksums.txt");
+    expect(publish.indexOf("sha256sum -c checksums.txt"))
+      .toBeLessThan(publish.indexOf("gh release create"));
     expect(publish).not.toContain("scripts/package-release.ts");
     expect(publish).not.toContain("pattern: binary-*");
   });

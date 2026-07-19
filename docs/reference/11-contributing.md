@@ -11,7 +11,7 @@ Contributions to this implementation are welcome. This guide covers prerequisite
 ## Prerequisites
 
 - **Claude Code** -- native install (recommended, auto-updates): macOS/Linux/WSL `curl -fsSL https://claude.ai/install.sh | bash`; Windows PowerShell `irm https://claude.ai/install.ps1 | iex`. Or `brew install --cask claude-code`. (see [Claude Code docs](https://code.claude.com/docs/en/quickstart))
-- **bun** -- Required to build, package, test, and directly run authored TypeScript sources. Shipped project projections use the self-contained `aidlc` command. Install via `curl -fsSL https://bun.sh/install | bash`; on Windows use `powershell -c "irm bun.sh/install.ps1 | iex"`.
+- **bun** -- Required to build, package, test, directly run authored TypeScript sources, and use the `dist/<harness>/` copy projections. Native `dist-release/<harness>/` installations use the self-contained `aidlc` command. Install via `curl -fsSL https://bun.sh/install | bash`; on Windows use `powershell -c "irm bun.sh/install.ps1 | iex"`.
 - **timeout** (GNU coreutils) -- Required by the test suite for LLM test timeouts (L2/L3). Pre-installed on Linux. macOS: `brew install coreutils` then add gnubin to PATH: `export PATH="/opt/homebrew/opt/coreutils/libexec/gnubin:$PATH"` (in `~/.zshenv` or `~/.zshrc`).
 - **Bash** -- Optional for the POSIX compatibility wrapper (`tests/run-tests.sh`). The primary test runner is `bun tests/run-tests.ts`; at runtime, none of the distributable hooks require Bash.
 - **Bedrock access** -- Required for running live integration and e2e tests (L2/L3). Not needed for L1 protocol tests.
@@ -56,11 +56,15 @@ packager. After `bun scripts/package.ts --check` is clean, run
 `bun scripts/build-binaries.ts` for the native artifact or add `--all-targets`
 for the release matrix. The script writes each executable under
 `build/binaries/<target>/`, stages complete generated distributions under that
-target's `runtime/<harness>/` directory, and writes `build-results.json` at
-`build/binaries/`. The native gates run sensors, graph compilation, validation,
-generated-surface checks, plugin selection/composition, orchestration,
-Bolt/Swarm composition, packaged-runtime immutability, hooks, statusline,
-adapters, and explicit project routing without a `bun` executable on `PATH`.
+target's `runtime/<harness>/` directory, and writes
+`build/binaries/build-results-<target>.json`. Targets executable on the build
+host run sensors, graph compilation, validation, generated-surface checks,
+plugin selection/composition, orchestration, Bolt/Swarm composition,
+packaged-runtime immutability, hooks, statusline, adapters, explicit project
+routing, doctor JSON, init dry-run, versions/plugin listings, Unix completions,
+and package verification without a `bun` executable on `PATH`. Cross artifacts
+receive inspection gates and are explicitly labeled `UNVERIFIED`; host-run
+artifacts are labeled `VERIFIED`.
 The staged `runtime/<harness>/` trees are read-only fallbacks; mutating commands
 must target an installed project harness. Any failed gate fails the build.
 

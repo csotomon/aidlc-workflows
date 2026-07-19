@@ -115,8 +115,10 @@ import {
 import { validateStageFrontmatter } from "./aidlc-stage-schema.ts";
 import { AIDLC_VERSION } from "./aidlc-version.ts";
 import {
+  aidlcDispatcherInvocation,
   aidlcToolInvocation,
   compiledExecutable,
+  discoverProjectHarnesses,
   isCompiledExecutable,
   resolveHarnessPath,
   resolveSkillsPath,
@@ -1539,13 +1541,19 @@ export async function collectDoctorReport(
       };
       collectCommands(parsed);
       const refs = new Set<string>();
+      const dispatcher =
+        '(?:\\baidlc|\\bbun\\s+(?:"[^"]*[\\\\/]aidlc\\.ts"|\'[^\']*[\\\\/]aidlc\\.ts\'|[^\\s"\']*[\\\\/]aidlc\\.ts))';
       for (const command of commands) {
         for (const match of command.matchAll(/aidlc-[A-Za-z0-9_-]+\.ts/g)) {
           refs.add(match[0]);
         }
-        const binaryHook = /\baidlc\s+hook\s+([A-Za-z0-9_-]+)\b/.exec(command);
-        if (binaryHook) refs.add(`aidlc-${binaryHook[1]}.ts`);
-        if (/\baidlc\s+statusline\b/.test(command)) refs.add("aidlc-statusline.ts");
+        const dispatcherHook = new RegExp(
+          `${dispatcher}\\s+hook\\s+([A-Za-z0-9_-]+)\\b`,
+        ).exec(command);
+        if (dispatcherHook) refs.add(`aidlc-${dispatcherHook[1]}.ts`);
+        if (new RegExp(`${dispatcher}\\s+statusline\\b`).test(command)) {
+          refs.add("aidlc-statusline.ts");
+        }
       }
       expectedHooks = [...refs].sort();
     } catch {
@@ -1703,9 +1711,13 @@ export async function collectDoctorReport(
   // 4b. Dual-harness coexistence (D-11): another harness tree installed AND a
   // workflow active is supported-but-untested — warn (advisory pass with a
   // visible label), never block.
-  const otherTrees = [".claude", ".kiro", ".codex", ".aidlc"].filter(
-    (h) => h !== harness && existsSync(join(projectDir, h, "tools", "aidlc-lib.ts")),
-  );
+  const otherTrees = discoverProjectHarnesses(projectDir)
+    .map((candidate) => candidate.harnessDir)
+    .filter(
+      (candidate) =>
+        candidate !== harness &&
+        existsSync(join(projectDir, candidate, "tools", "aidlc-lib.ts")),
+    );
   if (
     otherTrees.length > 0 &&
     existsSync(join(projectDir, harness, "tools", "aidlc-lib.ts")) &&
@@ -1872,7 +1884,7 @@ export async function collectDoctorReport(
 
   // 5. Workspace shell ready (P4: no --init artifact to check). With auto-birth
   // there is no scaffolded aidlc-docs/ to verify; readiness is the SHIPPED SHELL
-  // the user copies from dist/: the harness engine dir (.claude/.kiro/.codex)
+  // the user copies from dist/: the metadata-declared harness engine directory
   // present AND the default space's memory dir present (the source of truth the
   // native include resolves). When both are present the first /aidlc auto-births
   // with no ceremony; a missing piece means the dist/ copy was incomplete.
@@ -3762,7 +3774,7 @@ function ensureWorkspaceDirs(projectDir: string): void {
 function handleIntentBirth(projectDir: string, flags: Record<string, string>): void {
   // Default to poc when --scope is omitted. Matches the orchestrator's
   // ultimate fallback in SKILL.md and makes direct tool invocations
-  // (`aidlc __delegate utility intent-birth`) work without extra flags.
+  // (`bun .claude/tools/aidlc.ts __delegate utility intent-birth`) work without extra flags.
   const scope = flags.scope || "poc";
   if (!validScopes().has(scope)) {
     die(
@@ -5286,7 +5298,7 @@ export function findScopeByKeyword(kw: string): string[] {
 // fixture SKILL.md (so drift tests never mutate the real file).
 
 const SCOPE_TABLE_BEGIN =
-  `<!-- BEGIN: compiled scope grid via \`${aidlcToolInvocation("utility", undefined, false)} scope-table\` - do NOT hand-edit -->`;
+  `<!-- BEGIN: compiled scope grid via \`${aidlcDispatcherInvocation("utility")} scope-table\` - do NOT hand-edit -->`;
 const SCOPE_TABLE_END =
   "<!-- END: compiled scope grid -->";
 
@@ -5407,7 +5419,7 @@ function handleScopeTable(
 // fixture SKILL.md (so drift tests never mutate the real file).
 
 const STAGE_TABLE_BEGIN =
-  `<!-- BEGIN: compiled stage graph via \`${aidlcToolInvocation("utility", undefined, false)} stage-table\` - do NOT hand-edit -->`;
+  `<!-- BEGIN: compiled stage graph via \`${aidlcDispatcherInvocation("utility")} stage-table\` - do NOT hand-edit -->`;
 const STAGE_TABLE_END =
   "<!-- END: compiled stage graph -->";
 

@@ -287,12 +287,11 @@ The complete representative transcript is in
 ## Manual Projection
 
 Copying `dist/<harness>/` is an advanced project-projection path for source
-checkouts. It no longer creates a Bun-invoked installation: every committed
-`dist` tree uses the native `aidlc` command and native host trust entries.
-Install a matching `aidlc` binary first, then copy the complete distribution
-root so harness files, the workspace shell, and root integrations stay
-together. Merge root files according to the policies above; `aidlc init` is
-safer for existing projects.
+checkouts. This copy channel remains Bun-invoked, so install Bun and copy the
+complete distribution root so harness files, the workspace shell, and root
+integrations stay together. Native installations use the separately generated
+`dist-release/<harness>/` payload through `aidlc init`. Merge root files
+according to the policies above; `aidlc init` is safer for existing projects.
 
 Direct `bun <harness>/tools/*.ts` execution remains a developer/debug route.
 Third-party plugins may also declare arbitrary Bun-backed TypeScript commands;

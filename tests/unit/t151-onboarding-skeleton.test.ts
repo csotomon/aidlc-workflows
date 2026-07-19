@@ -125,15 +125,24 @@ describe("t151 onboarding skeleton — a new harness gets a complete doc for fre
 
       const shipped = readFileSync(harness.onboardingDist, "utf-8");
       expect(noLeftoverMarkers(shipped), `${harness.name}: shipped onboarding markers`).toBeNull();
-      expect(shipped, `${harness.name}: native runtime command`).toContain(
-        "aidlc __delegate runtime summary --json",
+      expect(shipped, `${harness.name}: copy-channel runtime command`).toContain(
+        `bun ${harness.manifest.harnessDir}/tools/aidlc.ts __delegate runtime summary --json`,
       );
       expect(shipped, `${harness.name}: skill command is not a shell delegate`).not.toContain(
         `${fills.invoke} __delegate`,
       );
+      const nativeOnboarding = harness.onboardingDist.replace(
+        join(REPO_ROOT, "dist"),
+        join(REPO_ROOT, "dist-release"),
+      );
+      const native = readFileSync(nativeOnboarding, "utf-8");
+      expect(native, `${harness.name}: native-release runtime command`).toContain(
+        "aidlc __delegate runtime summary --json",
+      );
       for (const section of REQUIRED_SECTIONS) {
         expect(rendered).toContain(section);
         expect(shipped, `${harness.name}: shipped ${section}`).toContain(section);
+        expect(native, `${harness.name}: native shipped ${section}`).toContain(section);
       }
     }
   });

@@ -7,7 +7,7 @@
       "Read",
       "Edit",
       "Write",
-      "Bash({{INVOKE}} *)",
+      "Bash({{TOOL_PREFIX}}*)",
       "Glob",
       "Grep",
       "Task",

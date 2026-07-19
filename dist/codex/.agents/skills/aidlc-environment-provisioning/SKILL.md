@@ -22,7 +22,7 @@ that flag without this skill.
 1. Ask the engine for the single-stage directive:
 
    ```bash
-   aidlc __delegate orchestrate next --stage environment-provisioning --single
+   bun .codex/tools/aidlc-orchestrate.ts next --stage environment-provisioning --single
    ```
 
    The engine emits one `run-stage` directive for `environment-provisioning` (carrying the
@@ -34,7 +34,7 @@ that flag without this skill.
 2. When the stage's work is done, commit the single-stage record:
 
    ```bash
-   aidlc __delegate orchestrate report --single --stage environment-provisioning --result completed
+   bun .codex/tools/aidlc-orchestrate.ts report --single --stage environment-provisioning --result completed
    ```
 
    This records a STAGE_STARTED / STAGE_COMPLETED pair under a synthetic workflow

@@ -46,6 +46,7 @@ import { AIDLC_SRC } from "../harness/fixtures.ts";
 
 const SETTINGS = join(AIDLC_SRC, "settings.json");
 const SETTINGS_LOCAL_EXAMPLE = join(AIDLC_SRC, "settings.local.json.example");
+const SOURCE_INVOKE = "bun .claude/tools/aidlc.ts";
 
 interface HookEntry {
   type?: string;
@@ -76,12 +77,12 @@ describe("t40 settings.json hook/statusline/permissions config (migrated from t4
     expect((groups ?? []).length).toBeGreaterThan(0);
   });
 
-  test("T2: SessionStart wires the native session-start hook command [.sh test 2]", () => {
+  test("T2: SessionStart wires the source-channel session-start hook command [.sh test 2]", () => {
     const s = readSettings();
     const commands = (s.hooks?.SessionStart ?? []).flatMap((g) =>
       (g.hooks ?? []).map((h) => h.command ?? ""),
     );
-    expect(commands).toContain("aidlc hook session-start");
+    expect(commands).toContain(`${SOURCE_INVOKE} hook session-start`);
   });
 
   test("T3: statusLine.type is 'command' [.sh test 3]", () => {
@@ -89,14 +90,14 @@ describe("t40 settings.json hook/statusline/permissions config (migrated from t4
     expect(readSettings().statusLine?.type).toBe("command");
   });
 
-  test("T4: statusLine.command uses the native statusline route [.sh test 4]", () => {
-    expect(readSettings().statusLine?.command).toBe("aidlc statusline");
+  test("T4: statusLine.command uses the source-channel statusline route [.sh test 4]", () => {
+    expect(readSettings().statusLine?.command).toBe(`${SOURCE_INVOKE} statusline`);
   });
 
-  test("T5: permissions.allow has exactly 8 tools incl. the native aidlc pattern [.sh test 5]", () => {
+  test("T5: permissions.allow has exactly 8 tools incl. the source tool pattern [.sh test 5]", () => {
     const allow = readSettings().permissions?.allow ?? [];
     expect(allow.length).toBe(8);
-    expect(allow).toContain("Bash(aidlc *)");
+    expect(allow).toContain("Bash(bun .claude/tools/*)");
     expect(allow).not.toContain("Bash");
   });
 

@@ -7,7 +7,7 @@
       "Read",
       "Edit",
       "Write",
-      "Bash(aidlc *)",
+      "Bash(bun .claude/tools/*)",
       "Glob",
       "Grep",
       "Task",
@@ -16,7 +16,7 @@
   },
   "statusLine": {
     "type": "command",
-    "command": "aidlc statusline"
+    "command": "bun .claude/tools/aidlc.ts statusline"
   },
   "env": {
     "AWS_AIDLC_DEFAULT_SCOPE": "workshop",
@@ -36,7 +36,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "aidlc hook reviewer-scope"
+            "command": "bun .claude/tools/aidlc.ts hook reviewer-scope"
           }
         ]
       }
@@ -47,7 +47,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "aidlc hook mint-presence"
+            "command": "bun .claude/tools/aidlc.ts hook mint-presence"
           }
         ]
       }
@@ -58,7 +58,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "aidlc hook session-start"
+            "command": "bun .claude/tools/aidlc.ts hook session-start"
           }
         ]
       }
@@ -69,7 +69,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "aidlc hook session-end"
+            "command": "bun .claude/tools/aidlc.ts hook session-end"
           }
         ]
       }
@@ -80,11 +80,11 @@
         "hooks": [
           {
             "type": "command",
-            "command": "aidlc hook audit-logger"
+            "command": "bun .claude/tools/aidlc.ts hook audit-logger"
           },
           {
             "type": "command",
-            "command": "aidlc hook sensor-fire"
+            "command": "bun .claude/tools/aidlc.ts hook sensor-fire"
           }
         ]
       },
@@ -93,7 +93,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "aidlc hook sync-statusline"
+            "command": "bun .claude/tools/aidlc.ts hook sync-statusline"
           }
         ]
       },
@@ -102,7 +102,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "aidlc hook mint-presence"
+            "command": "bun .claude/tools/aidlc.ts hook mint-presence"
           }
         ]
       },
@@ -111,7 +111,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "aidlc hook runtime-compile"
+            "command": "bun .claude/tools/aidlc.ts hook runtime-compile"
           }
         ]
       }
@@ -122,7 +122,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "aidlc hook validate-state"
+            "command": "bun .claude/tools/aidlc.ts hook validate-state"
           }
         ]
       }
@@ -133,7 +133,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "aidlc hook log-subagent"
+            "command": "bun .claude/tools/aidlc.ts hook log-subagent"
           }
         ]
       }
@@ -144,7 +144,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "aidlc hook stop"
+            "command": "bun .claude/tools/aidlc.ts hook stop"
           }
         ]
       }

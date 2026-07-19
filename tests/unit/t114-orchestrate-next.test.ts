@@ -239,7 +239,7 @@ describe("t114 help-request routing", () => {
     proj = createTestProject();
     const out = runNext(proj, ["help"]).out;
     expect(out).toContain('"kind":"print"');
-    expect(out).toContain("aidlc __delegate utility help");
+    expect(out).toContain("bun .claude/tools/aidlc-utility.ts help");
     expect(out).not.toContain('"kind":"ask"');
   });
 
@@ -247,7 +247,7 @@ describe("t114 help-request routing", () => {
     proj = createTestProject();
     const out = runNext(proj, ["-h"]).out;
     expect(out).toContain('"kind":"print"');
-    expect(out).toContain("aidlc __delegate utility help");
+    expect(out).toContain("bun .claude/tools/aidlc-utility.ts help");
     expect(out).not.toContain('"kind":"ask"');
   });
 
@@ -263,16 +263,16 @@ describe("t114 help-request routing", () => {
     proj = createTestProject();
     const out = runNext(proj, ["intent", "help"]).out;
     expect(out).toContain('"kind":"print"');
-    expect(out).toContain("aidlc __delegate utility help");
-    expect(out).not.toContain("aidlc __delegate utility intent help");
+    expect(out).toContain("bun .claude/tools/aidlc-utility.ts help");
+    expect(out).not.toContain("bun .claude/tools/aidlc-utility.ts intent help");
   });
 
   test("`space help` -> global help print, not a switch to a space named help", () => {
     proj = createTestProject();
     const out = runNext(proj, ["space", "help"]).out;
     expect(out).toContain('"kind":"print"');
-    expect(out).toContain("aidlc __delegate utility help");
-    expect(out).not.toContain("aidlc __delegate utility space help");
+    expect(out).toContain("bun .claude/tools/aidlc-utility.ts help");
+    expect(out).not.toContain("bun .claude/tools/aidlc-utility.ts space help");
   });
 
   test("`help` inside a longer description stays freeform intent text", () => {
@@ -287,7 +287,7 @@ describe("t114 help-request routing", () => {
     proj = createTestProject();
     const out = runNext(proj, ["intent", "-h"]).out;
     expect(out).toContain('"kind":"print"');
-    expect(out).toContain("aidlc __delegate utility help");
+    expect(out).toContain("bun .claude/tools/aidlc-utility.ts help");
   });
 
   test("`space -h` routes to help like `space help`", () => {
@@ -296,8 +296,8 @@ describe("t114 help-request routing", () => {
     proj = createTestProject();
     const out = runNext(proj, ["space", "-h"]).out;
     expect(out).toContain('"kind":"print"');
-    expect(out).toContain("aidlc __delegate utility help");
-    expect(out).not.toContain("aidlc __delegate utility space -h");
+    expect(out).toContain("bun .claude/tools/aidlc-utility.ts help");
+    expect(out).not.toContain("bun .claude/tools/aidlc-utility.ts space -h");
   });
 
   test("a marker-led blob stays freeform and reaches the safe ask funnel", () => {
@@ -308,7 +308,7 @@ describe("t114 help-request routing", () => {
     proj = createTestProject();
     const out = runNext(proj, ["/aidlc intent help"]).out;
     expect(out).toContain('"kind":"ask"');
-    expect(out).not.toContain("aidlc __delegate utility intent");
+    expect(out).not.toContain("bun .claude/tools/aidlc-utility.ts intent");
   });
 });
 
@@ -327,7 +327,7 @@ describe("t114 with-state jump -> execute print", () => {
     const out = runNext(proj, ["--phase", "construction"]).out;
     expect(out).toContain('"kind":"print"');
     expect(out).toContain(
-      "aidlc __delegate jump execute --target functional-design --direction forward",
+      "bun .claude/tools/aidlc-jump.ts execute --target functional-design --direction forward",
     );
   });
 });
@@ -389,7 +389,7 @@ describe("t114 workspace verbs -> terminal print naming the handler", () => {
     proj = createTestProject();
     const out = runNext(proj, ["space", "teamB"]).out;
     expect(out).toContain('"kind":"print"');
-    expect(out).toContain("aidlc __delegate utility space teamB");
+    expect(out).toContain("bun .claude/tools/aidlc-utility.ts space teamB");
     // It must NOT be misread as a new-work freeform intent that advances state.
     expect(out).not.toContain('"kind":"run-stage"');
   });
@@ -398,23 +398,23 @@ describe("t114 workspace verbs -> terminal print naming the handler", () => {
     proj = createTestProject();
     const out = runNext(proj, ["space"]).out;
     expect(out).toContain('"kind":"print"');
-    expect(out).toContain("aidlc __delegate utility space");
+    expect(out).toContain("bun .claude/tools/aidlc-utility.ts space");
     // No trailing name arg leaks into the directive.
-    expect(out).not.toContain("aidlc __delegate utility space ");
+    expect(out).not.toContain("bun .claude/tools/aidlc-utility.ts space ");
   });
 
   test("22: `intent some-slug` -> print naming the native utility intent route", () => {
     proj = createTestProject();
     const out = runNext(proj, ["intent", "some-slug"]).out;
     expect(out).toContain('"kind":"print"');
-    expect(out).toContain("aidlc __delegate utility intent some-slug");
+    expect(out).toContain("bun .claude/tools/aidlc-utility.ts intent some-slug");
   });
 
   test("23: `space-create teamB` -> print naming the native utility space-create route", () => {
     proj = createTestProject();
     const out = runNext(proj, ["space-create", "teamB"]).out;
     expect(out).toContain('"kind":"print"');
-    expect(out).toContain("aidlc __delegate utility space-create teamB");
+    expect(out).toContain("bun .claude/tools/aidlc-utility.ts space-create teamB");
   });
 
   test("24: REGRESSION -- freeform containing 'space' NOT as leading token stays freeform (i===0 guard)", () => {
@@ -423,7 +423,7 @@ describe("t114 workspace verbs -> terminal print naming the handler", () => {
     // space-switch print naming the workspace handler.
     proj = createTestProject();
     const out = runNext(proj, ["add", "a", "settings", "space"]).out;
-    expect(out).not.toContain("aidlc __delegate utility space");
+    expect(out).not.toContain("bun .claude/tools/aidlc-utility.ts space");
   });
 });
 

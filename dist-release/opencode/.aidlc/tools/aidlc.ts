@@ -19,7 +19,11 @@ import {
   versionRoot,
 } from "./aidlc-install-paths.ts";
 import { executePlan, transactionState, writeOperation } from "./aidlc-transaction.ts";
-import { packagedDistributionRoot, runtimeHarnessDir } from "./aidlc-runtime-paths.ts";
+import {
+  discoverProjectHarnesses,
+  packagedDistributionRoot,
+  runtimeHarnessDir,
+} from "./aidlc-runtime-paths.ts";
 import { cachedUpdateNotice } from "./aidlc-update.ts";
 import {
   recoverWindowsUninstallContinuations,
@@ -851,9 +855,7 @@ function resolveHookPath(
     ? [ADAPTER_HARNESS_LEAF[harness]]
     : [
         runtimeLeaf,
-        ".claude",
-        ".kiro",
-        ".codex",
+        ...discoverProjectHarnesses(projectDir).map((candidate) => candidate.harnessDir),
       ].filter((value, index, values): value is string =>
         typeof value === "string" && value.length > 0 && values.indexOf(value) === index
       );
@@ -913,7 +915,7 @@ export function renderAllHelp(): string {
 function topLevelError(command: string): Action {
   return {
     type: "error",
-    code: 1,
+    code: 2,
     message: `aidlc: unknown command or noun '${command}'; try 'aidlc --help'\n`,
   };
 }
@@ -922,7 +924,7 @@ function nounError(noun: string, verb: string | undefined): Action {
   const detail = verb ? `unknown verb '${verb}'` : "missing verb";
   return {
     type: "error",
-    code: 1,
+    code: 2,
     message: `aidlc: ${detail} for noun '${noun}'; try 'aidlc help --all'\n`,
   };
 }
@@ -941,7 +943,7 @@ function handleWorkspace(argv: string[]): Action {
   const command = parseWorkspaceCommand(argv);
   if (command.kind === "not-workspace") return nounError(argv[0], argv[1]);
   if (command.kind === "error") {
-    return { type: "error", code: 1, message: `${command.message}\n` };
+    return { type: "error", code: 2, message: `${command.message}\n` };
   }
   const utilityArgv = workspaceCommandUtilityArgv(command);
   if (utilityArgv === null) return nounError(argv[0], argv[1]);
@@ -1222,7 +1224,7 @@ export function resolveAction(argv: string[]): Action {
     if (!value || value.startsWith("--")) {
       return {
         type: "error",
-        code: 1,
+        code: 2,
         message: "aidlc: --project-dir requires a path value\n",
       };
     }
@@ -1682,19 +1684,9 @@ function routePinPolicy(argv: readonly string[]): PinPolicy {
 }
 
 function projectDistribution(projectDir: string): string | null {
-  for (const harnessDir of [".claude", ".kiro", ".codex"]) {
-    const stampPath = join(projectDir, harnessDir, "tools", "data", "aidlc-stamp.json");
-    if (!existsSync(stampPath)) continue;
-    try {
-      const stamp = JSON.parse(readFileSync(stampPath, "utf-8")) as { distribution?: unknown };
-      if (typeof stamp.distribution === "string" && stamp.distribution.length > 0) {
-        return stamp.distribution;
-      }
-    } catch {
-      return null;
-    }
-  }
-  return null;
+  const harnessDir = runtimeHarnessDir(projectDir);
+  return discoverProjectHarnesses(projectDir)
+    .find((candidate) => candidate.harnessDir === harnessDir)?.distribution ?? null;
 }
 
 type PinResolutionCache = {
@@ -1899,25 +1891,17 @@ function refuseUnpinnedMajorSkew(argv: readonly string[]): number | null {
   if (routePinPolicy(argv) !== "pinned") return null;
   const projectDir = projectDirFrom(argv);
   if (existsSync(join(projectDir, ".aidlc-version"))) return null;
-  for (const harnessDir of [".claude", ".kiro", ".codex"]) {
-    const stampPath = join(projectDir, harnessDir, "tools", "data", "aidlc-stamp.json");
-    if (!existsSync(stampPath)) continue;
-    try {
-      const stamp = JSON.parse(readFileSync(stampPath, "utf-8")) as { frameworkVersion?: unknown };
-      if (
-        typeof stamp.frameworkVersion === "string" &&
-        STRICT_SEMVER.test(stamp.frameworkVersion) &&
-        stamp.frameworkVersion.split(".")[0] !== AIDLC_VERSION.split(".")[0]
-      ) {
-        return renderDispatcherFailure(
-          argv,
-          1,
-          `project runtime ${stamp.frameworkVersion} is incompatible with selected engine ${AIDLC_VERSION}`,
-          "aidlc use <installed-version> or aidlc init",
-        );
-      }
-    } catch {
-      return null;
+  for (const harness of discoverProjectHarnesses(projectDir)) {
+    if (
+      harness.frameworkVersion &&
+      harness.frameworkVersion.split(".")[0] !== AIDLC_VERSION.split(".")[0]
+    ) {
+      return renderDispatcherFailure(
+        argv,
+        1,
+        `project runtime ${harness.frameworkVersion} is incompatible with selected engine ${AIDLC_VERSION}`,
+        "aidlc use <installed-version> or aidlc init",
+      );
     }
   }
   return null;
@@ -1978,10 +1962,8 @@ function projectPolicyError(route: Route, argv: readonly string[]): string | nul
     "go.mod",
     "pyproject.toml",
     "aidlc",
-    ".claude",
-    ".kiro",
-    ".codex",
-  ].some((entry) => existsSync(join(projectDir, entry)));
+  ].some((entry) => existsSync(join(projectDir, entry))) ||
+    discoverProjectHarnesses(projectDir).length > 0;
   return recognized
     ? null
     : `${route.id} requires an installed project harness or recognized project directory; run aidlc init`;
@@ -2013,11 +1995,11 @@ export async function main(argv: string[]): Promise<void> {
   process.exitCode = 0;
   bufferedStdin = null;
   if (import.meta.url.includes("/$bunfs/") && !process.env.AIDLC_HARNESS_DIR) {
-    // Compiled, no explicit harness: probe the project install (.claude /
-    // .kiro / .codex by tools/data/harness.json) rather than assuming
-    // .claude — module-relative derivation can't work from $bunfs, and every
-    // delegate and sibling tool reads this env, so pin the probe's answer
-    // once here. Falls back to .claude when no install is present.
+    // Compiled, no explicit harness: discover the project install from its
+    // shipped stamp/harness metadata. Module-relative derivation cannot work
+    // from $bunfs, and every delegate and sibling tool reads this env, so pin
+    // the discovered answer once here. Falls back to .claude when no install
+    // is present.
     process.env.AIDLC_HARNESS_DIR = runtimeHarnessDir();
   }
   if (

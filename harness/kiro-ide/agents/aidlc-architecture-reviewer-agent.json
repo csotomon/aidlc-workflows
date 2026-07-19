@@ -7,7 +7,7 @@
   "allowedTools": ["fs_read", "fs_write", "thinking"],
   "toolsSettings": {
     "execute_bash": {
-      "allowedCommands": ["{{INVOKE}} .*", "date -u .*"]
+      "allowedCommands": ["{{TOOL_PREFIX}}.*", "date -u .*"]
     },
     "fs_write": {
       "allowedPaths": ["aidlc/spaces/**"]

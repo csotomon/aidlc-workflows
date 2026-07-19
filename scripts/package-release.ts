@@ -40,9 +40,70 @@ function outputName(target: string, source: string): string {
   return `aidlc-${normalized}${source.endsWith(".exe") ? ".exe" : ""}`;
 }
 
+function buildVerification(
+  binaries: string,
+  target: string,
+  bytes: number,
+  required: boolean,
+): ReleaseAsset["verification"] {
+  const path = join(binaries, `build-results-${target}.json`);
+  if (!existsSync(path)) {
+    if (required) throw new Error(`missing build verification record for ${target}`);
+    return undefined;
+  }
+  let document: {
+    failures?: unknown;
+    results?: Array<{
+      name?: unknown;
+      bytes?: unknown;
+      verification?: {
+        status?: unknown;
+        mode?: unknown;
+        hostTarget?: unknown;
+      };
+    }>;
+  };
+  try {
+    document = JSON.parse(readFileSync(path, "utf-8")) as typeof document;
+  } catch (error) {
+    throw new Error(
+      `${path}: invalid build verification JSON: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+  if (
+    !Array.isArray(document.failures) ||
+    document.failures.length > 0 ||
+    !Array.isArray(document.results) ||
+    document.results.length !== 1
+  ) {
+    throw new Error(`${path}: build verification record contains failures or ambiguous results`);
+  }
+  const result = document.results[0];
+  const verification = result.verification;
+  if (
+    result.name !== target ||
+    result.bytes !== bytes ||
+    !verification ||
+    (verification.status !== "VERIFIED" && verification.status !== "UNVERIFIED") ||
+    (verification.mode !== "full-runtime" && verification.mode !== "inspection-only") ||
+    typeof verification.hostTarget !== "string" ||
+    !/^[a-z0-9][a-z0-9-]*$/.test(verification.hostTarget)
+  ) {
+    throw new Error(`${path}: build verification record does not match ${target}`);
+  }
+  return {
+    status: verification.status,
+    mode: verification.mode,
+    hostTarget: verification.hostTarget,
+  };
+}
+
 function build(argv: string[]): void {
   const output = valueAfter(argv, "--output") || join(REPO_ROOT, "build", "release");
   const binaries = valueAfter(argv, "--binaries") || join(REPO_ROOT, "build", "binaries");
+  const requireReleaseMatrix = argv.includes("--require-release-matrix");
   const check = spawnSync("bun", [join(REPO_ROOT, "scripts", "package.ts"), "--check"], {
     cwd: REPO_ROOT,
     encoding: "utf-8",
@@ -73,12 +134,14 @@ function build(argv: string[]): void {
   }
 
   for (const target of readdirSync(binaries).sort()) {
-    if (target === "build-results.json") continue;
+    if (target.startsWith("build-results")) continue;
     const directory = join(binaries, target);
     if (!statSync(directory).isDirectory()) continue;
     const candidates = ["aidlc", "aidlc.exe"].map((name) => join(directory, name)).filter(existsSync);
     if (candidates.length !== 1) throw new Error(`${directory}: expected one aidlc binary`);
     const source = candidates[0];
+    const bytes = statSync(source).size;
+    const verification = buildVerification(binaries, target, bytes, requireReleaseMatrix);
     const name = outputName(target, source);
     const path = join(output, name);
     copyFileSync(source, path);
@@ -86,12 +149,13 @@ function build(argv: string[]): void {
     assets.push({
       name,
       sha256: digest(path),
-      bytes: statSync(path).size,
+      bytes,
       kind: "binary",
       target: target === "native" ? targetTriple() : target,
+      ...(verification ? { verification } : {}),
     });
   }
-  if (argv.includes("--require-release-matrix")) {
+  if (requireReleaseMatrix) {
     const expected = [
       "darwin-arm64",
       "darwin-x64",
@@ -107,6 +171,11 @@ function build(argv: string[]): void {
     const missing = expected.filter((target) => !actual.has(target));
     if (missing.length > 0) {
       throw new Error(`release binary matrix is incomplete: ${missing.join(", ")}`);
+    }
+    if (
+      assets.some((asset) => asset.kind === "binary" && asset.verification === undefined)
+    ) {
+      throw new Error("release binary matrix is missing verification labels");
     }
   }
 

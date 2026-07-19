@@ -72,7 +72,8 @@ function normalizedRelative(path: string): string {
   if (
     normalized === ".aidlc-transaction.lock" ||
     normalized.startsWith(".aidlc-lock-") ||
-    normalized.startsWith(".aidlc-txn-")
+    normalized.startsWith(".aidlc-txn-") ||
+    normalized.startsWith(".aidlc-recovery-")
   ) {
     throw new Error(`transaction path uses a reserved engine name: ${path}`);
   }
@@ -310,13 +311,17 @@ function acquireLock(root: string, lockPath: string, staging: string): HeldLock 
   throw new Error(`cannot acquire ${lockPath}`);
 }
 
-function sweepOrphanStaging(root: string, current: string): void {
+function quarantineOrphanStaging(root: string, current: string): void {
   for (const entry of readdirSync(root)) {
     if (
       entry !== basename(current) &&
       /^\.aidlc-txn-[0-9a-f]{8}-[0-9a-f-]{27}$/.test(entry)
     ) {
-      rmSync(join(root, entry), { recursive: true, force: true });
+      renameSync(
+        join(root, entry),
+        join(root, `.aidlc-recovery-${Date.now()}-${randomUUID()}`),
+      );
+      syncPath(root);
     }
   }
 }
@@ -398,6 +403,7 @@ export function executePlan(
   const lockPath = join(root, ".aidlc-transaction.lock");
   const staging = join(root, `.aidlc-txn-${randomUUID()}`);
   let lock: HeldLock | null = null;
+  let preserveStaging = false;
   const committed: Array<{ rel: string; existed: boolean }> = [];
   try {
     lock = acquireLock(root, lockPath, staging);
@@ -410,7 +416,7 @@ export function executePlan(
         "a pending Windows uninstall blocks machine mutation; run aidlc doctor",
       );
     }
-    sweepOrphanStaging(root, staging);
+    quarantineOrphanStaging(root, staging);
     failpoint(options, "before-plan-validation");
     verifyPlan(plan, root);
     failpoint(options, "after-plan-validation");
@@ -472,19 +478,36 @@ export function executePlan(
     failpoint(options, "after-committed-validation");
     rmSync(staging, { recursive: true, force: true });
   } catch (error) {
+    const rollbackErrors: unknown[] = [];
     for (const entry of [...committed].reverse()) {
-      const target = targetPath(root, entry.rel);
-      rmSync(target, { recursive: true, force: true });
-      if (entry.existed) {
-        const backup = join(staging, "backups", entry.rel);
-        mkdirSync(dirname(target), { recursive: true, mode: 0o700 });
-        renameSync(backup, target);
+      try {
+        const target = targetPath(root, entry.rel);
+        failpoint(options, `during-rollback:${entry.rel}`);
+        if (entry.existed) {
+          const backup = join(staging, "backups", entry.rel);
+          mkdirSync(dirname(target), { recursive: true, mode: 0o700 });
+          // rename-over restores files and command pointers atomically. A
+          // remove operation has no live target, while replacement operations
+          // keep the new target visible until this single restore rename.
+          renameSync(backup, target);
+        } else {
+          rmSync(target, { recursive: true, force: true });
+        }
+        syncPath(dirname(target));
+      } catch (rollbackError) {
+        rollbackErrors.push(rollbackError);
       }
-      syncPath(dirname(target));
+    }
+    if (rollbackErrors.length > 0) {
+      preserveStaging = true;
+      throw new AggregateError(
+        [error, ...rollbackErrors],
+        `transaction rollback incomplete; recovery evidence preserved at ${staging}`,
+      );
     }
     throw error;
   } finally {
-    rmSync(staging, { recursive: true, force: true });
+    if (!preserveStaging) rmSync(staging, { recursive: true, force: true });
     if (lock !== null) {
       closeSync(lock.descriptor);
       try {

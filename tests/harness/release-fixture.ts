@@ -214,7 +214,10 @@ export function serveReleaseFixture(
       requests.push(url.pathname);
       const name = basename(url.pathname);
       if (fault.kind === "redirect" && !url.pathname.startsWith("/fixture-assets/")) {
-        return Response.redirect(`http://127.0.0.1:${port}/fixture-assets/${name}`, 302);
+        return Response.redirect(
+          `http://127.0.0.1:${port}/fixture-assets/${name}?signature=fixture-signed-query`,
+          302,
+        );
       }
       if (fault.kind === "missing" && name === fault.asset) {
         return new Response("missing", { status: 404 });

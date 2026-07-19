@@ -23,7 +23,7 @@
 //     is IDENTICAL (verified live), so it passes through verbatim.
 //
 // Usage (registered in .kiro/agents/aidlc.json):
-//   aidlc adapter kiro <target>
+//   bun .kiro/tools/aidlc.ts adapter kiro <target>
 // where <target> ∈ session-start | audit-and-sensors | runtime-compile |
 //                  state-sync | log-subagent | stop | verb-intercept |
 //                  pretool-block | reviewer-scope

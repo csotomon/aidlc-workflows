@@ -26,6 +26,10 @@ import {
   routePolicyFor,
 } from "../../core/tools/aidlc.ts";
 import { targetTriple } from "../../core/tools/aidlc-install-paths.ts";
+import {
+  discoverProjectHarnesses,
+  runtimeHarnessDir,
+} from "../../core/tools/aidlc-runtime-paths.ts";
 import { AIDLC_VERSION } from "../../core/tools/aidlc-version.ts";
 import {
   cleanupTestProject,
@@ -721,6 +725,88 @@ describe("t230 dispatcher dev and compiled in-process modes", () => {
       expectSameRun(compiled, dev, item.name);
     });
   }
+
+  test("compiled main discovers an OpenCode project from shipped harness metadata", () => {
+    const projectDir = mkdtempSync(join(tmpdir(), "aidlc-t230-opencode-"));
+    tempProjects.add(projectDir);
+    cpSync(join(REPO_ROOT, "dist", "opencode"), projectDir, { recursive: true });
+    const result = viaImportedCompiledMain(
+      ["doctor", "--project-dir", projectDir, "--json"],
+      projectDir,
+      {
+        AIDLC_BIN_DIR: join(projectDir, "machine", "bin"),
+        AIDLC_DISPATCH_TOOLS_DIR: CORE_TOOLS_DIR,
+        AIDLC_HARNESS_DIR: "",
+        AIDLC_INSTALL_ROOT: join(projectDir, "machine"),
+      },
+    );
+    const report = JSON.parse(result.stdout.toString()) as {
+      data: { checks: Array<{ label: string }> };
+    };
+    const labels = report.data.checks.map((check) => check.label);
+    expect(labels.some((label) => label.includes("opencode.json or opencode.jsonc present")))
+      .toBe(true);
+    expect(labels.some((label) => label.includes(".claude/settings.json"))).toBe(false);
+  });
+
+  test("project harness discovery accepts a metadata-declared future harness", () => {
+    const projectDir = mkdtempSync(join(tmpdir(), "aidlc-t230-future-harness-"));
+    tempProjects.add(projectDir);
+    const dataDir = join(projectDir, ".future", "tools", "data");
+    mkdirSync(dataDir, { recursive: true });
+    writeFileSync(
+      join(dataDir, "harness.json"),
+      `${JSON.stringify({
+        schemaVersion: 1,
+        distribution: "future",
+        harnessDir: ".future",
+      })}\n`,
+    );
+    expect(runtimeHarnessDir(projectDir)).toBe(".future");
+    expect(discoverProjectHarnesses(projectDir)).toEqual([{
+      distribution: "future",
+      harnessDir: ".future",
+      root: join(projectDir, ".future"),
+    }]);
+  });
+
+  test("project harness discovery tolerates foreign metadata and preserves legacy precedence", () => {
+    const projectDir = mkdtempSync(join(tmpdir(), "aidlc-t230-harness-discovery-"));
+    tempProjects.add(projectDir);
+
+    const writeHarness = (
+      directory: string,
+      value: Record<string, unknown> | string,
+    ): void => {
+      const dataDir = join(projectDir, directory, "tools", "data");
+      mkdirSync(dataDir, { recursive: true });
+      writeFileSync(
+        join(dataDir, "harness.json"),
+        typeof value === "string" ? value : `${JSON.stringify(value)}\n`,
+      );
+    };
+    writeHarness(".foreign", "{");
+    writeHarness(".claude.bak", {
+      schemaVersion: 1,
+      distribution: "claude",
+      harnessDir: ".claude",
+    });
+    writeHarness(".aidlc", {
+      schemaVersion: 1,
+      distribution: "opencode",
+      harnessDir: ".aidlc",
+    });
+    writeHarness(".codex", {
+      schemaVersion: 1,
+      distribution: "codex",
+      harnessDir: ".codex",
+    });
+    writeHarness(".claude", { harnessDir: ".claude", rulesSubdir: "rules" });
+
+    expect(discoverProjectHarnesses(projectDir).map((item) => item.distribution))
+      .toEqual(["claude", "codex", "opencode"]);
+    expect(runtimeHarnessDir(projectDir)).toBe(".claude");
+  });
 });
 
 describe("t230 dispatcher route completeness", () => {
@@ -827,15 +913,22 @@ describe("t230 dispatcher route completeness", () => {
   test("unknown commands render one JSON failure before delegation", () => {
     const projectDir = makeProject();
     const result = viaDispatcher(["unknown-command", "--json"], projectDir);
-    expect(result.exitCode).toBe(1);
+    expect(result.exitCode).toBe(2);
     expect(result.stderr.toString()).toBe("");
     expect(JSON.parse(result.stdout.toString())).toEqual({
       schemaVersion: 1,
       ok: false,
-      code: 1,
-      status: "failed",
+      code: 2,
+      status: "usage",
       message: "unknown command or noun 'unknown-command'; try 'aidlc --help'",
     });
+  });
+
+  test("missing global flag values are usage errors", () => {
+    const result = viaDispatcher(["status", "--project-dir"], REPO_ROOT);
+    expect(result.exitCode).toBe(2);
+    expect(result.stdout.toString()).toBe("");
+    expect(result.stderr.toString()).toBe("aidlc: --project-dir requires a path value\n");
   });
 
   test("help --all is generated from the route table", () => {
@@ -929,14 +1022,14 @@ describe("t230 dispatcher help and errors", () => {
 
   test("unknown top-level command points to the nearest help node", () => {
     const res = viaDispatcher(["bogus"], REPO_ROOT);
-    expect(res.exitCode).toBe(1);
+    expect(res.exitCode).toBe(2);
     expect(res.stdout.toString("utf-8")).toBe("");
     expect(res.stderr.toString("utf-8")).toBe("aidlc: unknown command or noun 'bogus'; try 'aidlc --help'\n");
   });
 
   test("unknown noun verb points to help --all", () => {
     const res = viaDispatcher(["state", "bogus"], REPO_ROOT);
-    expect(res.exitCode).toBe(1);
+    expect(res.exitCode).toBe(2);
     expect(res.stdout.toString("utf-8")).toBe("");
     expect(res.stderr.toString("utf-8")).toBe("aidlc: unknown verb 'bogus' for noun 'state'; try 'aidlc help --all'\n");
   });

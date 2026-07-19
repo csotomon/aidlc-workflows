@@ -1,5 +1,5 @@
 # dist/codex hook-trust pre-seed (S9a) — TEMPLATE.
-# This template hashes the native `aidlc adapter codex ...`
+# This template hashes the projected `aidlc adapter codex ...`
 # commands in hooks.json. Start one interactive Codex session and choose
 # "Trust all and continue" to register the project-specific hook identities.
 # Paste the complete stdout into the USER config.toml ($CODEX_HOME/config.toml).

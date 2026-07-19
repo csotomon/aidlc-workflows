@@ -202,8 +202,12 @@ describe("t86 stage-protocol §13 + MEMORY_EMPTY + SKILL.md gate wiring (migrate
     // place that makes it run — deleting it would be a silent feature-death.
     const span = gateBranchSpan(read(SKILL));
     expect(span.length).toBeGreaterThan(0); // the heading must exist
-    expect(/aidlc __delegate learnings surface/.test(span)).toBe(true);
-    expect(/aidlc __delegate learnings persist/.test(span)).toBe(true);
+    expect(
+      /bun \.claude\/tools\/aidlc\.ts __delegate learnings surface/.test(span),
+    ).toBe(true);
+    expect(
+      /bun \.claude\/tools\/aidlc\.ts __delegate learnings persist/.test(span),
+    ).toBe(true);
     // The ritual is now UNCONDITIONAL: the test-run guard was removed per #369.
   });
 

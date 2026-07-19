@@ -188,6 +188,24 @@ export async function refreshUpdateState(
       latestVersion: release.manifest.version,
       releaseDate: release.manifest.date,
     });
+    const previousCache = (() => {
+      try {
+        return readUpdateCache();
+      } catch {
+        return null;
+      }
+    })();
+    if (
+      compareSemver(cache.latestVersion, AIDLC_VERSION) < 0 ||
+      previousCache &&
+        compareSemver(cache.latestVersion, previousCache.latestVersion) < 0
+    ) {
+      throw new Error(
+        `release metadata regressed from ${
+          previousCache?.latestVersion ?? AIDLC_VERSION
+        } to ${cache.latestVersion}`,
+      );
+    }
     const path = updateCachePath();
     const root = machineTransactionRoot();
     executePlan({

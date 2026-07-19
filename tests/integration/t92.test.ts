@@ -1035,13 +1035,13 @@ function assertManifestCommandResolves(id: string): void {
   const text = readFileSync(manifest, "utf-8");
   const cmdLine = text.split("\n").find((l) => l.startsWith("command:")) ?? "";
   const cmd = cmdLine.replace(/^command:\s*/, "");
-  expect(cmd).toBe(`aidlc __delegate sensor-${id}`);
+  expect(cmd).toBe(`bun .claude/tools/aidlc.ts __delegate sensor-${id}`);
   const scriptPath = resolveSensorScriptPath(id);
   expect(basename(scriptPath)).toBe(`aidlc-sensor-${id}.ts`);
   expect(existsSync(scriptPath)).toBe(true);
 }
 
-describe("t92 Group K: native manifest delegate resolves next to dispatcher", () => {
+describe("t92 Group K: source manifest delegate resolves next to dispatcher", () => {
   test("36: required-sections manifest command resolves", () => {
     assertManifestCommandResolves("required-sections");
   });

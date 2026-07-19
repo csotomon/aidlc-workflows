@@ -41,7 +41,7 @@ never route, advance, or gate a workflow yourself.
 
 ## Procedure
 
-1. **Detect.** Run `aidlc __delegate utility detect --json`.
+1. **Detect.** Run `bun .codex/tools/aidlc.ts __delegate utility detect --json`.
    It returns the workspace scan (projectType Greenfield/Brownfield,
    languages, frameworks, buildSystem) AND the resolved `scopesDir` +
    `scopeGridPath` - the authoritative locations scope data is read from at
@@ -70,7 +70,7 @@ never route, advance, or gate a workflow yourself.
 
 4. **Validate.** Before the proposal is shown, write the proposed grid to a
    temp file and run the deterministic check:
-   `aidlc __delegate graph validate-grid --proposal <path> --project-type <greenfield|brownfield>`
+   `bun .codex/tools/aidlc.ts __delegate graph validate-grid --proposal <path> --project-type <greenfield|brownfield>`
    (lenient mode for a front/report proposal; the recompose path runs it
    `--strict`). Exit 1 means the grid is rejected: fix the grid or withdraw
    the SKIP - never show an invalid grid at the gate. Surface any advisories
@@ -90,7 +90,7 @@ never route, advance, or gate a workflow yourself.
    Skip the write entirely when a stock scope matched. For in-flight, the
    deterministic recompose verb owns the state write; you only propose.
 
-   **NEVER run `aidlc __delegate graph compile` after the write.** Compile is the
+   **NEVER run `bun .codex/tools/aidlc.ts __delegate graph compile` after the write.** Compile is the
    maintainer build step: it rebuilds `scope-grid.json` from the per-stage
    `scopes:` frontmatter and DROPS your appended grid entry (a composed scope
    has no stage-frontmatter tags). The runtime reads the JSON verbatim - your
@@ -111,7 +111,7 @@ start). Therefore:
   this scope inferable for future prompts? which keywords?") - never a side
   effect of composing. If keywords are granted, run the deterministic
   collision check BEFORE writing them:
-  `aidlc __delegate graph validate-grid --proposal <path> --keywords <granted,csv>`
+  `bun .codex/tools/aidlc.ts __delegate graph validate-grid --proposal <path> --keywords <granted,csv>`
   (the same proposal file from the Validate step). A collision is a hard
   error naming the scope that already claims the keyword - drop or rename
   the colliding keyword (or take it back to the human), never write it.

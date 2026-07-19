@@ -448,8 +448,10 @@ function codexInventory(): PluginInventory {
     const at = id.lastIndexOf("@");
     const pluginName = at > 0 ? id.slice(0, at) : "";
     const marketplace = at > 0 ? id.slice(at + 1) : "";
-    if (!pluginName || !marketplace || !/^[A-Za-z0-9._-]+$/.test(pluginName) ||
-      !/^[A-Za-z0-9._-]+$/.test(marketplace)) {
+    const safeSegment = (value: string): boolean =>
+      /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(value) && value !== "." && value !== "..";
+    if (!pluginName || !marketplace || !safeSegment(pluginName) ||
+      !safeSegment(marketplace)) {
       invalid.push({ paths: [configPath], message: `Codex plugin id "${id}" is not name@marketplace` });
       continue;
     }
@@ -468,23 +470,34 @@ function codexInventory(): PluginInventory {
     }
     const versions = readdirSync(cacheRoot).filter((entry) => {
       const path = join(cacheRoot, entry);
-      return (entry === "local" || STRICT_SEMVER.test(entry)) && statSync(path).isDirectory();
+      return (entry === "local" || STRICT_SEMVER.test(entry)) &&
+        !lstatSync(path).isSymbolicLink() &&
+        lstatSync(path).isDirectory();
     }).sort();
     if (versions.length === 0) {
       invalid.push({ paths: [cacheRoot], message: `Codex plugin "${id}" has no installed tree` });
       continue;
     }
-    for (const cacheVersion of versions) {
-      const root = join(cacheRoot, cacheVersion);
-      const normalized = invalidFromRoot(
-        root,
-        "codex",
-        enabled,
-        cacheVersion === "local" ? undefined : cacheVersion,
-      );
-      if ("root" in normalized) installed.push(normalized);
-      else invalid.push({ ...normalized, key: pluginName.slice("aidlc-".length) });
-    }
+    const selectedVersion = versions.includes("local")
+      ? "local"
+      : versions.sort((left, right) => {
+        const a = left.match(STRICT_SEMVER) as RegExpMatchArray;
+        const b = right.match(STRICT_SEMVER) as RegExpMatchArray;
+        for (let index = 1; index <= 3; index++) {
+          const difference = Number(a[index]) - Number(b[index]);
+          if (difference !== 0) return difference;
+        }
+        return left < right ? -1 : left > right ? 1 : 0;
+      }).at(-1) as string;
+    const root = join(cacheRoot, selectedVersion);
+    const normalized = invalidFromRoot(
+      root,
+      "codex",
+      enabled,
+      selectedVersion === "local" ? undefined : selectedVersion,
+    );
+    if ("root" in normalized) installed.push(normalized);
+    else invalid.push({ ...normalized, key: pluginName.slice("aidlc-".length) });
   }
   const normalized = deduplicateInventory(installed, invalid);
   return {
@@ -1226,6 +1239,27 @@ function projectDiffPlan(
   return { schemaVersion: 1, root: projectDir, operations };
 }
 
+function compositionIsCurrent(
+  plugin: InstalledPlugin,
+  evidence: ProjectEvidence,
+  projectDir: string,
+): boolean {
+  const stamp = evidence.stamps.get(plugin.key);
+  if (
+    !stamp ||
+    stamp.version !== plugin.version ||
+    stamp.sourceHash !== plugin.sourceHash
+  ) return false;
+  const ownership = evidence.ownership.get(plugin.key);
+  if (!ownership) return false;
+  return ownership.files.every((file) => {
+    const target = assertOwnedPath(projectDir, file.path);
+    return existsSync(target) &&
+      lstatSync(target).isFile() &&
+      sha256File(target) === file.sha256;
+  });
+}
+
 export async function confirmPrune(
   argv: string[],
   keys: string[],
@@ -1253,6 +1287,7 @@ export async function syncPlugins(
   projectDir: string,
   argv: string[],
   harnessDir = runtimeHarnessDir(projectDir),
+  lockRetry = 0,
 ): Promise<{ synced: string[]; pruned: string[]; operations: number }> {
   const harness = harnessKind(harnessDir);
   const inventory = currentRoots().length > 0
@@ -1294,6 +1329,16 @@ export async function syncPlugins(
   }
   const pruned = prune ? missing : [];
   await confirmPrune(argv, pruned);
+  if (
+    pruned.length === 0 &&
+    plugins.every((plugin) => compositionIsCurrent(plugin, evidence, projectDir))
+  ) {
+    return {
+      synced: plugins.map((plugin) => plugin.key).sort(),
+      pruned: [],
+      operations: 0,
+    };
+  }
   const stagingRoot = mkdtempSync(join(tmpdir(), "aidlc-plugin-sync-"));
   const stagedProject = join(stagingRoot, "project");
   try {
@@ -1328,9 +1373,37 @@ export async function syncPlugins(
     if (pruned.length > 0) regenerateAfterPrune(stagedProject, harnessDir);
     const plan = projectDiffPlan(projectDir, stagedProject, harnessDir);
     const failAfter = Number(process.env.AIDLC_PLUGIN_SYNC_FAIL_AFTER ?? "0");
-    executePlan(plan, {
-      failAfter: Number.isInteger(failAfter) && failAfter > 0 ? failAfter : undefined,
-    });
+    try {
+      executePlan(plan, {
+        failAfter: Number.isInteger(failAfter) && failAfter > 0 ? failAfter : undefined,
+      });
+    } catch (error) {
+      if (
+        lockRetry < 3 &&
+        error instanceof Error &&
+        error.message.includes("another AI-DLC mutation holds")
+      ) {
+        const lockPath = join(projectDir, ".aidlc-transaction.lock");
+        for (let attempt = 0; attempt < 50 && existsSync(lockPath); attempt++) {
+          await Bun.sleep(50);
+        }
+        return syncPlugins(projectDir, argv, harnessDir, lockRetry + 1);
+      }
+      const refreshedEvidence = projectEvidence(projectDir, harnessDir);
+      if (
+        pruned.length === 0 &&
+        plugins.every((plugin) =>
+          compositionIsCurrent(plugin, refreshedEvidence, projectDir)
+        )
+      ) {
+        return {
+          synced: plugins.map((plugin) => plugin.key).sort(),
+          pruned: [],
+          operations: 0,
+        };
+      }
+      throw error;
+    }
     return {
       synced: plugins.map((plugin) => plugin.key).sort(),
       pruned,

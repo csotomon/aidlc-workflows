@@ -32,7 +32,7 @@
 // stop emits {"decision":"block","reason":"..."} — passed through verbatim.
 //
 // Usage (registered in .kiro/hooks/*.kiro.hook):
-//   aidlc adapter kiro-ide <target>
+//   bun .kiro/tools/aidlc.ts adapter kiro-ide <target>
 // where <target> ∈ session-start | audit-and-sensors | runtime-compile |
 //                  state-sync | log-subagent | stop | session-end
 

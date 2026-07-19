@@ -28,7 +28,7 @@ const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const BUN = process.execPath;
 const BUILD_SCRIPT = join(REPO_ROOT, "scripts", "build-binaries.ts");
 const PACKAGE_RELEASE_SCRIPT = join(REPO_ROOT, "scripts", "package-release.ts");
-const RESULTS_JSON = join(REPO_ROOT, "build", "binaries", "build-results.json");
+const RESULTS_JSON = join(REPO_ROOT, "build", "binaries", "build-results-native.json");
 const RELEASE_DIR = join(REPO_ROOT, "build", "release");
 const UTILITY_TS = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-utility.ts");
 
@@ -54,6 +54,11 @@ type TargetResult = {
   artifact: string;
   bytes: number;
   gates: GateResult[];
+  verification: {
+    status: "VERIFIED" | "UNVERIFIED";
+    mode: "full-runtime" | "inspection-only";
+    hostTarget: string;
+  };
 };
 
 type BuildResults = {
@@ -114,6 +119,8 @@ describe("t238 build-binaries release builder", () => {
     expect(existsSync(native.artifact)).toBe(true);
     expect(relative(REPO_ROOT, native.artifact).replace(/\\/g, "/").startsWith("build/binaries/")).toBe(true);
     expect(native.bytes).toBeGreaterThan(10 * 1024 * 1024);
+    expect(native.verification.status).toBe("VERIFIED");
+    expect(native.verification.mode).toBe("full-runtime");
     const distributions = readdirSync(join(REPO_ROOT, "dist-release"), {
       withFileTypes: true,
     })
@@ -178,6 +185,12 @@ describe("t238 build-binaries release builder", () => {
       "adapter-codex-validate-state",
       "routed-project-dir",
       "bun-compiled-parity",
+      "final-layout-init-dry-run",
+      "final-layout-doctor-json",
+      "final-layout-versions-list",
+      "final-layout-plugin-list",
+      "final-layout-unix-completions",
+      "final-layout-package-verify",
     ]) {
       expect(gate(native, name).ok, name).toBe(true);
     }
@@ -251,6 +264,20 @@ describe("t238 build-binaries release builder", () => {
       env: { ...process.env, SOURCE_DATE_EPOCH: "1784246400" },
     });
     expect(packaged.status, `${packaged.stdout ?? ""}${packaged.stderr ?? ""}`).toBe(0);
+    const releaseManifest = JSON.parse(
+      readFileSync(join(RELEASE_DIR, "version.json"), "utf-8"),
+    ) as {
+      assets: Array<{
+        kind: string;
+        verification?: { status: string; mode: string };
+      }>;
+    };
+    expect(
+      releaseManifest.assets.find((asset) => asset.kind === "binary")?.verification,
+    ).toEqual(expect.objectContaining({
+      status: "VERIFIED",
+      mode: "full-runtime",
+    }));
 
     const installFixture = mkdtempSync(join(tmpdir(), "aidlc-t238-install-"));
     try {
@@ -551,7 +578,7 @@ describe("t238 build-binaries release builder", () => {
       expect(result.status).not.toBe(0);
       expect(result.stderr).toContain("version gate failed");
 
-      const doc = readResults(join(outDir, "build-results.json"));
+      const doc = readResults(join(outDir, "build-results-native.json"));
       const native = nativeResult(doc);
       const version = gate(native, "version");
       expect(version.ok).toBe(false);

@@ -16,7 +16,7 @@
   "toolsSettings": {
     "execute_bash": {
       "allowedCommands": [
-        "{{INVOKE}} .*",
+        "{{TOOL_PREFIX}}.*",
         "date -u .*"
       ]
     },

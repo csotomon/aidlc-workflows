@@ -1,7 +1,7 @@
 ---
 id: type-check
 kind: deterministic
-command: aidlc __delegate sensor-type-check
+command: bun .kiro/tools/aidlc.ts __delegate sensor-type-check
 default_severity: advisory
 description: Wraps the project's configured type-checker (tsc by default for v0.5.0); fires on TS/TSX code outputs
 category: code-quality

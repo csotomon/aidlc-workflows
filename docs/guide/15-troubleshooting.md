@@ -59,12 +59,12 @@ hooks and permission/trust entries consistently select the native command.
 
 ### `aidlc` not installed or not trusted
 
-All 12 host hooks route through the self-contained `aidlc` command. Run
-`aidlc doctor` from the project and address its installed-runtime and native
-command trust rows. If the command is missing, add the installer-reported bin
-directory to PATH and restart the harness. Bun is relevant only when directly
-running framework TypeScript sources or when a third-party plugin declares a
-Bun-backed command.
+Native release installs route all 12 host hooks through the self-contained
+`aidlc` command. Run `aidlc doctor` from the project and address its
+installed-runtime and native command trust rows. If the command is missing, add
+the installer-reported bin directory to PATH and restart the harness. Advanced
+`dist/<harness>/` copy installs route through Bun instead; ensure `bun` is on
+PATH before starting the harness.
 
 ### Reviewer tool calls refused ("reviewer read-scope: ...")
 

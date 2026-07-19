@@ -187,7 +187,7 @@ describe("t107 session skills — data-plane sourcing (summary --json)", () => {
   // Every skill must pull its numbers from the deterministic tool, no LLM-side
   // counting. Assert on the body so a stray frontmatter mention couldn't satisfy
   // it (STRONGER than the .sh's whole-file grep).
-  const NEEDLE = "aidlc __delegate runtime summary --json";
+  const NEEDLE = "bun .claude/tools/aidlc.ts __delegate runtime summary --json";
   test("session-cost body sources aidlc __delegate runtime summary --json [.sh 13]", () => {
     expect(split(COST).body).toContain(NEEDLE);
   });

@@ -5,8 +5,8 @@ engine writes the concrete state file and enumerates stages from the compiled
 stage graph plus scope grid; this template must not hand-list shipped stages.
 
 Authoritative generated views:
-- Stage graph: `aidlc __delegate utility stage-table`
-- Scope grid: `aidlc __delegate utility scope-table`
+- Stage graph: `bun .kiro/tools/aidlc.ts __delegate utility stage-table`
+- Scope grid: `bun .kiro/tools/aidlc.ts __delegate utility scope-table`
 
 ## Project Information
 - **Project**: [project description]

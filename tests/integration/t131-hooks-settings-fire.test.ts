@@ -106,6 +106,7 @@ const SETTINGS = join(AIDLC_SRC, "settings.json");
 const SKILL = join(AIDLC_SRC, "skills", "aidlc", "SKILL.md");
 const SRC_TOOLS = join(AIDLC_SRC, "tools");
 const SRC_HOOKS = join(AIDLC_SRC, "hooks");
+const HOOK_INVOKE = "bun .claude/tools/aidlc.ts hook";
 
 // P9 per-intent layout: the audit-logger + runtime-compile spine resolves state
 // via stateFilePath() and the audit trail via auditFilePath()/readAllAuditShards()
@@ -188,54 +189,54 @@ describe("t131 hooks-move registration (settings.json + SKILL.md, mechanism none
 
   test("R2: audit-logger registered on PostToolUse [.sh test 2]", () => {
     expect(
-      eventHasHook(readSettings(), "PostToolUse", "aidlc hook audit-logger"),
+      eventHasHook(readSettings(), "PostToolUse", `${HOOK_INVOKE} audit-logger`),
     ).toBe(true);
   });
 
   test("R3: sensor-fire registered on PostToolUse [.sh test 3]", () => {
     expect(
-      eventHasHook(readSettings(), "PostToolUse", "aidlc hook sensor-fire"),
+      eventHasHook(readSettings(), "PostToolUse", `${HOOK_INVOKE} sensor-fire`),
     ).toBe(true);
   });
 
   test("R4: sync-statusline registered on PostToolUse [.sh test 4]", () => {
     expect(
-      eventHasHook(readSettings(), "PostToolUse", "aidlc hook sync-statusline"),
+      eventHasHook(readSettings(), "PostToolUse", `${HOOK_INVOKE} sync-statusline`),
     ).toBe(true);
   });
 
   test("R5: runtime-compile registered on PostToolUse [.sh test 5]", () => {
     expect(
-      eventHasHook(readSettings(), "PostToolUse", "aidlc hook runtime-compile"),
+      eventHasHook(readSettings(), "PostToolUse", `${HOOK_INVOKE} runtime-compile`),
     ).toBe(true);
   });
 
   test("R6: validate-state registered on PreCompact [.sh test 6]", () => {
     expect(
-      eventHasHook(readSettings(), "PreCompact", "aidlc hook validate-state"),
+      eventHasHook(readSettings(), "PreCompact", `${HOOK_INVOKE} validate-state`),
     ).toBe(true);
   });
 
   test("R7: log-subagent registered on SubagentStop [.sh test 7]", () => {
     expect(
-      eventHasHook(readSettings(), "SubagentStop", "aidlc hook log-subagent"),
+      eventHasHook(readSettings(), "SubagentStop", `${HOOK_INVOKE} log-subagent`),
     ).toBe(true);
   });
 
   test("R8: stop registered on Stop [.sh test 8]", () => {
-    expect(eventHasHook(readSettings(), "Stop", "aidlc hook stop")).toBe(true);
+    expect(eventHasHook(readSettings(), "Stop", `${HOOK_INVOKE} stop`)).toBe(true);
   });
 
   test("R9: audit-logger matcher is Write|Edit [.sh test 9]", () => {
     // .sh: assert_eq WE_MATCHER "Write|Edit". The matcher belongs to the
     // PostToolUse group that carries the audit-logger command.
     expect(
-      matcherForHook(readSettings(), "PostToolUse", "aidlc hook audit-logger"),
+      matcherForHook(readSettings(), "PostToolUse", `${HOOK_INVOKE} audit-logger`),
     ).toBe("Write|Edit");
     // STRONGER: runtime-compile (the other PostToolUse seam under test) sits in
     // a Bash-matcher group, distinct from the Write|Edit group.
     expect(
-      matcherForHook(readSettings(), "PostToolUse", "aidlc hook runtime-compile"),
+      matcherForHook(readSettings(), "PostToolUse", `${HOOK_INVOKE} runtime-compile`),
     ).toBe("Bash");
   });
 

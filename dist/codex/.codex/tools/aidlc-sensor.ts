@@ -151,9 +151,9 @@ function resolveScriptPath(command: string): string {
 	// is always defined — indexed access keeps the basename typed as
 	// string without a non-null assertion.
 	const parts = tsToken?.split("/") ?? [];
-	const basename = tsToken
-		? parts[parts.length - 1]
-		: `aidlc-${nativeDelegate}.ts`;
+	const basename = nativeDelegate?.startsWith("sensor-")
+		? `aidlc-${nativeDelegate}.ts`
+		: parts[parts.length - 1];
 	const scriptDir = process.env.AIDLC_SENSOR_SCRIPT_DIR
 		?? (compiledExecutable() ? resolveHarnessPath(["tools"]) : __FILE_DIR);
 	return join(scriptDir, basename);

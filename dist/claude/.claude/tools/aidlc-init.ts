@@ -52,7 +52,11 @@ import {
   renderScopeTable,
   renderStageTable,
 } from "./aidlc-utility.ts";
-import { aidlcToolInvocation } from "./aidlc-runtime-paths.ts";
+import {
+  aidlcDispatcherInvocation,
+  aidlcToolInvocation,
+  discoverProjectHarnesses,
+} from "./aidlc-runtime-paths.ts";
 
 type RootContribution =
   | { policy: "managed-block"; hash: string; marker?: string }
@@ -448,7 +452,9 @@ function prepareRefreshSource(
         if (fragments.length === 0 && !hasRecordedContribution) {
           continue;
         }
-        if (sha256Bytes(stripRecordedContributions(current, record)) !== priorHash) continue;
+        const currentHash = sha256Bytes(current);
+        const strippedHash = sha256Bytes(stripRecordedContributions(current, record));
+        if (currentHash !== priorHash && strippedHash !== priorHash) continue;
         let fresh = readFileSync(stagedPath, "utf-8");
         fresh = mergeListField(fresh, "produces", record.produces ?? []);
         fresh = mergeListField(fresh, "sensors", record.sensors ?? []);
@@ -462,6 +468,7 @@ function prepareRefreshSource(
   }
 
   const envKeys = [
+    "AIDLC_RUNTIME_PROJECT_DIR",
     "AIDLC_PROJECT_DIR",
     "AIDLC_HARNESS_DIR",
     "AIDLC_RUNTIME_HARNESS_ROOT",
@@ -474,6 +481,7 @@ function prepareRefreshSource(
   ] as const;
   const saved = Object.fromEntries(envKeys.map((key) => [key, process.env[key]]));
   try {
+    process.env.AIDLC_RUNTIME_PROJECT_DIR = root;
     process.env.AIDLC_PROJECT_DIR = root;
     process.env.AIDLC_HARNESS_DIR = descriptor.harnessDir;
     process.env.AIDLC_RUNTIME_HARNESS_ROOT = stagedHarness;
@@ -499,13 +507,13 @@ function prepareRefreshSource(
       generated = replaceGeneratedRegion(
         generated,
         canonicalStageTableRegion(renderStageTable()),
-        `<!-- BEGIN: compiled stage graph via \`${aidlcToolInvocation("utility", undefined, false)} stage-table\` - do NOT hand-edit -->`,
+        `<!-- BEGIN: compiled stage graph via \`${aidlcDispatcherInvocation("utility")} stage-table\` - do NOT hand-edit -->`,
         "<!-- END: compiled stage graph -->",
       );
       generated = replaceGeneratedRegion(
         generated,
         canonicalScopeTableRegion(renderScopeTable()),
-        `<!-- BEGIN: compiled scope grid via \`${aidlcToolInvocation("utility", undefined, false)} scope-table\` - do NOT hand-edit -->`,
+        `<!-- BEGIN: compiled scope grid via \`${aidlcDispatcherInvocation("utility")} scope-table\` - do NOT hand-edit -->`,
         "<!-- END: compiled scope grid -->",
       );
       const rel = relative(root, skillPath).replaceAll("\\", "/");
@@ -514,13 +522,13 @@ function prepareRefreshSource(
         generated = replaceGeneratedRegion(
           readFileSync(currentSkill, "utf-8"),
           generated,
-          `<!-- BEGIN: compiled stage graph via \`${aidlcToolInvocation("utility", undefined, false)} stage-table\` - do NOT hand-edit -->`,
+          `<!-- BEGIN: compiled stage graph via \`${aidlcDispatcherInvocation("utility")} stage-table\` - do NOT hand-edit -->`,
           "<!-- END: compiled stage graph -->",
         );
         generated = replaceGeneratedRegion(
           generated,
           canonicalScopeTableRegion(renderScopeTable()),
-          `<!-- BEGIN: compiled scope grid via \`${aidlcToolInvocation("utility", undefined, false)} scope-table\` - do NOT hand-edit -->`,
+          `<!-- BEGIN: compiled scope grid via \`${aidlcDispatcherInvocation("utility")} scope-table\` - do NOT hand-edit -->`,
           "<!-- END: compiled scope grid -->",
         );
       }
@@ -768,21 +776,35 @@ function selectSource(
   );
 }
 
-function existingProject(projectDir: string): {
+function existingProject(projectDir: string, requested?: string): {
   distribution?: string;
   baseline?: Baseline;
 } {
-  for (const harnessDir of [".claude", ".kiro", ".codex"]) {
-    const baselinePath = join(projectDir, harnessDir, "tools", "data", "aidlc-manifest.json");
-    const baseline = readBaseline(baselinePath);
-    if (baseline) return { distribution: baseline.distribution, baseline };
-    const stampPath = join(projectDir, harnessDir, "tools", "data", "aidlc-stamp.json");
-    if (regularFile(stampPath)) {
-      const stamp = JSON.parse(readFileSync(stampPath, "utf-8")) as { distribution?: string };
-      if (stamp.distribution) return { distribution: stamp.distribution };
-    }
+  const harnesses = discoverProjectHarnesses(projectDir);
+  const harness = requested
+    ? harnesses.find((candidate) => candidate.distribution === requested)
+    : harnesses[0];
+  if (!harness && requested && harnesses.length > 0) {
+    throw new Error(
+      `project uses ${harnesses.map((candidate) => candidate.distribution).join(", ")}; refusing ${requested}`,
+    );
   }
-  return {};
+  if (!harness) return {};
+  const baselinePath = join(harness.root, "tools", "data", "aidlc-manifest.json");
+  const baseline = readBaseline(baselinePath);
+  if (
+    baseline &&
+    (
+      baseline.distribution !== harness.distribution ||
+      baseline.harnessDir !== harness.harnessDir
+    )
+  ) {
+    throw new Error(`${baselinePath}: baseline identity does not match the installed harness`);
+  }
+  return {
+    distribution: harness.distribution,
+    ...(baseline ? { baseline } : {}),
+  };
 }
 
 function planManagedFiles(
@@ -827,6 +849,15 @@ function planManagedFiles(
         continue;
       }
       if (runtimeGenerated(rel, descriptor.harnessDir, regenerated)) {
+        if (
+          ![
+            `${descriptor.harnessDir}/tools/data/harness.json`,
+            `${descriptor.harnessDir}/tools/data/stage-graph.json`,
+            `${descriptor.harnessDir}/tools/data/scope-grid.json`,
+          ].includes(rel)
+        ) {
+          nextHashes[rel] = hash;
+        }
         if (targetRegular && sha256File(target) === hash) {
           actions.push({ path: rel, action: "preserve", detail: "runtime-generated" });
           continue;
@@ -1132,8 +1163,7 @@ function planRootIntegrations(
       targetExists &&
       currentHash !== priorHash &&
       currentHash !== shippedHash &&
-      !adoptedLegacy &&
-      !force
+      !adoptedLegacy
     ) {
       actions.push({ path: integration.path, action: "conflict", detail: "unowned whole file" });
     } else if (currentHash === shippedHash) {
@@ -1292,10 +1322,10 @@ export async function main(input: string[]): Promise<void> {
       return;
     }
   }
-  const existing = existingProject(projectDir);
   let selected: { root: string; cleanup?: string } | null = null;
   let prepared: { root: string; cleanup?: string; regenerated: Set<string> } | null = null;
   try {
+    const existing = existingProject(projectDir, requestedHarness);
     const pinPath = join(projectDir, ".aidlc-version");
     if (pathPresent(pinPath) && !regularFile(pinPath)) {
       throw new Error("project pin .aidlc-version is not a regular file");

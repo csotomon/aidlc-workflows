@@ -156,7 +156,7 @@ describe("t93 aidlc-sensor describe (migrated from t93-sensor-list-describe.sh, 
     expect(
       hasLine(
         r.out,
-        "command: aidlc __delegate sensor-required-sections",
+        "command: bun .claude/tools/aidlc.ts __delegate sensor-required-sections",
       ),
     ).toBe(true);
     expect(hasLine(r.out, "default_severity: advisory")).toBe(true);
@@ -170,7 +170,7 @@ describe("t93 aidlc-sensor describe (migrated from t93-sensor-list-describe.sh, 
     expect(
       hasLine(
         r.out,
-        "command: aidlc __delegate sensor-upstream-coverage",
+        "command: bun .claude/tools/aidlc.ts __delegate sensor-upstream-coverage",
       ),
     ).toBe(true);
     expect(hasLine(r.out, "matches: **/{aidlc-docs,intents}/**")).toBe(true);
@@ -182,7 +182,7 @@ describe("t93 aidlc-sensor describe (migrated from t93-sensor-list-describe.sh, 
     expect(hasLine(r.out, "id: linter")).toBe(true);
     expect(hasLine(r.out, "matches: **/*.{ts,js}")).toBe(true);
     expect(
-      hasLine(r.out, "command: aidlc __delegate sensor-linter"),
+      hasLine(r.out, "command: bun .claude/tools/aidlc.ts __delegate sensor-linter"),
     ).toBe(true);
   });
 
@@ -192,7 +192,7 @@ describe("t93 aidlc-sensor describe (migrated from t93-sensor-list-describe.sh, 
     expect(hasLine(r.out, "id: type-check")).toBe(true);
     expect(hasLine(r.out, "matches: **/*.{ts,tsx}")).toBe(true);
     expect(
-      hasLine(r.out, "command: aidlc __delegate sensor-type-check"),
+      hasLine(r.out, "command: bun .claude/tools/aidlc.ts __delegate sensor-type-check"),
     ).toBe(true);
   });
 

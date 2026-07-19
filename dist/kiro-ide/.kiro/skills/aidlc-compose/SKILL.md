@@ -24,7 +24,7 @@ conductor runs the same forwarding loop as `/aidlc`.
    `compose` verb (pass `--report <path>` / `--new-scope` through as-is):
 
    ```bash
-   aidlc __delegate orchestrate next compose $ARGUMENTS
+   bun .kiro/tools/aidlc-orchestrate.ts next compose $ARGUMENTS
    ```
 
 2. Act on the directive exactly as the `aidlc` skill's forwarding loop

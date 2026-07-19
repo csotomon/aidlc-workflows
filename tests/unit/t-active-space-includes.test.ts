@@ -285,7 +285,7 @@ describe("t-active-space-includes: opencode opencode.json instructions glob", ()
     expect(cfg.instructions).not.toContain("aidlc/spaces/default/memory/**/*.md");
     // The load-bearing wiring beyond the pointer survives the rewrite.
     expect(cfg.skills.paths).toContain(".aidlc/skills");
-    expect(cfg.permission.bash["aidlc *"]).toBe("allow");
+    expect(cfg.permission.bash["bun .aidlc/tools/*"]).toBe("allow");
   });
 
   test("re-pointing to default (already shipped) is a byte-identical NO-OP", () => {

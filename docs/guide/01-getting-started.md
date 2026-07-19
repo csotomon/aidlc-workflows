@@ -8,8 +8,8 @@ This chapter walks you through installing this implementation, verifying your en
 
 Install the CLI harness you plan to use. The AI-DLC native installer supplies
 the self-contained `aidlc` runtime; Bun is required only for framework source
-development or a third-party plugin that explicitly declares Bun-backed
-commands.
+development, the advanced `dist/<harness>/` copy channel, or a third-party
+plugin that explicitly declares Bun-backed commands.
 
 | Prerequisite | Purpose | Install |
 |-------------|---------|---------|

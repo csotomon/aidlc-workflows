@@ -82,8 +82,8 @@ describe("t148 dist/kiro file structure", () => {
     expect(allowed).not.toContain("execute_bash"); // never blanket shell trust
     const ts = a.toolsSettings as Record<string, { allowedCommands?: string[] }>;
     const cmds = ts.execute_bash?.allowedCommands ?? [];
-    expect(cmds).toContain("aidlc .*");
-    expect(cmds.some((c) => c.startsWith("bun "))).toBe(false);
+    expect(cmds).toContain("bun .kiro/tools/.*");
+    expect(cmds).not.toContain("aidlc .*");
   });
 
   test("delegation targets cannot nest (no subagent tool)", () => {
@@ -167,7 +167,9 @@ describe("t148 dist/kiro file structure", () => {
     ]);
     const all = Object.values(hooks).flat();
     for (const h of all) {
-      expect(h.command).toMatch(/^aidlc adapter kiro [a-z-]+$/);
+      expect(h.command).toMatch(
+        /^bun \.kiro\/tools\/aidlc\.ts adapter kiro [a-z-]+$/,
+      );
     }
     const matchers = (hooks.postToolUse ?? []).map((h) => h.matcher).sort();
     expect(matchers).toEqual(["execute_bash", "fs_write", "subagent", "todo_list"]);
@@ -202,8 +204,10 @@ describe("t148 dist/kiro file structure", () => {
 
   test("kiro skills carry the kiro tool prefix, never the claude one", () => {
     const skill = readFileSync(join(K, "skills", "aidlc", "SKILL.md"), "utf-8");
-    expect(skill).toContain("aidlc __delegate orchestrate next");
-    expect(skill).not.toContain("bun ");
+    expect(skill).toContain(
+      "bun .kiro/tools/aidlc.ts __delegate orchestrate next",
+    );
+    expect(skill).not.toContain("bun .claude/");
     expect(skill).not.toContain("AskUserQuestion");
   });
 });

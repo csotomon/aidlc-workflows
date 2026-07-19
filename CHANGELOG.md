@@ -2,15 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
-## [2.5.3] - 2026-07-19
+## [2.5.4] - 2026-07-19
 
-The AI-DLC install mechanism is now generally available: every shipped project projection uses the self-contained `aidlc` command, and the installer is the documented default. Release trust is permanently based on authenticated SHA-256 checksums, TLS, and published SLSA provenance attestations. **Upgrade:** install or upgrade the native command, then run `aidlc init --dry-run` and `aidlc init` in each project; known unmodified legacy root files are adopted automatically.
+The AI-DLC install mechanism is now generally available through the self-contained `aidlc` command, while the established `dist/<harness>/` copy channel remains Bun-invoked until the native release path is field-proven. Release trust is based on authenticated SHA-256 checksums, TLS, and published SLSA provenance attestations. **Upgrade:** install or upgrade the native command, then run `aidlc init --dry-run` and `aidlc init` in each project; copy-channel users may continue copying `dist/<harness>/` and invoking it through Bun.
 
-* `dist/<harness>/` and `dist-release/<harness>/` are byte-identical native projections with native Claude, Kiro CLI, Kiro IDE, Codex, and OpenCode hook and permission trust entries; Bun remains a source-development and third-party plugin runtime, not an AI-DLC runtime prerequisite.
+* `dist/<harness>/` remains the Bun-invoked copy projection; `dist-release/<harness>/` is the native `aidlc` projection packaged into release archives. Both channels remain generated, committed, and independently drift-guarded.
 * `aidlc init` adopts known historical `.gitignore`, `.mcp.json`, and `AGENTS.md` content only by exact whole-file or canonical JSON-entry SHA-256 signatures, records contribution ownership, and continues to refuse unknown or modified unmarked content even with `--force`.
-* Native binary builds now require byte-for-byte stdout/stderr and exit parity with Bun-spawn execution for hooks, statusline, all host adapters, and generated-surface routes; Kiro IDE adapter dispatch never reads the IDE's deliberately open stdin channel.
+* Native binary builds require byte-for-byte stdout/stderr and exit parity with Bun-spawn execution for representative hooks, statusline, every host adapter, and a generated surface. Host-runnable release targets also execute doctor JSON, init dry-run, versions/plugin listings, Unix completions, and package verification; every binary is labeled `VERIFIED` or `UNVERIFIED` in release metadata.
+* Native project routing now discovers harness identity from shipped metadata, including OpenCode's `.aidlc` runtime and future harness directories; dispatcher syntax failures consistently use exit code 2.
+* Init refresh planning is isolated from the live project, preserves plugin-composed stages across repeated refreshes, refuses explicit harness mismatches, and never lets `--force` overwrite an unowned whole-file integration.
+* Lifecycle and plugin management preserve malformed-pin diagnostics, revalidate prune protection, reject update-cache downgrades and Codex cache traversal, collapse stale plugin versions, and let concurrent plugin syncs converge idempotently.
 * Getting started is installer-first, with a complete lifecycle reference for project pins and CI, upgrades and rollback, harness management, offline packages, mirrors/proxies/custom CAs, plugin synchronization, output modes, exit codes, transaction staging, doctor, and uninstall.
-* Release CI lints both bootstrap installers, consumes the staged release candidate online and offline on native Linux and macOS runners, exercises the interactive harness picker through a PTY, and publishes that tested candidate without rebuilding it.
+* Release CI lints both bootstrap installers, consumes the staged release candidate online and offline on native Linux and macOS runners, exercises the interactive harness picker through a PTY, re-verifies checksums immediately before publication, and publishes that tested candidate without rebuilding it.
 
 ## [2.5.2] - 2026-07-19
 

@@ -35,11 +35,6 @@
           "sha256:e01ac1caf52a59d25faf859a03cfb65b803853c99298bbcbc80ef565e7628de6"
         ]
       }
-    },
-    {
-      "path": ".vscode/settings.json",
-      "policy": "json-array",
-      "jsonKey": "kiroAgent.trustedCommands"
     }
   ]
 }

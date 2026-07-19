@@ -5,11 +5,11 @@ This project uses AI-DLC (AI-Driven Development Life Cycle) for structured devel
 ## Prerequisites
 
 - **Kiro IDE**: Sign in and select Claude Opus 4.8 as the chat model before starting a workflow.
-- **Runtime**: Native installs use the self-contained `aidlc` binary; Bun is not required.
+- **Runtime**: Framework commands run through `aidlc`; keep that command and its runtime available.
 - **Activation**: Open the project in Kiro IDE and invoke `/aidlc`; the command loads the shipped `skills/aidlc/SKILL.md` conductor. The `.kiro/hooks/*.kiro.hook` files register in the IDE's Agent Hooks panel.
 - **Permissions**: delegation-target agent `.md` files receive the IDE-native read/write/shell grants they need. The conductor's approval gates and your IDE permission settings remain the control boundary.
 - **Locking**: Audit log file locking is handled portably using mkdir-based locking in the system temp directory (no external dependencies).
-- **Hook runtime**: Framework hooks run through the self-contained `aidlc` binary. No separate script runtime or executable bits are required.
+- **Hook runtime**: Framework hooks run through `aidlc`; keep that command and its runtime available.
 
 ## AI-DLC Structure
 
@@ -21,7 +21,7 @@ This project uses AI-DLC (AI-Driven Development Life Cycle) for structured devel
 - **Sensors**: `.kiro/sensors/` — Deterministic verification manifests (advisory). Ships with framework defaults (`aidlc-required-sections.md`, `aidlc-upstream-coverage.md`, `aidlc-linter.md`, `aidlc-type-check.md`); forks may add custom `aidlc-<id>.md` manifests. Stages declare which sensors fire via the frontmatter `sensors: [<id>]` list — a pull import resolved at compile time. The PostToolUse hook reads the compile-resolved `sensors_applicable` array off the stage graph node.
 - **Knowledge**: `.kiro/knowledge/` — Methodology reference. Per-agent under `aidlc-<agent>-agent/` subfolders; `aidlc-shared/` holds cross-agent material. Ships with framework.
 - **Team Knowledge**: `aidlc/knowledge/` (i.e. `aidlc/spaces/<space>/knowledge/`) — User-managed team and domain knowledge, a space-level sibling of `memory/`/`codekb/`/`intents/` that accumulates across every intent in the space. Free-form and empty at bootstrap (no fixed file set, no seeded READMEs); the engine ensure-exists the empty dir on your first `/aidlc`. Agents read `aidlc/knowledge/aidlc-shared/` (all agents) and `aidlc/knowledge/<agent>/` (that agent) if the team creates them.
-- **Tools**: `.kiro/tools/` — Deterministic TypeScript sources invoked through the self-contained `aidlc` runtime. All framework files prefixed `aidlc-*.ts`. They cover state management, audit emission, the orchestration engine (`aidlc-orchestrate.ts` with exactly three subcommands: `next`, `report`, and `park`), graph compile, runner generation, sensor firing, the §13 learnings gate (`aidlc-learnings.ts`), and the swarm convergence referee (`aidlc-swarm.ts`).
+- **Tools**: `.kiro/tools/` — Deterministic TypeScript sources invoked through `aidlc`. All framework files prefixed `aidlc-*.ts`. They cover state management, audit emission, the orchestration engine (`aidlc-orchestrate.ts` with exactly three subcommands: `next`, `report`, and `park`), graph compile, runner generation, sensor firing, the §13 learnings gate (`aidlc-learnings.ts`), and the swarm convergence referee (`aidlc-swarm.ts`).
 - **Hooks**: `.kiro/hooks/` — Framework hooks for audit emission, session lifecycle, state sync, state validation, subagent tracking, and statusline rendering. All framework files prefixed `aidlc-*.ts`.
 ## Conventions
 

@@ -5,11 +5,11 @@ This project uses AI-DLC (AI-Driven Development Life Cycle) for structured devel
 ## Prerequisites
 
 - **opencode ≥ 1.17**: the plugin hook surface this install relies on (`tool.execute.before`, `tool.execute.after`, `chat.message`, `session.idle` on the event bus, `experimental.session.compacting`) and project-local `.aidlc/skills/` + `.opencode/agents/` discovery are current-line features. Check with `opencode --version`.
-- **Runtime**: Native installs use the self-contained `aidlc` binary; Bun is not required.
+- **Runtime**: Framework commands run through `aidlc`; keep that command and its runtime available.
 - **Model/provider**: the shipped `opencode.json` pins no model — your global opencode configuration (`~/.config/opencode/opencode.json`) supplies the default. Tiered personas pin `amazon-bedrock/global.anthropic.claude-sonnet-4-6`; override per agent under `agent:` in the project `opencode.json` if your provider differs.
-- **Permissions**: the shipped project `opencode.json` pre-approves only direct `aidlc` invocations; the adapter rejects chaining, redirection, expansion, and command substitution. Edits under `.aidlc/tools/` and `.aidlc/hooks/` prompt. Every other bash command prompts. There is no blanket shell trust. In `opencode run` non-interactive sessions, pass `--auto` only if you accept auto-approval of the remaining prompts; prefer interactive sessions for gated workflows.
+- **Permissions**: the shipped project `opencode.json` pre-approves only direct projected framework tool invocations; the adapter rejects chaining, redirection, expansion, and command substitution. Edits under `.aidlc/tools/` and `.aidlc/hooks/` prompt. Every other bash command prompts. There is no blanket shell trust. In `opencode run` non-interactive sessions, pass `--auto` only if you accept auto-approval of the remaining prompts; prefer interactive sessions for gated workflows.
 - **Locking**: Audit log file locking is handled portably using mkdir-based locking in the system temp directory (no external dependencies).
-- **Hook runtime**: Framework hooks run through the self-contained `aidlc` binary. No separate script runtime or executable bits are required.
+- **Hook runtime**: Framework hooks run through `aidlc`; keep that command and its runtime available.
 
 ## AI-DLC Structure
 
@@ -21,7 +21,7 @@ This project uses AI-DLC (AI-Driven Development Life Cycle) for structured devel
 - **Sensors**: `.aidlc/sensors/` — Deterministic verification manifests (advisory). Ships with framework defaults (`aidlc-required-sections.md`, `aidlc-upstream-coverage.md`, `aidlc-linter.md`, `aidlc-type-check.md`); forks may add custom `aidlc-<id>.md` manifests. Stages declare which sensors fire via the frontmatter `sensors: [<id>]` list — a pull import resolved at compile time. The PostToolUse hook reads the compile-resolved `sensors_applicable` array off the stage graph node.
 - **Knowledge**: `.aidlc/knowledge/` — Methodology reference. Per-agent under `aidlc-<agent>-agent/` subfolders; `aidlc-shared/` holds cross-agent material. Ships with framework.
 - **Team Knowledge**: `aidlc/knowledge/` (i.e. `aidlc/spaces/<space>/knowledge/`) — User-managed team and domain knowledge, a space-level sibling of `memory/`/`codekb/`/`intents/` that accumulates across every intent in the space. Free-form and empty at bootstrap (no fixed file set, no seeded READMEs); the engine ensure-exists the empty dir on your first `/aidlc`. Agents read `aidlc/knowledge/aidlc-shared/` (all agents) and `aidlc/knowledge/<agent>/` (that agent) if the team creates them.
-- **Tools**: `.aidlc/tools/` — Deterministic TypeScript sources invoked through the self-contained `aidlc` runtime. All framework files prefixed `aidlc-*.ts`. They cover state management, audit emission, the orchestration engine (`aidlc-orchestrate.ts` with exactly three subcommands: `next`, `report`, and `park`), graph compile, runner generation, sensor firing, the §13 learnings gate (`aidlc-learnings.ts`), and the swarm convergence referee (`aidlc-swarm.ts`).
+- **Tools**: `.aidlc/tools/` — Deterministic TypeScript sources invoked through `aidlc`. All framework files prefixed `aidlc-*.ts`. They cover state management, audit emission, the orchestration engine (`aidlc-orchestrate.ts` with exactly three subcommands: `next`, `report`, and `park`), graph compile, runner generation, sensor firing, the §13 learnings gate (`aidlc-learnings.ts`), and the swarm convergence referee (`aidlc-swarm.ts`).
 - **Hooks**: `.aidlc/hooks/` — Framework hooks for audit emission, session lifecycle, state sync, state validation, subagent tracking, and statusline rendering. All framework files prefixed `aidlc-*.ts`.
 ## Conventions
 

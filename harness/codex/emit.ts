@@ -129,9 +129,12 @@ status_line = ["model-with-reasoning", "git-branch", "task-progress", "context-u
 `;
 }
 
-export function emitDefaultRules(harnessDir: string): string {
-  const runtimeRules = `# Native runtime allowlist: framework commands invoke the self-contained binary.
-prefix_rule(pattern = ["aidlc"], decision = "allow")`;
+export function emitDefaultRules(harnessDir: string, invoke = "aidlc"): string {
+  const runtimeRules = invoke === "aidlc"
+    ? `# Native runtime allowlist: framework commands invoke the self-contained binary.
+prefix_rule(pattern = ["aidlc"], decision = "allow")`
+    : `# Bun copy-channel allowlist: deterministic framework tools stay under the harness tree.
+prefix_rule(pattern = ["bun", "${harnessDir}/tools/"], decision = "allow")`;
   return `# dist/codex shipped permission rules (Starlark) — ${harnessDir}/rules/ is
 # Codex's NATIVE rules dir (this file), distinct from the AIDLC markdown rule
 # layers at ${harnessDir}/aidlc-rules/ (D-10 rename).
@@ -191,6 +194,7 @@ export function trustEntries(
   hooksJsonPath?: string,
   harnessDir = ".codex",
   harnessName = "codex",
+  invoke = "aidlc",
 ): string {
   // A supplied hooks path is already the Codex trust identity: preserve it
   // exactly. For the default, choose the path implementation from the project
@@ -208,7 +212,7 @@ export function trustEntries(
     const snake = SNAKE[event];
     const idx = counters[snake] ?? 0;
     counters[snake] = idx + 1;
-    const command = adapterCmd(harnessName, target).replace("{{INVOKE}}", "aidlc");
+    const command = adapterCmd(harnessName, target).replace("{{INVOKE}}", invoke);
     const hash = trustHash(snake, command);
     state[`${path}:${snake}:${idx}:0`] = { trusted_hash: hash };
   }
@@ -218,8 +222,9 @@ export function trustEntries(
 export function emitTrustSeed(
   harnessDir: string,
   harnessName = "codex",
+  invoke = "aidlc",
 ): string {
-  const recipe = `# This template hashes the native \`aidlc adapter ${harnessName} ...\`
+  const recipe = `# This template hashes the projected \`${invoke} adapter ${harnessName} ...\`
 # commands in hooks.json. Start one interactive Codex session and choose
 # "Trust all and continue" to register the project-specific hook identities.
 `;
@@ -233,7 +238,7 @@ export function emitTrustSeed(
     `# only the key changes per install. Codex then runs the hooks without a\n` +
     `# TUI trust pass (the --dangerously-bypass-hook-trust flag does NOT fire\n` +
     `# untrusted hooks at 0.137-0.139; never rely on it).\n\n` +
-    trustEntries("<PROJECT_DIR>", undefined, harnessDir, harnessName)
+    trustEntries("<PROJECT_DIR>", undefined, harnessDir, harnessName, invoke)
   );
 }
 
@@ -287,6 +292,7 @@ export default function emit(ctx: EmitContext): void {
     substituteToken,
     tierCap,
   } = ctx;
+  const invoke = substituteToken("{{INVOKE}}");
   const CODEX_ROOT = join(distRoot, harnessDir);
   const SKILLS_DST = join(distRoot, ".agents", "skills");
 
@@ -386,11 +392,11 @@ export default function emit(ctx: EmitContext): void {
   emissions.push({ path: join(CODEX_ROOT, "config.toml"), content: emitConfigToml });
   emissions.push({
     path: join(CODEX_ROOT, "rules", "default.rules"),
-    content: () => emitDefaultRules(harnessDir),
+    content: () => emitDefaultRules(harnessDir, invoke),
   });
   emissions.push({
     path: join(CODEX_ROOT, "trust-seed.toml"),
-    content: () => emitTrustSeed(harnessDir, harnessName),
+    content: () => emitTrustSeed(harnessDir, harnessName, invoke),
   });
   emissions.push({ path: join(distRoot, "AGENTS.md"), content: emitAgentsMd });
 

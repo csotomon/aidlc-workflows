@@ -77,6 +77,10 @@ describe("t240 dist/opencode packaging parity + shell shape", () => {
         const src = join(CLAUDE_SRC, sub, rel);
         let opencode = readFileSync(file, "utf-8");
         const claude = readFileSync(src, "utf-8");
+        opencode = opencode.replaceAll(
+          "bun .aidlc/tools/",
+          "bun .claude/tools/",
+        );
         if (rel === "aidlc-plugin.ts") {
           opencode = opencode.replace(
             '.replaceAll(".aidlc", harnessDir)',
@@ -197,7 +201,7 @@ describe("t240 dist/opencode packaging parity + shell shape", () => {
     expect(r.status).toBe(1);
   });
 
-  test("8: the shipped opencode.json wires skills, method instructions, and the native allowlist", () => {
+  test("8: the shipped opencode.json wires skills, method instructions, and the Bun tool allowlist", () => {
     const cfg = JSON.parse(readFileSync(join(OPENCODE_ROOT, "opencode.json"), "utf-8")) as {
       skills?: { paths?: string[] };
       instructions?: string[];
@@ -208,12 +212,12 @@ describe("t240 dist/opencode packaging parity + shell shape", () => {
     };
     expect(cfg.skills?.paths).toContain(".aidlc/skills");
     expect(cfg.instructions).toContain("aidlc/spaces/default/memory/**/*.md");
-    expect(cfg.permission?.bash?.["aidlc *"]).toBe("allow");
+    expect(cfg.permission?.bash?.["bun .aidlc/tools/*"]).toBe("allow");
     expect(cfg.permission?.edit?.[".aidlc/tools/**"]).toBe("ask");
     expect(cfg.permission?.edit?.[".aidlc/hooks/**"]).toBe("ask");
   });
 
-  test("9: the adapter enforces one direct native aidlc invocation", async () => {
+  test("9: the adapter enforces one direct source-channel framework invocation", async () => {
     const moduleExports = await import(
       "../../dist/opencode/.opencode/plugin/aidlc-opencode-adapter.ts"
     );
@@ -232,13 +236,21 @@ describe("t240 dist/opencode packaging parity + shell shape", () => {
     await expect(
       before(
         { tool: "bash", sessionID: "main", callID: "direct" },
-        { args: { command: "aidlc __delegate state approve" } },
+        {
+          args: {
+            command: "bun .aidlc/tools/aidlc.ts __delegate state approve",
+          },
+        },
       ),
     ).resolves.toBeUndefined();
     await expect(
       before(
         { tool: "bash", sessionID: "main", callID: "compound" },
-        { args: { command: "aidlc status && touch /tmp/unsafe" } },
+        {
+          args: {
+            command: "bun .aidlc/tools/aidlc.ts status && touch /tmp/unsafe",
+          },
+        },
       ),
     ).rejects.toThrow("one direct invocation");
     await expect(

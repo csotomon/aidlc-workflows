@@ -17,7 +17,7 @@
   "toolsSettings": {
     "execute_bash": {
       "allowedCommands": [
-        "aidlc .*",
+        "bun .kiro/tools/.*",
         "date -u .*"
       ]
     },
@@ -37,17 +37,17 @@
     "preToolUse": [
       {
         "matcher": "fs_read",
-        "command": "aidlc adapter kiro reviewer-scope aidlc-product-lead-agent",
+        "command": "bun .kiro/tools/aidlc.ts adapter kiro reviewer-scope aidlc-product-lead-agent",
         "timeout_ms": 15000
       },
       {
         "matcher": "fs_write",
-        "command": "aidlc adapter kiro reviewer-scope aidlc-product-lead-agent",
+        "command": "bun .kiro/tools/aidlc.ts adapter kiro reviewer-scope aidlc-product-lead-agent",
         "timeout_ms": 15000
       },
       {
         "matcher": "execute_bash",
-        "command": "aidlc adapter kiro reviewer-scope aidlc-product-lead-agent",
+        "command": "bun .kiro/tools/aidlc.ts adapter kiro reviewer-scope aidlc-product-lead-agent",
         "timeout_ms": 15000
       }
     ]

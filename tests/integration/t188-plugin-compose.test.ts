@@ -35,7 +35,7 @@ const PLUGIN = "test-pro";
 const CLAUDE_DIST = join(REPO_ROOT, "dist", "claude", ".claude");
 const OPENCODE_DIST = join(REPO_ROOT, "dist", "opencode");
 const STAGE_TABLE_BEGIN =
-  "<!-- BEGIN: compiled stage graph via `aidlc __delegate utility stage-table` - do NOT hand-edit -->";
+  "<!-- BEGIN: compiled stage graph via `bun .claude/tools/aidlc.ts __delegate utility stage-table` - do NOT hand-edit -->";
 const STAGE_TABLE_END = "<!-- END: compiled stage graph -->";
 
 function fileInventory(root: string, relative = ""): string[] {
