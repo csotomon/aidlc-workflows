@@ -31,6 +31,8 @@ export type EmitContext = {
   coreRoot: string;
   /** Absolute path to harness/<name>/ (this harness's authored surfaces). */
   harnessRoot: string;
+  /** Manifest harness name used by native adapter routes. */
+  harnessName: string;
   /** Absolute path to the dist tree root for this harness (e.g. <repo>/dist/codex). */
   distRoot: string;
   /** The harness directory name (".claude" | ".kiro" | ".codex"). */

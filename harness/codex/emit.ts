@@ -45,15 +45,20 @@ const HOOK_WIRING: Array<{ event: string; matcher?: string; target: string }> = 
   { event: "Stop", target: "stop" },
 ];
 
-const sourceAdapterCmd = (harnessDir: string, target: string) =>
-  `bun ${harnessDir}/hooks/aidlc-codex-adapter.ts ${target}`;
-const releaseAdapterCmd = (target: string) => `aidlc adapter codex ${target}`;
+const adapterCmd = (harnessName: string, target: string) =>
+  `{{INVOKE}} adapter ${harnessName} ${target}`;
 
-function emitHooksJson(harnessDir: string): string {
+function emitHooksJson(
+  substituteToken: (value: string) => string,
+  harnessName: string,
+): string {
   const hooks: Record<string, Array<Record<string, unknown>>> = {};
   for (const { event, matcher, target } of HOOK_WIRING) {
     const group: Record<string, unknown> = {
-      hooks: [{ type: "command", command: sourceAdapterCmd(harnessDir, target) }],
+      hooks: [{
+        type: "command",
+        command: substituteToken(adapterCmd(harnessName, target)),
+      }],
     };
     if (matcher) group.matcher = matcher;
     hooks[event] ??= [];
@@ -124,13 +129,9 @@ status_line = ["model-with-reasoning", "git-branch", "task-progress", "context-u
 `;
 }
 
-export function emitDefaultRules(harnessDir: string, release = false): string {
-  const runtimeRules = release
-    ? `# Native runtime allowlist: the release projection invokes the self-contained binary.
-prefix_rule(pattern = ["aidlc"], decision = "allow")`
-    : `# bun tool allowlist: the deterministic core runs via these exact prefixes.
-prefix_rule(pattern = ["bun", "${harnessDir}/tools/"], decision = "allow")
-prefix_rule(pattern = ["bun", "${harnessDir}/hooks/"], decision = "allow")`;
+export function emitDefaultRules(harnessDir: string): string {
+  const runtimeRules = `# Native runtime allowlist: framework commands invoke the self-contained binary.
+prefix_rule(pattern = ["aidlc"], decision = "allow")`;
   return `# dist/codex shipped permission rules (Starlark) — ${harnessDir}/rules/ is
 # Codex's NATIVE rules dir (this file), distinct from the AIDLC markdown rule
 # layers at ${harnessDir}/aidlc-rules/ (D-10 rename).
@@ -189,7 +190,7 @@ export function trustEntries(
   projectDir: string,
   hooksJsonPath?: string,
   harnessDir = ".codex",
-  release = false,
+  harnessName = "codex",
 ): string {
   // A supplied hooks path is already the Codex trust identity: preserve it
   // exactly. For the default, choose the path implementation from the project
@@ -207,24 +208,20 @@ export function trustEntries(
     const snake = SNAKE[event];
     const idx = counters[snake] ?? 0;
     counters[snake] = idx + 1;
-    const command = release ? releaseAdapterCmd(target) : sourceAdapterCmd(harnessDir, target);
+    const command = adapterCmd(harnessName, target).replace("{{INVOKE}}", "aidlc");
     const hash = trustHash(snake, command);
     state[`${path}:${snake}:${idx}:0`] = { trusted_hash: hash };
   }
   return stringify({ hooks: { state } });
 }
 
-export function emitTrustSeed(harnessDir: string, release = false): string {
-  const recipe = release
-    ? `# This release-channel template hashes the native \`aidlc adapter codex ...\`
+export function emitTrustSeed(
+  harnessDir: string,
+  harnessName = "codex",
+): string {
+  const recipe = `# This template hashes the native \`aidlc adapter ${harnessName} ...\`
 # commands in hooks.json. Start one interactive Codex session and choose
-# "Trust all and continue", or replace <PROJECT_DIR> in the complete entry set
-# below before merging it into $CODEX_HOME/config.toml.
-`
-    : `# From an AI-DLC source checkout, install the pinned serializer first:
-#   bun install --frozen-lockfile
-# Then generate ready-to-paste entries:
-#   bun scripts/package.ts codex trust --project <abs-dir> [--hooks-json <abs-path>]
+# "Trust all and continue" to register the project-specific hook identities.
 `;
   return (
     `# dist/codex hook-trust pre-seed (S9a) — TEMPLATE.\n` +
@@ -236,7 +233,7 @@ export function emitTrustSeed(harnessDir: string, release = false): string {
     `# only the key changes per install. Codex then runs the hooks without a\n` +
     `# TUI trust pass (the --dangerously-bypass-hook-trust flag does NOT fire\n` +
     `# untrusted hooks at 0.137-0.139; never rely on it).\n\n` +
-    trustEntries("<PROJECT_DIR>", undefined, harnessDir, release)
+    trustEntries("<PROJECT_DIR>", undefined, harnessDir, harnessName)
   );
 }
 
@@ -281,7 +278,15 @@ export default function emit(ctx: EmitContext): void {
   // tierCap is the packager's resolved pack-time cap, passed through so the
   // emit-owned TOML projections use the SAME cap as every declarative
   // projection - never re-resolved here.
-  const { coreRoot, harnessRoot, distRoot, harnessDir, substituteToken, tierCap } = ctx;
+  const {
+    coreRoot,
+    harnessRoot,
+    harnessName,
+    distRoot,
+    harnessDir,
+    substituteToken,
+    tierCap,
+  } = ctx;
   const CODEX_ROOT = join(distRoot, harnessDir);
   const SKILLS_DST = join(distRoot, ".agents", "skills");
 
@@ -374,7 +379,10 @@ export default function emit(ctx: EmitContext): void {
   const emissions: Array<{ path: string; content: () => string }> = [];
 
   // codex-only config + wiring + trust + AGENTS.md
-  emissions.push({ path: join(CODEX_ROOT, "hooks.json"), content: () => emitHooksJson(harnessDir) });
+  emissions.push({
+    path: join(CODEX_ROOT, "hooks.json"),
+    content: () => emitHooksJson(substituteToken, harnessName),
+  });
   emissions.push({ path: join(CODEX_ROOT, "config.toml"), content: emitConfigToml });
   emissions.push({
     path: join(CODEX_ROOT, "rules", "default.rules"),
@@ -382,7 +390,7 @@ export default function emit(ctx: EmitContext): void {
   });
   emissions.push({
     path: join(CODEX_ROOT, "trust-seed.toml"),
-    content: () => emitTrustSeed(harnessDir),
+    content: () => emitTrustSeed(harnessDir, harnessName),
   });
   emissions.push({ path: join(distRoot, "AGENTS.md"), content: emitAgentsMd });
 
@@ -395,11 +403,14 @@ export default function emit(ctx: EmitContext): void {
     });
   }
 
-  // (a) authored orchestrator shell — verbatim from harness/codex/skills/aidlc/
+  // (a) authored orchestrator shell with the standard token projection.
   for (const f of ["SKILL.md", "question-rendering.md"]) {
     emissions.push({
       path: join(SKILLS_DST, "aidlc", f),
-      content: () => readFileSync(join(harnessRoot, "skills", "aidlc", f), "utf-8"),
+      content: () =>
+        substituteToken(
+          readFileSync(join(harnessRoot, "skills", "aidlc", f), "utf-8"),
+        ),
     });
   }
   // (b) stage runners + init, generated, with the implicit-invocation guard

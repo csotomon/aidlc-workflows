@@ -695,8 +695,9 @@ function handleScopes(rest: string[]): void {
 }
 
 function scopeRunnerSlugFromBody(body: string): string | null {
-  if (!body.includes("aidlc-orchestrate.ts next --scope")) return null;
-  const m = body.match(/aidlc-orchestrate\.ts\s+next\s+--scope\s+([a-z][a-z0-9-]*)\b/);
+  const m = body.match(
+    /(?:aidlc\s+__delegate\s+orchestrate|aidlc-orchestrate\.ts)\s+next\s+--scope\s+([a-z][a-z0-9-]*)\b/,
+  );
   return m?.[1] ?? null;
 }
 

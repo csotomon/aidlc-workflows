@@ -35,8 +35,7 @@ codex
 This verifies release checksums and needs neither Bun nor Node.js. Init wires
 hooks through `aidlc adapter codex ...` and ships a matching
 `trust-seed.toml`. Choose **Trust all and continue** in the first Codex session,
-or replace `<PROJECT_DIR>` in that template and merge its complete
-`[hooks.state]` set into `$CODEX_HOME/config.toml`. On Windows, run
+which registers the exact native hook identities. On Windows, run
 `install.ps1 -Harness codex`.
 
 ### Manual projection
@@ -61,38 +60,11 @@ Install a matching native `aidlc` binary first, then:
    git-conflict), while per-user cursors and machine-local runtime state stay
    ignored.
 
-3. Trust the project and pre-seed hook trust. Codex never runs untrusted
-   hooks (the `--dangerously-bypass-hook-trust` flag does not run them
-   either). Either run one interactive TUI session and choose "Trust all and
-   continue" at the hooks dialog, or pre-seed deterministically from the
-   AI-DLC source checkout. Install its pinned development dependencies once,
-   then generate the entries:
-
-   ```bash
-   bun install --frozen-lockfile
-   bun scripts/package.ts codex trust --project "/abs/path/to/your project"
-   ```
-
-   The command prints ready-to-paste `[hooks.state]` entries for
-   `$CODEX_HOME/config.toml`
-   (the hash covers the hook identity, not the path — the printed entries are
-   exact for the shipped `hooks.json`). The command serializes the complete
-   output as TOML, so quoted paths, spaces, and Windows backslashes are
-   preserved. If the hook manifest is not at `<project>/.codex/hooks.json`,
-   pass its exact path explicitly:
-
-   ```bash
-   bun scripts/package.ts codex trust \
-     --project "/abs/path/to/your project" \
-     --hooks-json "/abs/custom path/hooks.json"
-   ```
-
-   Quote both arguments in the shell. `--hooks-json` is used verbatim as the
-   Codex trust identity; do not normalize or replace it after generating the
-   entries. Paste the command's complete stdout into the user config. If
-   entries for the same `hooks.json` path already exist, replace that full set;
-   do not append a second copy because duplicate TOML tables invalidate the
-   entire config.
+3. Trust the project. Codex never runs untrusted hooks (the
+   `--dangerously-bypass-hook-trust` flag does not run them either). Start one
+   interactive TUI session and choose **Trust all and continue** at the hooks
+   dialog. The shipped `trust-seed.toml` records the expected native hashes so
+   `aidlc doctor` can detect hook-command drift.
 
 4. Merge the shipped `.codex/config.toml` into your `~/.codex/config.toml`
    (or keep it project-level — trusted projects read it). Verify with:

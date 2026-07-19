@@ -70,7 +70,7 @@ invocation use (e.g., `/aidlc --stage code-generation`).
 four inline design stages (3.1 through 3.4) stage-major: it runs 3.1 for every Unit,
 then 3.2 for every Unit, and so on. When the state file records
 `Construction Iteration: unit-major` under `## Runtime State` (set at
-delivery-planning via `aidlc-state.ts set-construction-iteration unit-major`, or
+delivery-planning via `aidlc __delegate state set-construction-iteration unit-major`, or
 by a human), the engine walks unit-major instead: for each Unit in Bolt build
 order, it authors that Unit's four design documents (3.1 through 3.4)
 consecutively before the next Unit begins. The four per-stage approval gates are

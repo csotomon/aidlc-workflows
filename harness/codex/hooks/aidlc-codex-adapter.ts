@@ -37,7 +37,7 @@
 //   - everything else: advisory; stdout ignored, exit 0.
 //
 // Usage (wired in .codex/hooks.json):
-//   bun .codex/hooks/aidlc-codex-adapter.ts <target>
+//   {{INVOKE}} adapter codex <target>
 // where <target> ∈ session-start | audit-and-sensors | state-sync |
 //                  runtime-compile | validate-state | post-compact |
 //                  log-subagent | stop | mint | reviewer-scope

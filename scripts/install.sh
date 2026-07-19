@@ -75,7 +75,7 @@ fail() {
 }
 
 usage_text() {
-  echo "Usage: install.sh --harness <claude|kiro|kiro-ide|codex> [--harness <name>...] [--version <x.y.z>] [--from <dir>] [--offline] [--profile <startup-file>] [--json|--quiet] [--no-color] [--yes]"
+  echo "Usage: install.sh --harness <name> [--harness <name>...] [--version <x.y.z>] [--from <dir>] [--offline] [--profile <startup-file>] [--json|--quiet] [--no-color] [--yes]"
 }
 
 usage() {
@@ -133,8 +133,22 @@ fi
   fail 3 unavailable "--offline requires --from <release-directory>"
 if [ -z "$FROM" ]; then
   case "$BASE_URL" in
+    *\?*|*\#*) fail 4 failed "release URL must not include credentials, a query, or a fragment" ;;
+  esac
+  release_authority=${BASE_URL#*://}
+  release_authority=${release_authority%%/*}
+  case "$release_authority" in
+    *@*) fail 4 failed "release URL must not include credentials, a query, or a fragment" ;;
+  esac
+  case "$BASE_URL" in
     https://*|http://127.0.0.1:*|http://localhost:*) ;;
     *) fail 4 failed "release URL must use HTTPS" ;;
+  esac
+fi
+if [ -n "$CA_BUNDLE" ]; then
+  case "$CA_BUNDLE" in
+    /*) ;;
+    *) usage "--ca-bundle must be an absolute path" ;;
   esac
 fi
 if [ -n "$PROFILE" ]; then

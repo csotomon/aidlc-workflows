@@ -130,12 +130,12 @@ bun scripts/package.ts --check
 ```
 
 Commit the `core/` edit and the regenerated `dist/` together. When a recipe in
-the chapters below says to run `bun .claude/tools/aidlc-graph.ts compile` (or
-another tool), that command runs against an *installed* tree — your project's
-`.claude/` (or `.kiro/` / `.codex/`) — to recompile the graph at runtime; it is
-not where you author. **You author in `core/`; the tools run in the harness
-directory.** That split — authored source vs. generated runtime — is the one to
-keep straight throughout this guide. For the full build contract see
+the chapters below says to run `aidlc __delegate graph compile` (or another
+tool), the installed native command resolves that tool against the project's
+active harness tree. It is not where you author. **You author in `core/`; the
+native dispatcher runs tools against the installed projection.** That split
+between authored source and generated runtime is the one to keep straight
+throughout this guide. For the full build contract see
 [Porting to a New Harness](09-porting-to-a-new-harness.md) and the Developer
 Reference's [Architecture § Source vs distribution](../reference/01-architecture.md#source-vs-distribution-one-core-many-harnesses).
 

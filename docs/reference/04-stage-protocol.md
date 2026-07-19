@@ -69,7 +69,7 @@ Before and during every stage, verify these commonly missed steps:
 
 State transitions and audit emissions are tool-owned rather than
 hand-written audit blocks. The conductor reports forward progress through
-`aidlc-orchestrate.ts report --stage <slug>`; the engine delegates to the
+`aidlc __delegate orchestrate report --stage <slug>`; the engine delegates to the
 state tool, which atomically updates state and emits the paired audit event
 with a fresh timestamp.
 
@@ -77,10 +77,10 @@ with a fresh timestamp.
 |---|-------|
 | 1 | At the approval gate, optionally call `aidlc __delegate state gate-start <slug>` (positional slug, not `--stage`) -- the tool flips state from `[-]` to `[?]` AwaitingApproval and emits `STAGE_AWAITING_APPROVAL` atomically, so status shows the held gate while the prompt is open. If skipped, the engine's `report` / `reject` paths backfill the missing `STAGE_AWAITING_APPROVAL` row (tagged `Recovered=true`) before recording the outcome. (`STAGE_STARTED` / the `[-]` transition is emitted earlier by `advance` / `approve` when the stage becomes active.) |
 | 2 | Log options BEFORE calling `AskUserQuestion` via `aidlc __delegate log decision` (not by hand-writing to the `audit/` shards) |
-| 3 | After the user responds, log the exact choice via `aidlc __delegate log answer`, then use `aidlc-orchestrate.ts report --stage <slug> --result approved` for approval or `aidlc-state.ts reject <slug>` for request-changes. If the approval UI first captures only the "Request Changes" choice, ask once for revision feedback and then call `reject` immediately before any revision work or re-presented gate |
+| 3 | After the user responds, log the exact choice via `aidlc __delegate log answer`, then use `aidlc __delegate orchestrate report --stage <slug> --result approved` for approval or `aidlc __delegate state reject <slug>` for request-changes. If the approval UI first captures only the "Request Changes" choice, ask once for revision feedback and then call `reject` immediately before any revision work or re-presented gate |
 | 4 | Never summarize user input -- pass exact option labels to the log tool; for automated stages use `N/A -- [reason]` |
 | 5 | One audit entry per interaction -- the log/state tools enforce single-event emission; never merge multiple events into one call |
-| 6 | At stage end, call `aidlc-orchestrate.ts report --stage <slug> --result approved` (gated stages) or `report --stage <slug> --result completed` (Initialization). The engine flips `[?]`/`[-]` to `[x]`, emits `GATE_APPROVED` when gated, and emits `STAGE_COMPLETED` atomically through the state tool |
+| 6 | At stage end, call `aidlc __delegate orchestrate report --stage <slug> --result approved` (gated stages) or `aidlc __delegate orchestrate report --stage <slug> --result completed` (Initialization). The engine flips `[?]`/`[-]` to `[x]`, emits `GATE_APPROVED` when gated, and emits `STAGE_COMPLETED` atomically through the state route |
 | 7 | Mark previous stage task `completed` and current stage task `in_progress` with `activeForm` BEFORE work begins (the `sync-statusline` hook handles state syncing) |
 | 8 | Use ONLY event types from `knowledge/aidlc-shared/audit-format.md` -- the state and log tools enforce this; never write directly to the `audit/` shards |
 | 9 | Do NOT hand-write `STAGE_STARTED` / `STAGE_COMPLETED` blocks to the `audit/` shards. The state-tool subcommands emit them. Hand-written blocks break atomicity and miss the timestamp guarantee |
@@ -922,14 +922,14 @@ approval gate:
 
 1. **Diary**: the agent maintains a per-stage `memory.md` (Interpretations /
    Deviations / Tradeoffs / Open questions) as it works.
-2. **Surface**: `aidlc-learnings.ts surface --slug <slug>` reads the diary and
+2. **Surface**: `aidlc __delegate learnings surface --slug <slug>` reads the diary and
    emits structured candidates — the LLM does not re-parse or classify.
 3. **Confirm**: the conductor renders the candidates; the user picks which to
    keep and, for free-text additions, picks the heading that derives the
    destination.
 4. **Admission check**: each kept learning is checked against `org.md`'s
    matching section; a contradiction is surfaced to revise / skip / escalate.
-5. **Persist**: `aidlc-learnings.ts persist` writes each confirmed learning as a practice to
+5. **Persist**: `aidlc __delegate learnings persist` writes each confirmed learning as a practice to
    `aidlc/spaces/<space>/memory/{project,team}.md` (and, for a sensor-binding
    learning, installs the manifest + stage `sensors:` import in one locked
    transaction), emitting `RULE_LEARNED` / `SENSOR_PROPOSED`.

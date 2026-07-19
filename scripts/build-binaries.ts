@@ -78,7 +78,12 @@ const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const DEFAULT_ENTRY = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc.ts");
 const DEFAULT_OUT_DIR = join(REPO_ROOT, "build", "binaries");
 const RUNTIME_ASSET_ROOT = join(REPO_ROOT, "dist-release", "claude", ".claude");
-const RUNTIME_DISTRIBUTIONS = ["claude", "codex", "kiro", "kiro-ide"] as const;
+const RUNTIME_DISTRIBUTIONS = readdirSync(join(REPO_ROOT, "dist-release"), {
+  withFileTypes: true,
+})
+  .filter((entry) => entry.isDirectory())
+  .map((entry) => entry.name)
+  .sort();
 const MIN_CROSS_BYTES = 10 * 1024 * 1024;
 const DEV_SPAWN_MARKER = "/* dev-mode bun spawn */";
 
@@ -1449,7 +1454,7 @@ function runtimeAssetsGate(artifact: string): GateResult {
     expected: assets.length,
     actual: assets.length - missing.length,
     detail: missing.length === 0
-      ? "complete claude, codex, kiro, and kiro-ide distributions staged"
+      ? `complete ${RUNTIME_DISTRIBUTIONS.join(", ")} distributions staged`
       : `missing destinations: ${missing.join(", ")}`,
   };
 }

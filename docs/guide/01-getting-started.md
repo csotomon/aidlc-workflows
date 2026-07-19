@@ -145,7 +145,7 @@ aidlc init --mcp none
 aidlc doctor
 ```
 
-Use `--harness kiro`, `kiro-ide`, or `codex` for another distribution.
+Use `--harness kiro`, `kiro-ide`, `codex`, or `opencode` for another distribution.
 `aidlc init --dry-run` previews project changes, and
 `install.sh --from <release-directory> --offline --harness <name>` installs an
 air-gapped package. Pass `--profile "$HOME/.profile"` only when the installer

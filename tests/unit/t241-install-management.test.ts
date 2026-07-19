@@ -876,4 +876,20 @@ describe("t241 Windows and completion release surfaces", () => {
       expect.objectContaining({ name: "install.ps1", kind: "installer" }),
     );
   });
+
+  test("release workflow lints installers and publishes the tested candidate", () => {
+    const workflow = readFileSync(
+      join(REPO_ROOT, ".github", "workflows", "release.yml"),
+      "utf-8",
+    );
+    expect(workflow).toContain("shellcheck scripts/install.sh");
+    expect(workflow).toContain("Invoke-ScriptAnalyzer -Path scripts/install.ps1");
+    expect(workflow).toContain("unix-lifecycle:");
+    expect(workflow).toContain("Exercise the interactive harness picker through a PTY");
+    expect(workflow).toContain("name: release-candidate");
+    const publish = workflow.slice(workflow.indexOf("  publish:"));
+    expect(publish).toContain("name: release-candidate");
+    expect(publish).not.toContain("scripts/package-release.ts");
+    expect(publish).not.toContain("pattern: binary-*");
+  });
 });

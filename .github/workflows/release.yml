@@ -32,12 +32,14 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun run check
       - run: bash tests/run-tests.sh --ci --parallel 8
+      - name: ShellCheck installer
+        run: shellcheck scripts/install.sh
 
   native-smoke:
     needs: verify
     strategy:
       matrix:
-        runner: [ubuntu-latest, ubuntu-24.04-arm, macos-13, macos-14, windows-latest]
+        runner: [ubuntu-latest, ubuntu-24.04-arm, macos-15-intel, macos-15, windows-latest]
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
@@ -50,6 +52,16 @@ jobs:
       - run: bun test tests/unit/t238-build-binaries.test.ts
       - if: runner.os == 'Windows'
         run: bun test tests/unit/t241-install-management.test.ts -t "t241 Windows and completion release surfaces"
+      - name: PSScriptAnalyzer installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Install-Module PSScriptAnalyzer -Scope CurrentUser -Force
+          $findings = @(Invoke-ScriptAnalyzer -Path scripts/install.ps1)
+          if ($findings.Count -gt 0) {
+            $findings | Format-Table -AutoSize | Out-String | Write-Error
+            exit 1
+          }
 
   build:
     needs: native-smoke
@@ -64,9 +76,9 @@ jobs:
             target: bun-linux-arm64
           - runner: ubuntu-24.04-arm
             target: bun-linux-arm64-musl
-          - runner: macos-13
+          - runner: macos-15-intel
             target: bun-darwin-x64
-          - runner: macos-14
+          - runner: macos-15
             target: bun-darwin-arm64
           - runner: windows-latest
             target: bun-windows-x64
@@ -211,29 +223,91 @@ jobs:
           if (Test-Path -LiteralPath $command) { throw 'aidlc.cmd survived uninstall' }
           if (Test-Path -LiteralPath $env:AIDLC_INSTALL_ROOT) { throw 'install root survived purge uninstall' }
 
-  publish:
-    needs: [build, musl-smoke, windows-lifecycle]
-    runs-on: ubuntu-latest
+  unix-lifecycle:
+    needs: stage-release
+    strategy:
+      matrix:
+        runner: [ubuntu-latest, ubuntu-24.04-arm, macos-15-intel, macos-15]
+    runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: 1.3.14
-      - run: bun install --frozen-lockfile
       - uses: actions/download-artifact@v4
         with:
-          pattern: binary-*
-          path: build/binaries
-          merge-multiple: true
-      - run: test "$RELEASE_TAG" = "v$(bun -e 'import { AIDLC_VERSION } from "./core/tools/aidlc-version.ts"; process.stdout.write(AIDLC_VERSION)')"
+          name: release-candidate
+          path: build/release
+      - name: Consume the release candidate online and offline
+        shell: bash
+        run: |
+          set -euo pipefail
+          release="$PWD/build/release"
+          server_root="$RUNNER_TEMP/aidlc-release-server"
+          mkdir -p "$server_root/latest/download"
+          cp -R "$release/." "$server_root/latest/download/"
+          python3 -m http.server 18765 --bind 127.0.0.1 --directory "$server_root" \
+            >"$RUNNER_TEMP/aidlc-release-server.log" 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+          for _ in {1..50}; do
+            curl -fsS "http://127.0.0.1:18765/latest/download/version.json" >/dev/null && break
+            sleep 0.1
+          done
+
+          export AIDLC_INSTALL_ROOT="$RUNNER_TEMP/aidlc-online"
+          export AIDLC_BIN_DIR="$RUNNER_TEMP/aidlc-online-bin"
+          sh "$release/install.sh" \
+            --release-base-url "http://127.0.0.1:18765" \
+            --harness claude --quiet
+          online="$AIDLC_BIN_DIR/aidlc"
+          env PATH="/usr/bin:/bin" "$online" version
+          online_project="$RUNNER_TEMP/aidlc-online-project"
+          mkdir -p "$online_project"
+          env PATH="/usr/bin:/bin" "$online" init \
+            --project-dir "$online_project" --mcp none --quiet
+          env PATH="/usr/bin:/bin" "$online" doctor \
+            --project-dir "$online_project" --quiet
+
+          export AIDLC_INSTALL_ROOT="$RUNNER_TEMP/aidlc-offline"
+          export AIDLC_BIN_DIR="$RUNNER_TEMP/aidlc-offline-bin"
+          sh "$release/install.sh" --from "$release" --offline \
+            --harness opencode --quiet
+          offline="$AIDLC_BIN_DIR/aidlc"
+          env PATH="/usr/bin:/bin" "$offline" version
+          env PATH="/usr/bin:/bin" "$offline" harness list --json |
+            grep -q '"opencode"'
+      - name: Exercise the interactive harness picker through a PTY
+        shell: bash
+        run: |
+          set -euo pipefail
+          release="$PWD/build/release"
+          export AIDLC_INSTALL_ROOT="$RUNNER_TEMP/aidlc-picker"
+          export AIDLC_BIN_DIR="$RUNNER_TEMP/aidlc-picker-bin"
+          transcript="$RUNNER_TEMP/aidlc-picker.log"
+          if [[ "$(uname -s)" == "Darwin" ]]; then
+            printf '1\n' | script -q "$transcript" \
+              sh "$release/install.sh" --from "$release" --offline
+          else
+            printf '1\n' | script -qec \
+              "sh '$release/install.sh' --from '$release' --offline" \
+              "$transcript"
+          fi
+          grep -q "Select the harness distribution to install:" "$transcript"
+          grep -q "Harness \\[1-" "$transcript"
+          "$AIDLC_BIN_DIR/aidlc" harness list --json | grep -q '"claude"'
+
+  publish:
+    needs: [musl-smoke, windows-lifecycle, unix-lifecycle]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-candidate
+          path: build/release
+      - run: test "$RELEASE_TAG" = "v$(jq -r .version build/release/version.json)"
         env:
           RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
-      - run: bun scripts/package-release.ts --require-release-matrix
       - run: gh release create "$RELEASE_TAG" build/release/* --verify-tag --generate-notes ${{ inputs.draft && '--draft' || '' }}
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
       - uses: actions/attest-build-provenance@v2
         with:

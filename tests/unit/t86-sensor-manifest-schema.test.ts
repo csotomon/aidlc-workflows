@@ -143,9 +143,9 @@ describe("t86 sensor manifest schema (migrated from t86-sensor-manifest-schema.s
       expect(obj.id).toBe(name);
       // .sh check 2: kind == deterministic (sole v0.5.0 enum value).
       expect(obj.kind).toBe("deterministic");
-      // .sh check 3: command points at the per-sensor script (canonical
-      // execution shape). Exact literal, same as the .sh's expected_command.
-      expect(obj.command).toBe(`bun .claude/tools/aidlc-sensor-${name}.ts`);
+      // .sh check 3: command points at the per-sensor native delegate
+      // (canonical execution shape).
+      expect(obj.command).toBe(`aidlc __delegate sensor-${name}`);
       // .sh check 4: applies_to ABSENT from the frontmatter bytes (pull
       // authoring removed it; scope lives on the stage side via stage.sensors[]).
       expect(

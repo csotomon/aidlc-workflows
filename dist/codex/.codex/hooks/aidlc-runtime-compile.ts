@@ -20,9 +20,9 @@
 // matcher set, AND MEMORY_EMPTY is not in the event-class regex. The
 // compile's own audit emits cannot re-trigger the compile.
 
-import { spawnSync } from "node:child_process";
 import { mkdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { compileRuntime } from "../tools/aidlc-runtime.ts";
 import {
   activeIntent,
   activeSpace,
@@ -38,7 +38,6 @@ import {
   recordHookDrop,
   resolveProjectDirFromHook,
   runtimeGraphPath,
-  harnessDir,
 } from "../tools/aidlc-lib.ts";
 
 export async function run(input: string): Promise<number> {
@@ -171,24 +170,10 @@ if (ideAuditMode) {
   }
 }
 
-// 8. Dispatch — sync subprocess. Hook waits for completion. On non-zero
-//    exit, record the drop for `--doctor` to surface; never block the
-//    parent Bash call (mirrors aidlc-audit-logger.ts:95-101).
-const runtimeTs = join(projectDir, harnessDir(), "tools", "aidlc-runtime.ts");
+// 8. Dispatch in-process. On failure, record the drop for `--doctor` to
+//    surface; never block the parent Bash call.
 try {
-  const args = ["run", runtimeTs, "compile"];
-  const result = spawnSync("bun", args, {
-    cwd: projectDir,
-    timeout: 30_000,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  if (result.status !== 0) {
-    recordHookDrop(
-      projectDir,
-      "runtime-compile",
-      `exit ${result.status}: ${result.stderr?.toString() ?? ""}`
-    );
-  }
+  compileRuntime(projectDir);
 } catch (e) {
   recordHookDrop(projectDir, "runtime-compile", errorMessage(e));
 }

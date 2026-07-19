@@ -1,6 +1,6 @@
 // Status line: Display aidlc workflow position in the terminal status area
 // Registered via statusLine setting in settings.json
-// Invoked via: bun $CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-statusline.ts
+// Invoked via: {{INVOKE}} statusline
 import { existsSync, readFileSync } from "node:fs";
 import {
   activeIntent,

@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "distribution": "opencode",
+  "productName": "opencode",
+  "initNextStep": "run `opencode`, then `/aidlc --doctor`",
+  "harnessDir": ".aidlc",
+  "managedDirectories": [
+    ".aidlc",
+    ".opencode",
+    "aidlc"
+  ],
+  "rootIntegrations": [
+    {
+      "path": ".gitignore",
+      "policy": "managed-block",
+      "marker": "gitignore"
+    },
+    {
+      "path": "AGENTS.md",
+      "policy": "managed-block",
+      "marker": "agents"
+    },
+    {
+      "path": "opencode.json",
+      "policy": "whole-file"
+    }
+  ]
+}

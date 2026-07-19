@@ -158,7 +158,7 @@ Mirroring the reference recipe, here is the workflow end to end.
    methodology the persona should load on activation.
 3. **Wire it into stages** — add the slug to the `lead_agent` /
    `support_agents` frontmatter of each stage file (`core/aidlc-common/stages/<phase>/<slug>.md`)
-   where it leads or supports, then recompile (`bun .claude/tools/aidlc-graph.ts compile`)
+   where it leads or supports, then recompile (`aidlc __delegate graph compile`)
    so `stage-graph.json` regenerates. Never hand-edit `stage-graph.json` — it is
    a build artifact, and the next compile overwrites a manual change (see
    [Adding a Stage](02-adding-a-stage.md#4-compile-so-stage-graphjson-regenerates)).

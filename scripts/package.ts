@@ -9,8 +9,9 @@
 // PIPELINE PER HARNESS (per the engine design, generalized from the proven S4 prototype and
 // the package-codex.ts engine):
 //   1. COPY core/<src> → dist/<name>/<harnessDir>/<dst>, substituting
-//      {{HARNESS_DIR}} → harnessDir in .md prose (the ONE transform class) and
-//      applying the manifest's rules-dir rename.
+//      {{HARNESS_DIR}} → harnessDir and {{INVOKE}} → the channel invocation
+//      across authored text surfaces, then applying the manifest's rules-dir
+//      rename to prose.
 //   2. COPY harness/<name>/<src> → dist/<name>/<harnessDir>/<dst> (authored
 //      surfaces: orchestrator skill, CLAUDE.md/AGENTS.md, settings/config), same
 //      token substitution on .md.
@@ -22,11 +23,10 @@
 //   5. EMIT via harness/<name>/emit.ts if the manifest declares one (codex only
 //      today: config.toml, hooks.json, trust-seed, agent TOMLs, .agents/skills).
 //
-// THE TRANSFORM CLASS (T5 — the only permitted text transform): the harness-dir
-// token. core/ prose carries {{HARNESS_DIR}}; here it becomes `.claude`/`.kiro`/
-// `.codex`. Truthful carve-outs in core (workspace-detection's 3-dir list, the
-// `$CLAUDE_PROJECT_DIR on Claude Code` note) never carried the token, so they
-// pass through untouched.
+// THE TRANSFORM CLASS: authored token substitution. Core and harness surfaces
+// carry {{HARNESS_DIR}} and {{INVOKE}}; the packager resolves both without
+// rewriting methodology after projection. Host trust files are the only
+// explicit per-channel additions.
 //
 // --check is the freshness-diff idiom (aidlc-graph.ts compile --check): build
 // each tree into a temp dir, diff byte-for-byte against the committed dist/,
@@ -98,6 +98,7 @@ if (TIER_CAP) {
 const ONBOARDING_SKELETON = join(CORE_ROOT, "templates", "onboarding.md");
 const HARNESS_TOKEN = /\{\{HARNESS_DIR\}\}/g;
 const INVOKE_TOKEN = /\{\{INVOKE\}\}/g;
+const TEXT_PROJECTION_FILE = /\.(?:md|ts|json|toml|hook)$/;
 
 // Harnesses the packager builds = every harness/<name>/ that carries a
 // manifest.ts. DISCOVERED, not hardcoded: adding harness #N is one harness/<n>/
@@ -115,7 +116,7 @@ function discoverHarnessNames(): string[] {
 // Transform: the ONE class. Token substitution on authored prose and the
 // TypeScript invocation seam; compiled JSON is regenerated per tree.
 // ---------------------------------------------------------------------------
-function substituteToken(s: string, harnessDir: string, invoke = `bun ${harnessDir}/tools/aidlc.ts`): string {
+function substituteToken(s: string, harnessDir: string, invoke = "aidlc"): string {
   return s.replace(HARNESS_TOKEN, harnessDir).replace(INVOKE_TOKEN, invoke);
 }
 
@@ -242,21 +243,17 @@ function transform(
   harnessDir: string,
   rulesRename: string | null,
   harness?: "claude" | "codex" | "kiro" | "opencode",
-  invoke = `bun ${harnessDir}/tools/aidlc.ts`,
+  invoke = "aidlc",
 ): Buffer {
-  if (srcPath.endsWith(".md")) {
+  if (TEXT_PROJECTION_FILE.test(srcPath)) {
     let s = substituteToken(content.toString("utf-8"), harnessDir, invoke);
-    s = applyRulesRename(s, harnessDir, rulesRename);
-    if (harness) {
+    if (srcPath.endsWith(".md")) {
+      s = applyRulesRename(s, harnessDir, rulesRename);
+    }
+    if (harness && srcPath.endsWith(".md")) {
       s = projectTierFrontmatter(s, srcPath, harness);
     }
     return Buffer.from(s, "utf-8");
-  }
-  if (srcPath.endsWith(".ts")) {
-    return Buffer.from(
-      content.toString("utf-8").replace(INVOKE_TOKEN, invoke),
-      "utf-8",
-    );
   }
   return content;
 }
@@ -541,7 +538,7 @@ function buildTree(
   m: HarnessManifest,
   outRoot: string,
   seedFrom: string,
-  invoke = `bun ${m.harnessDir}/tools/aidlc.ts`,
+  invoke = "aidlc",
 ): string[] {
   const harnessDir = m.harnessDir;
   const treeRoot = join(outRoot, harnessDir);
@@ -715,6 +712,7 @@ function buildTree(
       repoRoot: REPO_ROOT,
       coreRoot: CORE_ROOT,
       harnessRoot: harnessSrcRoot,
+      harnessName: m.name,
       distRoot: outRoot,
       harnessDir,
       substituteToken: (s: string) => substituteToken(s, harnessDir, invoke),
@@ -723,82 +721,6 @@ function buildTree(
   }
   writeProjectionData(outRoot, treeRoot, m);
   return [...walk(outRoot)];
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function rewriteKiroNativeAllowlists(outRoot: string, m: HarnessManifest): void {
-  if (m.tierFlavor !== "kiro") return;
-  const agentsDir = join(outRoot, m.harnessDir, "agents");
-  for (const file of walk(agentsDir)) {
-    if (!file.endsWith(".json")) continue;
-    const value = JSON.parse(readFileSync(file, "utf-8")) as {
-      toolsSettings?: {
-        execute_bash?: {
-          allowedCommands?: unknown;
-        };
-      };
-    };
-    const allowed = value.toolsSettings?.execute_bash?.allowedCommands;
-    if (!Array.isArray(allowed)) continue;
-    const rewritten = allowed.map((command) =>
-      typeof command === "string" &&
-        command.startsWith("bun ") &&
-        command.includes(`${m.harnessDir.replace(".", "\\.")}/tools/`)
-        ? "aidlc .*"
-        : command
-    );
-    value.toolsSettings!.execute_bash!.allowedCommands = [...new Set(rewritten)];
-    writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
-  }
-}
-
-function rewriteClaudeNativePermissions(outRoot: string, m: HarnessManifest): void {
-  if (m.tierFlavor !== "claude") return;
-  const settingsPath = join(outRoot, m.harnessDir, "settings.json");
-  const value = JSON.parse(readFileSync(settingsPath, "utf-8")) as {
-    permissions?: { allow?: unknown };
-  };
-  const allow = value.permissions?.allow;
-  if (!Array.isArray(allow)) throw new Error("[claude] settings.json has no permissions.allow list");
-  value.permissions!.allow = [
-    ...allow.filter((entry) =>
-      entry !== "Bash" &&
-      !(typeof entry === "string" && entry.startsWith("Bash(bun "))
-    ),
-    "Bash(aidlc *)",
-  ];
-  writeFileSync(settingsPath, `${JSON.stringify(value, null, 2)}\n`);
-}
-
-function rewriteNativeOnboarding(value: string): string {
-  return value
-    .replace(
-      /^- \*\*bun\*\*:.*$/gm,
-      "- **Runtime**: Native installs use the self-contained `aidlc` binary; Bun is not required.",
-    )
-    .replace(
-      /^- \*\*Hook permissions\*\*:.*$/gm,
-      "- **Hook permissions**: Framework hooks run through the self-contained `aidlc` binary. No separate script runtime or executable bits are required.",
-    )
-    .replace(
-      /TypeScript, run via bun/g,
-      "TypeScript sources invoked through the self-contained `aidlc` runtime",
-    )
-    .replace(
-      /pre-approves ONLY `bun \.kiro\/tools\/\*` shell commands/g,
-      "pre-approves only `aidlc` shell commands",
-    )
-    .replace(
-      /pre-allows the deterministic core's exact command prefixes — `bun \.codex\/tools\/`, `bun \.codex\/hooks\/`, and/g,
-      "pre-allows the deterministic core's `aidlc` command prefix and",
-    )
-    .replace(
-      /^\*\*CWD drift warning\*\*: If a stage runs `cd` in Bash.*$/gm,
-      "**CWD drift warning**: Native release commands resolve `aidlc` from `PATH`, so changing directories does not change the engine path. Keep project-relative file arguments anchored to the project root, or run `cd` commands in subshells: `(cd subdir && npm install)`.",
-    );
 }
 
 function projectNativeRootIntegrations(outRoot: string, m: HarnessManifest): void {
@@ -826,124 +748,50 @@ function projectNativeRootIntegrations(outRoot: string, m: HarnessManifest): voi
   writeFileSync(descriptorPath, `${JSON.stringify(descriptor, null, 2)}\n`);
 }
 
-function rewriteNativeInvocations(outRoot: string, m: HarnessManifest): void {
+function validateInvocationProjection(outRoot: string, m: HarnessManifest): void {
   projectNativeRootIntegrations(outRoot, m);
-  const harnessDir = escapeRegExp(m.harnessDir);
-  const delegateNames = [
-    "audit",
-    "bolt",
-    "graph",
-    "init",
-    "jump",
-    "learnings",
-    "lifecycle",
-    "log",
-    "orchestrate",
-    "runner-gen",
-    "runtime",
-    "sensor",
-    "sensor-linter",
-    "sensor-required-sections",
-    "sensor-type-check",
-    "sensor-upstream-coverage",
-    "state",
-    "swarm",
-    "utility",
-    "validate",
-    "worktree",
-  ].join("|");
-  const projectPrefix = String.raw`(?:"?(?:\$\{?CLAUDE_PROJECT_DIR\}?/)?`;
-  const suffix = `"?)`;
-  const toolPattern = new RegExp(
-    String.raw`\bbun\s+${projectPrefix}${harnessDir}/tools/aidlc(?:-([a-z0-9-]+))?\.ts${suffix}`,
-    "gi",
+  const harnessDir = m.harnessDir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const rawFrameworkInvocation = new RegExp(
+    String.raw`\bbun[ \t]+(?:"?(?:\$\{?[A-Z_]+\}?/)?${harnessDir}/(?:tools|hooks)/aidlc)`,
+    "i",
   );
-  const hookPattern = new RegExp(
-    String.raw`\bbun\s+${projectPrefix}${harnessDir}/hooks/aidlc-([a-z0-9-]+)\.ts${suffix}`,
-    "gi",
-  );
-  const bareToolPattern = new RegExp(
-    String.raw`\bbun\s+aidlc-(${delegateNames})\.ts`,
-    "gi",
-  );
-  const bareToolCheck = new RegExp(bareToolPattern.source, "i");
-  for (const file of walk(outRoot)) {
-    if (!/\.(?:md|json|toml|hook|ts)$/.test(file)) continue;
-    let value = readFileSync(file, "utf-8");
-    const escapedJsonHook = new RegExp(
-      String.raw`\bbun\s+\\"\$CLAUDE_PROJECT_DIR/${harnessDir}/hooks/aidlc-([a-z0-9-]+)\.ts\\"`,
-      "gi",
-    );
-    value = value.replace(escapedJsonHook, (_match, hook: string) =>
-      hook === "statusline" ? "aidlc statusline" : `aidlc hook ${hook}`
-    );
-    value = value.replace(toolPattern, (_match, delegate: string | undefined) =>
-      delegate ? `aidlc __delegate ${delegate}` : "aidlc"
-    );
-    value = value.replace(
-      bareToolPattern,
-      (_match, delegate: string) => `aidlc __delegate ${delegate}`,
-    );
-    value = value.replace(hookPattern, (_match, hook: string) => {
-      if (hook === "kiro-adapter" || hook === "codex-adapter") {
-        return `aidlc adapter ${m.name}`;
-      }
-      if (hook === "statusline") return "aidlc statusline";
-      return `aidlc hook ${hook}`;
-    });
-    value = value.replaceAll(
-      `"bun \\\\${m.harnessDir}/tools/.*"`,
-      `"aidlc .*"`,
-    );
-    value = value.replaceAll(
-      `"bun \\\\$\\\\{?KIRO_PROJECT_DIR\\\\}?/${m.harnessDir}/tools/.*"`,
-      `"aidlc .*"`,
-    );
-    value = value.replace(INVOKE_TOKEN, "aidlc");
-    value = rewriteNativeOnboarding(value);
-    writeFileSync(file, value);
-  }
-  rewriteKiroNativeAllowlists(outRoot, m);
-  rewriteClaudeNativePermissions(outRoot, m);
-  if (m.tierFlavor === "codex") {
-    const { emitDefaultRules, emitTrustSeed } = require(
-      join(HARNESS_ROOT, m.name, "emit.ts"),
-    ) as {
-      emitDefaultRules: (harnessDir: string, release?: boolean) => string;
-      emitTrustSeed: (harnessDir: string, release?: boolean) => string;
-    };
-    writeFileSync(
-      join(outRoot, m.harnessDir, "rules", "default.rules"),
-      emitDefaultRules(m.harnessDir, true),
-    );
-    writeFileSync(
-      join(outRoot, m.harnessDir, "trust-seed.toml"),
-      emitTrustSeed(m.harnessDir, true),
-    );
-  }
-
   const leftovers: string[] = [];
   for (const file of walk(outRoot)) {
-    if (!/\.(?:md|json|toml|hook|ts)$/.test(file)) continue;
+    if (!TEXT_PROJECTION_FILE.test(file)) continue;
     const value = readFileSync(file, "utf-8");
     if (value.includes("{{INVOKE}}")) {
       leftovers.push(`${relative(outRoot, file)}: unexpanded {{INVOKE}}`);
     }
-    if (new RegExp(String.raw`\bbun\s+[^\n]*${harnessDir}/(?:tools|hooks)/aidlc`).test(value)) {
+    if (value.includes("{{SKILL_INVOKE}}")) {
+      leftovers.push(`${relative(outRoot, file)}: unexpanded {{SKILL_INVOKE}}`);
+    }
+    if (rawFrameworkInvocation.test(value)) {
       leftovers.push(`${relative(outRoot, file)}: bun invocation survived native projection`);
-    }
-    if (bareToolCheck.test(value)) {
-      leftovers.push(`${relative(outRoot, file)}: bare bun invocation survived native projection`);
-    }
-    if (
-      relative(outRoot, file).split(sep).join("/").includes("/agents/") &&
-      /"allowedCommands"\s*:\s*\[[\s\S]*?"bun [^"]*tools\//.test(value)
-    ) {
-      leftovers.push(`${relative(outRoot, file)}: bun allowlist survived native projection`);
     }
   }
   if (leftovers.length > 0) {
     throw new Error(`[${m.name}] native invocation projection failed:\n${leftovers.join("\n")}`);
+  }
+}
+
+function assertAuthoredInvocationTokens(): void {
+  const leftovers: string[] = [];
+  for (const root of [CORE_ROOT, HARNESS_ROOT]) {
+    for (const file of walk(root)) {
+      if (!TEXT_PROJECTION_FILE.test(file)) continue;
+      const value = readFileSync(file, "utf-8");
+      if (
+        /\bbun\s+[^\n]*(?:\{\{HARNESS_DIR\}\}|\.(?:claude|kiro|codex|aidlc))\/(?:tools|hooks)\/aidlc/i.test(value) ||
+        /\bbun\s+aidlc-[a-z0-9-]+\.ts/i.test(value)
+      ) {
+        leftovers.push(relative(REPO_ROOT, file));
+      }
+    }
+  }
+  if (leftovers.length > 0) {
+    throw new Error(
+      `authored framework invocations must use {{INVOKE}}:\n${[...new Set(leftovers)].join("\n")}`,
+    );
   }
 }
 
@@ -1032,7 +880,7 @@ function writeHarness(name: string): void {
     // outside this harness-owned boundary.
     if (existsSync(distDir)) rmSync(distDir, { recursive: true, force: true });
     buildTree(m, distDir, seedStash, "aidlc");
-    rewriteNativeInvocations(distDir, m);
+    validateInvocationProjection(distDir, m);
     console.log(`[${name}] regenerated dist/${name}/${m.harnessDir}`);
   } finally {
     rmSync(seedStash, { recursive: true, force: true });
@@ -1051,7 +899,7 @@ function checkHarness(name: string): string[] {
   try {
     // Seed compile from the committed tree (untouched under --check).
     buildTree(m, tmp, committedTreeRoot, "aidlc");
-    rewriteNativeInvocations(tmp, m);
+    validateInvocationProjection(tmp, m);
     // The whole harness distribution is generated, not just <harnessDir>.
     // Diffing its root makes every generated file part of the same
     // bidirectional contract: missing/modified root onboarding and config are
@@ -1070,7 +918,7 @@ function writeReleaseHarness(name: string): void {
   const seedFrom = join(REPO_ROOT, "dist", name, m.harnessDir);
   if (existsSync(releaseDir)) rmSync(releaseDir, { recursive: true, force: true });
   buildTree(m, releaseDir, seedFrom, "aidlc");
-  rewriteNativeInvocations(releaseDir, m);
+  validateInvocationProjection(releaseDir, m);
   console.log(`[${name}] regenerated dist-release/${name}/${m.harnessDir}`);
 }
 
@@ -1081,7 +929,7 @@ function checkReleaseHarness(name: string): string[] {
   const tmp = mkdtempSync(join(tmpdir(), `aidlc-release-${name}-`));
   try {
     buildTree(m, tmp, seedFrom, "aidlc");
-    rewriteNativeInvocations(tmp, m);
+    validateInvocationProjection(tmp, m);
     const problems = diffTrees(tmp, committed, `dist-release/${name}`);
     console.log(
       `[${name}] release --check: ${problems.length === 0 ? "OK" : `${problems.length} problem(s)`}`,
@@ -1457,6 +1305,8 @@ if (named && !existsSync(join(HARNESS_ROOT, named, "manifest.ts"))) {
   );
   process.exit(1);
 }
+
+assertAuthoredInvocationTokens();
 
 if (check) {
   let problems: string[] = [];

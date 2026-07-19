@@ -29,8 +29,8 @@ script (top-level dispatch, `process.exit`) crashes the session
   (`tool.execute.before`, `tool.execute.after`, `chat.message`, `session.idle`,
   `experimental.session.compacting`) and project-local skill/agent discovery.
   Check with `opencode --version`.
-- **bun** — same requirement as every harness; every tool and hook runs via
-  bun. The adapter plugin resolves bun from `PATH`, then `~/.bun/bin/bun`.
+- The self-contained **`aidlc` command** installed below. Tools and hooks route
+  through that binary; Bun and Node.js are not runtime prerequisites.
 - **A model provider** — the shipped project `opencode.json` pins no session
   model; your global opencode config supplies it. Tiered personas pin
   `amazon-bedrock/global.anthropic.claude-sonnet-4-6` — override per agent in
@@ -38,29 +38,31 @@ script (top-level dispatch, `process.exit`) crashes the session
 
 ## Install
 
-1. Copy the distribution into your project:
+1. Install AI-DLC and initialize the project:
 
    ```bash
-   cp -r dist/opencode/.aidlc/    your-project/.aidlc/
-   cp -r dist/opencode/.opencode/ your-project/.opencode/
-   cp -r dist/opencode/aidlc/     your-project/aidlc/      # the workspace shell — a sibling of .aidlc/, not inside it
-   cp dist/opencode/opencode.json your-project/opencode.json  # or merge into yours
-   cp dist/opencode/AGENTS.md     your-project/AGENTS.md      # or merge into yours
+   curl -fsSL https://github.com/awslabs/aidlc-workflows/releases/latest/download/install.sh \
+     | sh -s -- --harness opencode
+   cd your-project
+   aidlc init
    ```
 
    `opencode.json` carries three load-bearing blocks: `skills.paths` (skill
    discovery from `.aidlc/skills`), `instructions` (the method-tree include —
    `/aidlc space <name>` re-points it), and permission rules for AIDLC bash
-   entrypoints plus edits under `.aidlc/tools/` and `.aidlc/hooks/`. If you
-   merge into an existing `opencode.json` or `opencode.jsonc`, keep all three.
-   The adapter enforces the permission boundary: the target must be an entrypoint
-   embedded from the packaged tree, invoked as one direct command with no
+   commands plus edits under `.aidlc/tools/` and `.aidlc/hooks/`. Init merges
+   these entries into an existing `opencode.json` or `opencode.jsonc`.
+   The adapter enforces the permission boundary: `aidlc` must be invoked as one
+   direct command with no
    chaining, redirection, expansion, or command substitution. Engine-code edits
    prompt for approval.
 
-2. Apply the `.gitignore` entries from the shipped `AGENTS.md` § "Git
-   Integration" before starting a workflow (per-clone audit shards are
-   committed deliberately; cursors and machine-local runtime stay ignored).
+2. For a source checkout, initialize from the committed projection after
+   installing a matching binary:
+
+   ```bash
+   aidlc init --project-dir your-project --from "$PWD/dist/opencode" --harness opencode
+   ```
 
 3. Start opencode in the project and run `/aidlc --doctor`, then `/aidlc`
    followed by what you want to build.
@@ -72,8 +74,8 @@ script (top-level dispatch, `process.exit`) crashes the session
   truth.
 - **Hooks ride the adapter plugin.** opencode has no hooks.json/settings hook
   registry; `.opencode/plugin/aidlc-opencode-adapter.ts` maps opencode's
-  plugin hook moments onto the core hook bodies in `.aidlc/hooks/` (run as bun
-  subprocesses): reviewer read-scope and the AIDLC bash boundary before tool
+  plugin hook moments onto the core hook bodies in `.aidlc/hooks/` through
+  `aidlc hook`: reviewer read-scope and the AIDLC bash boundary before tool
   execution; audit + sensors on write/edit/apply_patch; runtime-compile on
   bash; statusline sync on todowrite; subagent logging on task; presence
   minting on each human turn; state validation before compaction.
@@ -102,7 +104,7 @@ script (top-level dispatch, `process.exit`) crashes the session
 ## Verifying an install
 
 ```bash
-bun .aidlc/tools/aidlc-utility.ts doctor    # all checks pass on a fresh copy
+aidlc doctor                               # all checks pass on a fresh init
 opencode run --command aidlc -- "--status"  # /aidlc --status through the harness
 ```
 

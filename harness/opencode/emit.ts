@@ -64,26 +64,6 @@ function projectActiveMemoryReferences(raw: string): string {
     .replaceAll(".aidlc/rules/", "aidlc/spaces/default/memory/");
 }
 
-function embedShippedEntrypoints(raw: string, distRoot: string): string {
-  const marker = "/* @aidlc-shipped-entrypoints@ */ []";
-  const entries = ["hooks", "tools"].flatMap((dir) =>
-    readdirSync(join(distRoot, ".aidlc", dir), { withFileTypes: true })
-      .filter((entry) => entry.isFile() && entry.name.endsWith(".ts"))
-      .map((entry) => `${dir}/${entry.name}`)
-  ).sort();
-  if (!raw.includes(marker)) {
-    throw new Error("opencode adapter is missing its shipped-entrypoint emission marker.");
-  }
-  const rendered = JSON.stringify(entries, null, 2)
-    .split("\n")
-    .map((line, index) => index === 0 ? line : `  ${line}`)
-    .join("\n");
-  return raw.replace(
-    marker,
-    `/* @aidlc-shipped-entrypoints@ */ ${rendered}`,
-  );
-}
-
 export default function emit(ctx: EmitContext): void {
   const { coreRoot, harnessRoot, distRoot, substituteToken, tierCap } = ctx;
   const SHELL = join(distRoot, ".opencode");
@@ -127,10 +107,7 @@ export default function emit(ctx: EmitContext): void {
   emissions.push({
     path: join(SHELL, "plugin", "aidlc-opencode-adapter.ts"),
     content: () =>
-      embedShippedEntrypoints(
-        readFileSync(join(harnessRoot, "plugin", "aidlc-opencode-adapter.ts"), "utf-8"),
-        distRoot,
-      ),
+      readFileSync(join(harnessRoot, "plugin", "aidlc-opencode-adapter.ts"), "utf-8"),
   });
 
   // Clean-sweep the shell so a removed persona/command cannot linger. In

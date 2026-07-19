@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   cpSync,
   existsSync,
@@ -5,12 +6,13 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import {
@@ -113,10 +115,22 @@ import {
 import { validateStageFrontmatter } from "./aidlc-stage-schema.ts";
 import { AIDLC_VERSION } from "./aidlc-version.ts";
 import {
+  aidlcToolInvocation,
   compiledExecutable,
+  isCompiledExecutable,
   resolveHarnessPath,
   resolveSkillsPath,
 } from "./aidlc-runtime-paths.ts";
+import {
+  activeVersion,
+  binRoot,
+  commandPath,
+  inspectInstalledVersion,
+  installRoot,
+  readActiveExecutable,
+  rollbackVersionPath,
+  versionRoot as installedVersionRoot,
+} from "./aidlc-install-paths.ts";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -209,8 +223,8 @@ Utilities:
   config get <key>  Show active workflow config (depth, test-strategy)
   config set <key> <value>  Change active workflow config (depth, test-strategy)
   config list       List active workflow config (--json for structured output)
-  plugin list       List installed plugins and enabled state (--json for structured output)
-  plugin sync       Compose installed plugins into the current install
+  plugin list       Legacy direct selection view (public route uses aidlc-plugin.ts)
+  plugin sync       Legacy injected-root compose (public route uses aidlc-plugin.ts)
   --doctor          Run health check on hooks, settings, and directory structure
   --stage <id>      Jump to a specific stage (by slug or number, e.g., code-generation or 3.5)
   --phase <name>    Jump to the first in-scope stage of a phase (e.g., construction or 3)
@@ -229,7 +243,7 @@ Examples:
   /aidlc Fix the login timeout bug              Auto-detected as bugfix scope
   /aidlc compose "harden the deploy pipeline"   Composer proposes a tailored plan
   /aidlc config list                         Show depth and test strategy
-  /aidlc plugin list                         Show installed plugin selection
+  /aidlc plugin list                         Compare installed and composed plugin state
   /aidlc                                        Resume or begin
   /aidlc --stage code-generation                Jump to code-generation stage
   /aidlc --phase construction --scope bugfix    Jump to construction with bugfix scope
@@ -1115,25 +1129,377 @@ function pushNamingAdvisory(
   });
 }
 
-function handleDoctor(projectDir: string): void {
-  const results: Array<{ pass: boolean; label: string; fix?: string }> = [];
+function codexNativeTrustHashes(hooksPath: string): string[] {
+  const eventNames: Record<string, string> = {
+    SessionStart: "session_start",
+    UserPromptSubmit: "user_prompt_submit",
+    PreToolUse: "pre_tool_use",
+    PostToolUse: "post_tool_use",
+    PermissionRequest: "permission_request",
+    PreCompact: "pre_compact",
+    PostCompact: "post_compact",
+    SubagentStart: "subagent_start",
+    SubagentStop: "subagent_stop",
+    Stop: "stop",
+  };
+  const parsed = JSON.parse(readFileSync(hooksPath, "utf-8")) as {
+    hooks?: Record<string, Array<{ hooks?: Array<{ command?: unknown }> }>>;
+  };
+  const sortKeys = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(sortKeys);
+    if (value && typeof value === "object") {
+      const record = value as Record<string, unknown>;
+      return Object.fromEntries(
+        Object.keys(record).sort().map((key) => [key, sortKeys(record[key])]),
+      );
+    }
+    return value;
+  };
+  const hashes: string[] = [];
+  for (const [event, groups] of Object.entries(parsed.hooks ?? {})) {
+    const eventName = eventNames[event];
+    if (!eventName || !Array.isArray(groups)) continue;
+    for (const group of groups) {
+      for (const hook of group.hooks ?? []) {
+        if (
+          typeof hook.command !== "string" ||
+          !hook.command.startsWith("aidlc adapter codex ")
+        ) continue;
+        const identity = {
+          event_name: eventName,
+          hooks: [{
+            async: false,
+            command: hook.command,
+            timeout: 600,
+            type: "command",
+          }],
+        };
+        hashes.push(
+          `sha256:${
+            createHash("sha256").update(JSON.stringify(sortKeys(identity)), "utf-8").digest("hex")
+          }`,
+        );
+      }
+    }
+  }
+  return hashes;
+}
+
+export type DoctorCheck = {
+  pass: boolean;
+  severity?: "warn";
+  label: string;
+  fix?: string;
+};
+
+export type DoctorReport = {
+  checks: DoctorCheck[];
+  passed: number;
+  warnings: number;
+  failed: number;
+};
+
+export async function collectDoctorReport(
+  projectDir: string,
+  extraChecks: readonly DoctorCheck[] = [],
+): Promise<DoctorReport> {
+  const results: DoctorCheck[] = [];
   const isWindows = process.platform === "win32";
 
-  // 1. bun installed — check PATH (Bun.which handles Windows .exe suffix automatically)
+  // Compiled installs carry their runtime; direct source execution requires Bun.
   const bunHome = process.env.HOME ? join(process.env.HOME, ".bun", "bin", "bun") : "";
   const bunFound = Bun.which("bun") !== null || (bunHome !== "" && existsSync(bunHome));
+  const compiled = isCompiledExecutable();
   results.push({
-    pass: bunFound,
-    label: "bun installed (required for CLI tools and hooks)",
+    pass: compiled || bunFound,
+    label: compiled
+      ? "Self-contained binary runtime (bun is not required)"
+      : "Source execution runtime: bun is available",
     fix: isWindows
       ? "install via `npm install -g bun` or `powershell -c \"irm bun.sh/install.ps1 | iex\"`"
       : "install via `curl -fsSL https://bun.sh/install | bash`",
   });
 
-  // 2. Hook presence — every framework hook is TypeScript, run via bun (no
-  // executable bit needed). The core hook bodies ship in EVERY harness tree; the
-  // Kiro and Codex trees additionally carry an authored stdin adapter that wires
-  // them up.
+  const installedVersion = activeVersion();
+  if (compiled || installedVersion) {
+    const installedState = installedVersion
+      ? inspectInstalledVersion(installedVersion)
+      : { complete: false, distributions: [], reason: "active version marker unavailable" };
+    const distributions = installedState.distributions;
+    const runtimeReady = installedState.complete && distributions.length > 0;
+    results.push({
+      pass: installedVersion !== null && runtimeReady,
+      label: installedVersion && runtimeReady
+        ? `Installed runtime: ${installedVersion} [${distributions.join(", ")}]`
+        : installedVersion && installedState.complete
+        ? `Installed runtime ${installedVersion} has no harness installed`
+        : installedVersion
+        ? `Installed runtime ${installedVersion} is incomplete: ${installedState.reason ?? "unknown reason"}`
+        : "Installed runtime: active version marker unavailable",
+      fix: installedState.complete
+        ? "run `aidlc harness add <name>`"
+        : "re-run the installer with --harness <name>",
+    });
+    const command = commandPath();
+    const expectedExecutable = installedVersion
+      ? join(installedVersionRoot(installedVersion), process.platform === "win32" ? "aidlc.exe" : "aidlc")
+      : "";
+    let pointerValid = false;
+    try {
+      pointerValid = Boolean(expectedExecutable) &&
+        (isWindows
+          ? existsSync(command) &&
+            readActiveExecutable() === resolve(expectedExecutable)
+          : realpathSync(command) === realpathSync(expectedExecutable));
+    } catch {
+      pointerValid = false;
+    }
+    results.push({
+      pass: pointerValid,
+      label: pointerValid
+        ? `Command pointer: ${command} -> ${installedVersion}`
+        : `Command pointer is missing or does not select active version ${installedVersion ?? "unknown"}`,
+      fix: "re-run `aidlc upgrade --version <version> --from <release-directory>`",
+    });
+
+    const rollbackPath = rollbackVersionPath();
+    if (existsSync(rollbackPath)) {
+      const rollback = readFileSync(rollbackPath, "utf-8").trim();
+      let rollbackState: ReturnType<typeof inspectInstalledVersion> = {
+        complete: false,
+        distributions: [],
+        reason: "invalid version marker",
+      };
+      try {
+        rollbackState = inspectInstalledVersion(rollback);
+      } catch {
+        // The diagnostic below reports an invalid marker as ineligible.
+      }
+      const eligible = rollback !== installedVersion && rollbackState.complete;
+      results.push({
+        pass: eligible,
+        label: eligible
+          ? `Rollback target: ${rollback} is complete and eligible`
+          : `Rollback target is not eligible: ${JSON.stringify(rollback)}`,
+        fix: "run `aidlc rollback --list` and select a complete retained version",
+      });
+    } else {
+      results.push({ pass: true, label: "Rollback target: none recorded" });
+    }
+
+    const stagingRoots = new Set([
+      installRoot(),
+      binRoot(),
+      dirname(installRoot()),
+      dirname(dirname(installRoot())),
+    ]);
+    const abandoned: string[] = [];
+    for (const root of stagingRoots) {
+      if (!existsSync(root)) continue;
+      for (const entry of readdirSync(root)) {
+        if (/^\.aidlc-txn-[0-9a-f-]+$/.test(entry)) abandoned.push(join(root, entry));
+      }
+    }
+    results.push({
+      pass: abandoned.length === 0,
+      label: abandoned.length === 0
+        ? "Transaction staging: no abandoned directories"
+        : `Transaction staging: ${abandoned.length} abandoned path(s): ${abandoned.join(", ")}`,
+      fix: "finish any active AI-DLC command, then rerun the command to trigger the safe staging sweep",
+    });
+
+    const pinsPath = join(installRoot(), "pins.json");
+    let stalePins: string[] = [];
+    try {
+      const pins = existsSync(pinsPath)
+        ? JSON.parse(readFileSync(pinsPath, "utf-8")) as Record<string, unknown>
+        : {};
+      stalePins = Object.keys(pins).filter((path) => !existsSync(path)).sort();
+    } catch {
+      stalePins = ["<malformed pins.json>"];
+    }
+    results.push({
+      pass: stalePins.length === 0,
+      severity: stalePins.length > 0 ? "warn" : undefined,
+      label: stalePins.length === 0
+        ? "Project pin registry: no stale registrations"
+        : `Project pin registry: stale registrations: ${stalePins.join(", ")}`,
+      fix: "run a pinned command from the moved project to self-heal its registration",
+    });
+
+    if (compiled) {
+      const commands: string[] = [];
+      const collectCommands = (value: unknown): void => {
+        if (Array.isArray(value)) {
+          for (const item of value) collectCommands(item);
+        } else if (value && typeof value === "object") {
+          for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+            if (key === "command" && typeof item === "string") commands.push(item);
+            else collectCommands(item);
+          }
+        }
+      };
+      const harnessRoot = join(projectDir, harnessDir());
+      const trustFiles = [
+        join(harnessRoot, "settings.json"),
+        join(harnessRoot, "hooks.json"),
+        join(projectDir, ".vscode", "settings.json"),
+      ];
+      const agentsDir = join(harnessRoot, "agents");
+      if (existsSync(agentsDir)) {
+        trustFiles.push(...readdirSync(agentsDir)
+          .filter((name) => name.endsWith(".json"))
+          .map((name) => join(agentsDir, name)));
+      }
+      const hooksDir = join(harnessRoot, "hooks");
+      if (existsSync(hooksDir)) {
+        trustFiles.push(...readdirSync(hooksDir)
+          .filter((name) => name.endsWith(".kiro.hook"))
+          .map((name) => join(hooksDir, name)));
+      }
+      for (const path of trustFiles) {
+        if (!existsSync(path)) continue;
+        try {
+          const parsed = JSON.parse(readFileSync(path, "utf-8"));
+          collectCommands(parsed);
+          const allowed = (parsed as {
+            toolsSettings?: { execute_bash?: { allowedCommands?: unknown } };
+          }).toolsSettings?.execute_bash?.allowedCommands;
+          if (Array.isArray(allowed)) {
+            commands.push(...allowed.filter((entry): entry is string => typeof entry === "string"));
+          }
+          const permissions = (parsed as {
+            permissions?: { allow?: unknown };
+          }).permissions?.allow;
+          if (Array.isArray(permissions)) {
+            commands.push(...permissions.filter((entry): entry is string => typeof entry === "string"));
+          }
+          const trusted = (parsed as {
+            kiroAgent?: unknown;
+            "kiroAgent.trustedCommands"?: unknown;
+          })["kiroAgent.trustedCommands"];
+          if (Array.isArray(trusted)) {
+            commands.push(...trusted.filter((entry): entry is string => typeof entry === "string"));
+          }
+        } catch {
+          // Existing structure checks report malformed host configuration.
+        }
+      }
+      const legacy = commands.filter((command) =>
+        /\bbun\s+[^\n]*(?:\/(?:tools|hooks)\/aidlc|\\?\.kiro\/tools\/)/.test(command)
+      );
+      const nativeHooks = commands.some((command) =>
+        /\baidlc\s+(?:hook|adapter|statusline)\b/.test(command)
+      );
+      let nativePermission = false;
+      if (harnessDir() === ".claude") {
+        nativePermission = commands.includes("Bash(aidlc *)") && !commands.includes("Bash");
+      } else if (harnessDir() === ".kiro") {
+        nativePermission = commands.includes("aidlc .*") ||
+          commands.includes("aidlc *");
+      } else if (harnessDir() === ".codex") {
+        const rules = join(harnessRoot, "rules", "default.rules");
+        const seed = join(harnessRoot, "trust-seed.toml");
+        const hooks = join(harnessRoot, "hooks.json");
+        let hashes: string[] = [];
+        try {
+          hashes = existsSync(hooks) ? codexNativeTrustHashes(hooks) : [];
+        } catch {
+          hashes = [];
+        }
+        const seedText = existsSync(seed) ? readFileSync(seed, "utf-8") : "";
+        nativePermission =
+          existsSync(rules) &&
+          readFileSync(rules, "utf-8").includes('prefix_rule(pattern = ["aidlc"], decision = "allow")') &&
+          hashes.length > 0 &&
+          hashes.every((hash) => seedText.includes(`trusted_hash = "${hash}"`));
+      }
+      const nativeTrustReady = legacy.length === 0 && nativeHooks && nativePermission;
+      results.push({
+        pass: nativeTrustReady,
+        label: nativeTrustReady
+          ? "Native command trust: host hooks and permission entries select the installed `aidlc` command"
+          : `Native command trust is incomplete: ${legacy.length} Bun-shaped entr${
+            legacy.length === 1 ? "y" : "ies"
+          }, native hooks ${nativeHooks ? "present" : "missing"}, native permission/trust ${
+            nativePermission ? "present" : "missing"
+          }`,
+        fix: "refresh the project with `aidlc init`",
+      });
+    }
+  } else {
+    results.push({
+      pass: true,
+      label: "Execution mode: source checkout (no machine runtime expected)",
+    });
+  }
+
+  const projectStamp = join(projectDir, harnessDir(), "tools", "data", "aidlc-stamp.json");
+  if (existsSync(projectStamp)) {
+    try {
+      const stamp = JSON.parse(readFileSync(projectStamp, "utf-8")) as {
+        frameworkVersion?: string;
+        distribution?: string;
+      };
+      const stampVersion = stamp.frameworkVersion ?? "unknown";
+      const currentMajor = AIDLC_VERSION.split(".")[0];
+      const stampMajor = stampVersion.split(".")[0];
+      results.push({
+        pass: stampVersion === AIDLC_VERSION || stampMajor === currentMajor,
+        severity: stampVersion !== AIDLC_VERSION && stampMajor === currentMajor ? "warn" : undefined,
+        label: stampVersion === AIDLC_VERSION
+          ? `Project runtime stamp: ${stampVersion} (${stamp.distribution ?? "unknown"})`
+          : `Project runtime stamp: ${stampVersion}; selected engine: ${AIDLC_VERSION}`,
+        fix: `run \`aidlc init\` or \`aidlc use ${stampVersion}\``,
+      });
+    } catch {
+      results.push({
+        pass: false,
+        label: "Project runtime stamp is malformed",
+        fix: "refresh the project with `aidlc init`",
+      });
+    }
+  }
+
+  const pinPath = join(projectDir, ".aidlc-version");
+  if (existsSync(pinPath)) {
+    const pinned = readFileSync(pinPath, "utf-8").trim();
+    if (!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(pinned)) {
+      results.push({
+        pass: false,
+        label: `Project pin is malformed: ${JSON.stringify(pinned)}`,
+        fix: "run `aidlc use current` or write one strict semver",
+      });
+    } else {
+      const distribution = (() => {
+        try {
+          return JSON.parse(readFileSync(projectStamp, "utf-8")).distribution as string;
+        } catch {
+          return null;
+        }
+      })();
+      let pinState: ReturnType<typeof inspectInstalledVersion> = {
+        complete: false,
+        distributions: [],
+      };
+      try {
+        pinState = inspectInstalledVersion(pinned, distribution);
+      } catch {
+        // The diagnostic below reports invalid or incomplete installed state.
+      }
+      results.push({
+        pass: pinState.complete,
+        label: pinState.complete
+          ? `Project pin: ${pinned} is installed`
+          : `Project pin: ${pinned} is not installed completely`,
+        fix: `run \`aidlc versions install ${pinned}\``,
+      });
+    }
+  }
+
+  // 2. Hook presence. Shipped projects route hook targets through the native
+  // command; direct source execution may still invoke these TypeScript files.
+  // The Kiro and Codex trees also carry the authored host adapter.
   const harness = harnessDir();
   if (harness === ".claude") {
     // Claude Code: the EXPECTED roster is the set of aidlc-*.ts hooks that
@@ -1158,13 +1524,28 @@ function handleDoctor(projectDir: string): void {
     let settingsReadable = true;
     try {
       const raw = readFileSync(settingsForHooks, "utf-8");
-      // jq-free: collect every distinct aidlc-*.ts basename referenced anywhere
-      // in settings.json (hook command paths like
-      // "bun $CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-audit-logger.ts" and the
-      // statusLine command). Basename, not path, so the probe is dir-relative.
+      const parsed = JSON.parse(raw) as unknown;
+      const commands: string[] = [];
+      const collectCommands = (value: unknown): void => {
+        if (Array.isArray(value)) {
+          for (const item of value) collectCommands(item);
+          return;
+        }
+        if (!value || typeof value !== "object") return;
+        for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+          if (key === "command" && typeof item === "string") commands.push(item);
+          else collectCommands(item);
+        }
+      };
+      collectCommands(parsed);
       const refs = new Set<string>();
-      for (const m of raw.matchAll(/aidlc-[A-Za-z0-9_-]+\.ts/g)) {
-        refs.add(m[0]);
+      for (const command of commands) {
+        for (const match of command.matchAll(/aidlc-[A-Za-z0-9_-]+\.ts/g)) {
+          refs.add(match[0]);
+        }
+        const binaryHook = /\baidlc\s+hook\s+([A-Za-z0-9_-]+)\b/.exec(command);
+        if (binaryHook) refs.add(`aidlc-${binaryHook[1]}.ts`);
+        if (/\baidlc\s+statusline\b/.test(command)) refs.add("aidlc-statusline.ts");
       }
       expectedHooks = [...refs].sort();
     } catch {
@@ -1287,12 +1668,12 @@ function handleDoctor(projectDir: string): void {
         fix: "upgrade Codex CLI to 0.139.0 or later",
       });
     }
-    // Hook trust pre-seed reminder (advisory pass-with-label): untrusted
-    // project hooks never fire (the bypass flag does not run them either).
+    // Hook trust reminder: untrusted project hooks never fire.
     results.push({
       pass: true,
-      label:
-        "hook trust: ensure [hooks.state] entries are pre-seeded in $CODEX_HOME/config.toml (`bun scripts/package.ts codex trust --project <dir>`) or run one TUI trust pass",
+      label: compiled
+        ? "hook trust: merge the shipped native trust-seed.toml entries into $CODEX_HOME/config.toml or run one TUI trust pass"
+        : "hook trust: pre-seed [hooks.state] with `bun scripts/package.ts codex trust --project <dir>` or run one TUI trust pass",
     });
   } else if (harness === ".aidlc") {
     // opencode: the wiring config is the project-root opencode.json/jsonc
@@ -1400,7 +1781,7 @@ function handleDoctor(projectDir: string): void {
         ? "Plugin selection flags: harness.json agrees with stage-graph.json"
         : `Plugin selection flags: ${disagreements.length} disagreement(s)`,
       fix: disagreements.length > 0
-        ? `${disagreements.join("; ")} - run \`bun ${harnessDir()}/tools/aidlc-utility.ts select-plugins ${
+        ? `${disagreements.join("; ")} - run \`${aidlcToolInvocation("utility")} select-plugins ${
             selected === null ? knownPluginNames().join(",") : [...selected].sort().join(",")
           }\` to recover`
         : undefined,
@@ -1448,7 +1829,7 @@ function handleDoctor(projectDir: string): void {
           ? `Enabled stage compile coverage: ${missingEnabled.length} enabled stage file(s) missing from the full graph`
           : `Enabled stage compile coverage: ${missingEnabled.length} uncompiled stage file(s) - no selection active, see the Uncompiled stage files advisory`,
       fix: torn
-        ? `${missingEnabled.join("; ")} - recover with \`bun ${harnessDir()}/tools/aidlc-utility.ts select-plugins ${
+        ? `${missingEnabled.join("; ")} - recover with \`${aidlcToolInvocation("utility")} select-plugins ${
             [...(selected as ReadonlySet<string>)].sort().join(",")
           }\``
         : undefined,
@@ -1465,7 +1846,7 @@ function handleDoctor(projectDir: string): void {
           ? "Plugin selection vs active workflows: no stranded dependencies"
           : `Plugin selection vs active workflows: ${stranded.length} stranded dependency(ies)`,
         fix: stranded.length > 0
-          ? `${stranded.join("; ")} - re-enable the plugin(s) with \`bun ${harnessDir()}/tools/aidlc-utility.ts select-plugins\`, or complete/park the workflow(s)`
+          ? `${stranded.join("; ")} - re-enable the plugin(s) with \`${aidlcToolInvocation("utility")} select-plugins\`, or complete/park the workflow(s)`
           : undefined,
       });
 
@@ -2380,7 +2761,7 @@ function handleDoctor(projectDir: string): void {
       pass: true,
       label: uncompiledStages.length === 0
         ? "Uncompiled stage files: 0 stage files missing from the compiled graph"
-        : `Uncompiled stage files: ${uncompiledStages.length} stage file(s) not in the compiled graph (advisory, will not execute until recompiled): ${uncompiledStages.join(", ")} - run \`bun ${harnessDir()}/tools/aidlc-graph.ts compile\` to include them`,
+        : `Uncompiled stage files: ${uncompiledStages.length} stage file(s) not in the compiled graph (advisory, will not execute until recompiled): ${uncompiledStages.join(", ")} - run \`${aidlcToolInvocation("graph")} compile\` to include them`,
     });
   } catch (e) {
     results.push({
@@ -2754,6 +3135,8 @@ function handleDoctor(projectDir: string): void {
     // Advisory only; a scan failure must not hide the main doctor report.
   }
 
+  results.push(...extraChecks);
+
   // Cold-safe gate: only emit audit when an audit trail already exists. On a
   // pristine project (no audit shard / flat audit.md) doctor prints its health
   // report and creates NOTHING — it stays a pure read-only diagnostic. On an
@@ -2768,26 +3151,18 @@ function handleDoctor(projectDir: string): void {
     });
   }
 
-  // Print report
-  let output = "AI-DLC Health Check\n";
-  output += `${"\u2500".repeat(37)}\n`;
   let passed = 0;
+  let warnings = 0;
   let failed = 0;
   for (const r of results) {
-    if (r.pass) {
-      output += `\u2713  ${r.label}\n`;
+    if (r.severity === "warn") {
+      warnings++;
+    } else if (r.pass) {
       passed++;
     } else {
-      output += `\u2717  ${r.label}`;
-      if (r.fix) output += ` — ${r.fix}`;
-      output += "\n";
       failed++;
     }
   }
-  output += `${"\u2500".repeat(37)}\n`;
-  output += `${passed} passed, ${failed} failed\n`;
-
-  process.stdout.write(output);
 
   // Audit only if audit.md already existed when doctor started (cold-safe —
   // see auditExists above). A pristine project gets the stdout report and no
@@ -2799,11 +3174,7 @@ function handleDoctor(projectDir: string): void {
     });
   }
 
-  // Exit non-zero on any check failure so CI and scripts get a clear
-  // signal. Doctor's stdout carries the diagnostic regardless of exit
-  // code — the orchestrator's tool-failure handler was updated in this
-  // same change to print stdout (not stderr) for doctor.
-  process.exit(failed > 0 ? 1 : 0);
+  return { checks: results, passed, warnings, failed };
 }
 
 // ---------------------------------------------------------------------------
@@ -3391,7 +3762,7 @@ function ensureWorkspaceDirs(projectDir: string): void {
 function handleIntentBirth(projectDir: string, flags: Record<string, string>): void {
   // Default to poc when --scope is omitted. Matches the orchestrator's
   // ultimate fallback in SKILL.md and makes direct tool invocations
-  // (`bun aidlc-utility.ts intent-birth`) work without extra flags.
+  // (`aidlc __delegate utility intent-birth`) work without extra flags.
   const scope = flags.scope || "poc";
   if (!validScopes().has(scope)) {
     die(
@@ -4788,15 +5159,18 @@ function handleConfigChange(projectDir: string, flags: Record<string, string>): 
 // set-status — atomically update statusline fields at stage start
 // ---------------------------------------------------------------------------
 
-function handleSetStatus(projectDir: string, flags: Record<string, string>): void {
+export function setStatus(
+  projectDir: string,
+  flags: Record<string, string>,
+): { phase: string; stage: string; agent: string } {
   const sp = stateFilePath(projectDir, flags.intent, flags.space);
-  if (!existsSync(sp)) die("No state file found. Start a workflow first by describing what to build (/aidlc \"build the auth service\").");
+  if (!existsSync(sp)) throw new Error(NO_STATE_FILE_MESSAGE);
 
   const stage = flags.stage;
-  if (!stage) die("--stage is required for set-status");
+  if (!stage) throw new Error("--stage is required for set-status");
 
   const entry = findStageBySlug(stage);
-  if (!entry) die(`Unknown stage: ${stage}`);
+  if (!entry) throw new Error(`Unknown stage: ${stage}`);
 
   const phase = (flags.phase || entry.phase).toUpperCase();
   const agent = flags.agent || entry.lead_agent;
@@ -4811,7 +5185,16 @@ function handleSetStatus(projectDir: string, flags: Record<string, string>): voi
   content = setCheckbox(content, stage, "in-progress");
   writeStateFile(projectDir, content, flags.intent, flags.space);
 
-  process.stdout.write(`${JSON.stringify({ updated: true, phase, stage, agent })}\n`);
+  return { phase, stage, agent };
+}
+
+function handleSetStatus(projectDir: string, flags: Record<string, string>): void {
+  try {
+    const result = setStatus(projectDir, flags);
+    process.stdout.write(`${JSON.stringify({ updated: true, ...result })}\n`);
+  } catch (error) {
+    die(errorMessage(error));
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -4903,7 +5286,7 @@ export function findScopeByKeyword(kw: string): string[] {
 // fixture SKILL.md (so drift tests never mutate the real file).
 
 const SCOPE_TABLE_BEGIN =
-  "<!-- BEGIN: compiled scope grid via `bun aidlc-utility.ts scope-table` - do NOT hand-edit -->";
+  `<!-- BEGIN: compiled scope grid via \`${aidlcToolInvocation("utility", undefined, false)} scope-table\` - do NOT hand-edit -->`;
 const SCOPE_TABLE_END =
   "<!-- END: compiled scope grid -->";
 
@@ -4986,7 +5369,7 @@ function checkGeneratedTableRegion(
   }
 
   console.error(
-    `SKILL.md ${verb} region is out of date. Refresh it from \`bun ${harnessDir()}/tools/aidlc-utility.ts ${verb}\`.`
+    `SKILL.md ${verb} region is out of date. Refresh it from \`${aidlcToolInvocation("utility")} ${verb}\`.`
   );
   process.exit(1);
 }
@@ -5024,7 +5407,7 @@ function handleScopeTable(
 // fixture SKILL.md (so drift tests never mutate the real file).
 
 const STAGE_TABLE_BEGIN =
-  "<!-- BEGIN: compiled stage graph via `bun aidlc-utility.ts stage-table` - do NOT hand-edit -->";
+  `<!-- BEGIN: compiled stage graph via \`${aidlcToolInvocation("utility", undefined, false)} stage-table\` - do NOT hand-edit -->`;
 const STAGE_TABLE_END =
   "<!-- END: compiled stage graph -->";
 
@@ -5242,7 +5625,7 @@ export async function main(argv: string[]): Promise<void> {
       handleStatus(projectDir, flags);
       break;
     case "doctor":
-      handleDoctor(projectDir);
+      await (await import("./aidlc-doctor.ts")).main(rawArgs);
       break;
     case "intent-birth":
       handleIntentBirth(projectDir, flags);

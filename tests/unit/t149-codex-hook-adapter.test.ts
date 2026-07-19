@@ -192,8 +192,8 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
       const out = JSON.parse(r.stdout) as { decision?: string; reason?: string };
       expect(out.decision).toBe("block");
       expect(out.reason ?? "").not.toBe("");
-      // The continuation reason names the codex tools path (harnessDir seam).
-      expect(out.reason).toContain(".codex/tools/aidlc-orchestrate.ts");
+      // Installed continuation guidance uses the native dispatcher route.
+      expect(out.reason).toContain("aidlc __delegate orchestrate next");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

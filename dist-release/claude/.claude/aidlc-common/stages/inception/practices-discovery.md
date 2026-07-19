@@ -121,7 +121,7 @@ Compliance with `stage-protocol.md` checklist:
 
 ### Step 6: Promote (On Approve Only)
 
-Cross-row promotion of affirmed content from per-workflow audit trail into team-authored harness config is delegated to a single tool subcommand. The orchestrator does NOT read or write the target files directly — `aidlc-state.ts practices-promote` does the read+splice+write atomically and emits `PRACTICES_AFFIRMED` on success or `PRACTICES_OVERRIDE` on failure. This keeps the cross-row writes deterministic and out of the LLM's judgment path.
+Cross-row promotion of affirmed content from per-workflow audit trail into team-authored harness config is delegated to a single tool subcommand. The orchestrator does NOT read or write the target files directly — `aidlc __delegate state practices-promote` does the read+splice+write atomically and emits `PRACTICES_AFFIRMED` on success or `PRACTICES_OVERRIDE` on failure. This keeps the cross-row writes deterministic and out of the LLM's judgment path.
 
 Run:
 

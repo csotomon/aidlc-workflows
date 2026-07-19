@@ -64,7 +64,7 @@ const manifest: HarnessManifest = {
     { src: "skills/aidlc/question-rendering.md", dst: "skills/aidlc/question-rendering.md" },
     // Project config at the dist ROOT (opencode reads ./opencode.json):
     // skills.paths (skill discovery), instructions glob (the method include),
-    // and the bun tool-command permissions.
+    // and the native aidlc command permissions.
     { src: "opencode.json", dst: "opencode.json", projectRoot: true },
     { src: "dot-gitignore", dst: ".gitignore", projectRoot: true },
   ],

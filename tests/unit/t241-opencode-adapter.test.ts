@@ -28,11 +28,10 @@ import {
 } from "../harness/fixtures.ts";
 
 const REPO_ROOT = join(import.meta.dir, "..", "..");
-const TEST_ENTRYPOINTS = new Set([
-  "tools/aidlc-state.ts",
-  "tools/aidlc-utility.ts",
-  "hooks/aidlc-stop.ts",
-]);
+const TEST_AIDLC_COMMAND = [
+  process.execPath,
+  join(REPO_ROOT, "tests", "harness", "aidlc-hook-driver.ts"),
+] as const;
 const scratch: string[] = [];
 
 afterEach(() => {
@@ -108,15 +107,22 @@ function postTool(tool: string, args: Record<string, unknown>) {
   };
 }
 
+function createTestAdapter(
+  client: PluginInput["client"],
+  directory: string,
+) {
+  return createAdapter({
+    client,
+    directory,
+    aidlcCommand: TEST_AIDLC_COMMAND,
+  });
+}
+
 describe("t241 OpenCode adapter command boundary and transition filter", () => {
-  test("rejects compound AIDLC bun commands but leaves one invocation and unrelated bash alone", async () => {
+  test("rejects compound aidlc commands but leaves one invocation and unrelated bash alone", async () => {
     const root = freshProject();
     const { client } = fakeClient();
-    const adapter = await createAdapter({
-      client,
-      directory: root,
-      aidlcEntrypoints: TEST_ENTRYPOINTS,
-    });
+    const adapter = await createTestAdapter(client, root);
     const before = adapter["tool.execute.before"];
     const invoke = (callID: string, command: string) =>
       before(
@@ -124,10 +130,10 @@ describe("t241 OpenCode adapter command boundary and transition filter", () => {
         { args: { command } },
       );
     await expect(
-      invoke("safe", "bun .aidlc/tools/aidlc-state.ts approve"),
+      invoke("safe", "aidlc __delegate state approve"),
     ).resolves.toBeUndefined();
     await expect(
-      invoke("quoted", 'bun .aidlc/tools/aidlc-utility.ts status "a && b"'),
+      invoke("quoted", 'aidlc __delegate utility status "a && b"'),
     ).resolves.toBeUndefined();
     await expect(
       invoke("unrelated", "echo ok && touch /tmp/example"),
@@ -135,19 +141,19 @@ describe("t241 OpenCode adapter command boundary and transition filter", () => {
     await expect(
       invoke(
         "compound",
-        "bun .aidlc/tools/aidlc-utility.ts status && touch /tmp/example",
+        "aidlc __delegate utility status && touch /tmp/example",
       ),
     ).rejects.toThrow("one direct invocation");
     await expect(
-      invoke("redirect", "bun .aidlc/hooks/aidlc-stop.ts > /tmp/example"),
+      invoke("redirect", "aidlc hook stop > /tmp/example"),
     ).rejects.toThrow("one direct invocation");
     await expect(
-      invoke("unknown", "bun .aidlc/tools/payload.ts"),
-    ).rejects.toThrow("shipped tool or hook");
+      invoke("unknown", "aidlc __delegate payload"),
+    ).resolves.toBeUndefined();
     await expect(
       invoke(
         "quote-bypass",
-        "bun .aidlc/tools/aidlc-utility.ts status 'a\\' ; touch /tmp/x #'",
+        "aidlc __delegate utility status 'a\\' ; touch /tmp/x #'",
       ),
     ).rejects.toThrow("one direct invocation");
   });
@@ -155,16 +161,18 @@ describe("t241 OpenCode adapter command boundary and transition filter", () => {
   test("an OpenCode state transition passes the real runtime hook command gate", async () => {
     const root = freshProject();
     copyCore(root, "hooks/aidlc-runtime-compile.ts");
+    copyCore(root, "tools/aidlc-audit.ts");
     copyCore(root, "tools/aidlc-lib.ts");
+    copyCore(root, "tools/aidlc-runtime.ts");
     copyCore(root, "tools/aidlc-runtime-paths.ts");
     mkdirSync(join(root, "aidlc"), { recursive: true });
     writeFileSync(join(root, "aidlc", ".aidlc-hook-debug"), "", "utf-8");
 
     const { client } = fakeClient();
-    const adapter = await createAdapter({ client, directory: root });
+    const adapter = await createTestAdapter(client, root);
     await adapter["tool.execute.after"](
       postTool("bash", {
-        command: "bun .aidlc/tools/aidlc-state.ts approve",
+        command: "aidlc __delegate state approve",
       }),
     );
 
@@ -212,7 +220,7 @@ describe("t241 OpenCode adapter reviewer scope", () => {
     );
 
     const { client } = fakeClient({ reviewer: "main" });
-    const adapter = await createAdapter({ client, directory: root });
+    const adapter = await createTestAdapter(client, root);
     await adapter["chat.message"](
       {
         sessionID: "reviewer",
@@ -270,7 +278,7 @@ appendFileSync(${JSON.stringify(trace)}, ${JSON.stringify(`${label}\t`)} + input
 *** End Patch
 `;
     const { client } = fakeClient();
-    const adapter = await createAdapter({ client, directory: root });
+    const adapter = await createTestAdapter(client, root);
     await adapter["tool.execute.after"](
       postTool("apply_patch", { patchText }),
     );
@@ -315,7 +323,7 @@ appendFileSync(${JSON.stringify(trace)}, ${JSON.stringify(`${label}\t`)} + input
 `;
 
     const { client } = fakeClient();
-    const adapter = await createAdapter({ client, directory: root });
+    const adapter = await createTestAdapter(client, root);
     await adapter["tool.execute.after"](
       postTool("apply_patch", { patchText }),
     );
@@ -344,7 +352,7 @@ if (existsSync(${JSON.stringify(marker)})) {
     writeHook(root, "aidlc-mint-presence.ts", "await Bun.stdin.text();\n");
 
     const { client } = fakeClient();
-    const adapter = await createAdapter({ client, directory: root });
+    const adapter = await createTestAdapter(client, root);
     const chat = adapter["chat.message"];
     await chat(
       { sessionID: "main" },
@@ -389,7 +397,7 @@ process.stdout.write(JSON.stringify({ decision: "block", reason: "continue" }) +
     );
 
     const { client, prompts } = fakeClient();
-    const adapter = await createAdapter({ client, directory: root });
+    const adapter = await createTestAdapter(client, root);
     await adapter["chat.message"](
       { sessionID: "main" },
       { parts: [{ type: "text", text: "start" }] },
@@ -410,7 +418,7 @@ process.stdout.write(JSON.stringify({ decision: "block", reason: "continue" }) +
   test("turn-one idle reaches the real Stop hook when workflow state is born during the turn", async () => {
     const root = freshInstalledProject();
     const { client, prompts } = fakeClient();
-    const adapter = await createAdapter({ client, directory: root });
+    const adapter = await createTestAdapter(client, root);
 
     await adapter["chat.message"](
       { sessionID: "main" },
@@ -451,7 +459,7 @@ appendFileSync(${JSON.stringify(minted)}, "mint\\n");
         prompt: async () => {},
       },
     };
-    const adapter = await createAdapter({ client, directory: root });
+    const adapter = await createTestAdapter(client, root);
 
     for (const text of ["first", "second"]) {
       await adapter["chat.message"](
@@ -500,7 +508,7 @@ if (n === 0) process.stdout.write(JSON.stringify({ decision: "block", reason: "c
         },
       },
     };
-    adapter = await createAdapter({ client, directory: root });
+    adapter = await createTestAdapter(client, root);
     await adapter["chat.message"](
       { sessionID: "main" },
       { parts: [{ type: "text", text: "start" }] },

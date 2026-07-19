@@ -5,14 +5,15 @@
 // opencode has no settings.json/hooks.json hook registry; its extension seam is
 // the PLUGIN API (auto-discovered from .opencode/plugin/*.ts, loaded in-process
 // by the opencode runtime). This one plugin maps opencode's hook surface onto
-// the core hook bodies, each run as a bun subprocess fed the ClaudeCodeHookInput
-// JSON shape the core hooks parse (live-verified on opencode 1.17.18):
+// the core hook bodies, each run through `aidlc hook` and fed the ClaudeCodeHookInput
+// JSON shape the core hooks parse, routed through the native dispatcher
+// (live-verified on opencode 1.17.18):
 //
 //   opencode moment                      → core hook (Claude event it mirrors)
 //   ------------------------------------------------------------------------
 //   chat.message (first per session)     → aidlc-session-start.ts  (SessionStart)
 //   chat.message (every human turn)      → aidlc-mint-presence.ts  (UserPromptSubmit)
-//   tool.execute.before                  → entrypoint boundary + aidlc-reviewer-scope.ts (PreToolUse)
+//   tool.execute.before                  → command boundary + aidlc-reviewer-scope.ts (PreToolUse)
 //   tool.execute.after write|edit|patch  → aidlc-audit-logger.ts + aidlc-sensor-fire.ts (PostToolUse Write|Edit)
 //   tool.execute.after bash              → aidlc-runtime-compile.ts (PostToolUse Bash)
 //   tool.execute.after todowrite         → aidlc-sync-statusline.ts (PostToolUse TaskUpdate)
@@ -42,36 +43,22 @@
 //     but never scopes the main session.
 
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
-import { homedir } from "node:os";
 
 const NUDGE_SENTINEL = "[aidlc-forwarding-nudge]";
 
-// The core hook bodies ship in the ENGINE dir (<project>/.aidlc/hooks/), not
-// beside this plugin — .opencode/ carries only natively-consumed surfaces.
-// Resolved per-call from the project directory opencode hands the plugin.
-const HOOKS_SUBDIR = join(".aidlc", "hooks");
-
-// The opencode runtime is its own binary, so process.execPath is NOT bun.
-// Resolve bun from PATH, then the default install dir; absent → every hook is
-// a silent no-op (advisory hooks fail open, mirroring the plugin compose hook).
-function bunBin(): string | null {
-  const home = join(homedir(), ".bun", "bin", "bun");
-  if (existsSync(home)) return home;
-  return "bun"; // PATH resolution; spawn error is caught per-call below
-}
-
-function runCore(
+function runCoreHook(
   hookFile: string,
   input: Record<string, unknown>,
   cwd: string,
+  aidlcCommand: readonly string[],
 ): Promise<{ stdout: string; stderr: string; code: number }> {
   return new Promise((resolve) => {
-    const bin = bunBin();
-    if (bin === null) return resolve({ stdout: "", stderr: "", code: 0 });
+    const [bin, ...prefix] = aidlcCommand;
+    const hook = hookFile.replace(/^aidlc-/, "").replace(/\.ts$/, "");
+    if (!bin) return resolve({ stdout: "", stderr: "", code: 0 });
     try {
-      const child = spawn(bin, [join(cwd, HOOKS_SUBDIR, hookFile)], {
+      const child = spawn(bin, [...prefix, "hook", hook, "--project-dir", cwd], {
         cwd,
         stdio: ["pipe", "pipe", "pipe"],
       });
@@ -106,61 +93,11 @@ export type PluginInput = {
     };
   };
   directory: string;
-  /** Unit-test seam. Production uses the build-time list embedded by emit.ts. */
-  aidlcEntrypoints?: ReadonlySet<string>;
+  /** Unit-test seam. Production resolves the installed `aidlc` command. */
+  aidlcCommand?: readonly string[];
 };
 
-const AIDLC_BUN_PREFIX = /^bun[ \t]+\.aidlc\/(?:tools|hooks)\//;
-const AIDLC_ENTRYPOINT = /^\.aidlc\/(tools|hooks)\/([A-Za-z0-9][A-Za-z0-9._-]*\.ts)$/;
-
-// emit.ts replaces the empty array with every packaged .aidlc/{tools,hooks}/*.ts
-// path. The adapter can then reject a newly-authored payload.ts even though the
-// host's coarse bash permission glob matches it.
-const shippedAidlcEntrypoints: ReadonlySet<string> = new Set<string>(
-  /* @aidlc-shipped-entrypoints@ */ [
-    "hooks/aidlc-audit-logger.ts",
-    "hooks/aidlc-log-subagent.ts",
-    "hooks/aidlc-mint-presence.ts",
-    "hooks/aidlc-reviewer-scope.ts",
-    "hooks/aidlc-runtime-compile.ts",
-    "hooks/aidlc-sensor-fire.ts",
-    "hooks/aidlc-session-end.ts",
-    "hooks/aidlc-session-start.ts",
-    "hooks/aidlc-statusline.ts",
-    "hooks/aidlc-stop.ts",
-    "hooks/aidlc-sync-statusline.ts",
-    "hooks/aidlc-validate-state.ts",
-    "tools/aidlc-audit.ts",
-    "tools/aidlc-bolt.ts",
-    "tools/aidlc-directive.ts",
-    "tools/aidlc-graph.ts",
-    "tools/aidlc-includes.ts",
-    "tools/aidlc-jump.ts",
-    "tools/aidlc-learnings.ts",
-    "tools/aidlc-lib.ts",
-    "tools/aidlc-log.ts",
-    "tools/aidlc-orchestrate.ts",
-    "tools/aidlc-rule-schema.ts",
-    "tools/aidlc-runner-gen.ts",
-    "tools/aidlc-runtime-paths.ts",
-    "tools/aidlc-runtime.ts",
-    "tools/aidlc-sensor-linter.ts",
-    "tools/aidlc-sensor-required-sections.ts",
-    "tools/aidlc-sensor-schema.ts",
-    "tools/aidlc-sensor-type-check.ts",
-    "tools/aidlc-sensor-upstream-coverage.ts",
-    "tools/aidlc-sensor.ts",
-    "tools/aidlc-stage-schema.ts",
-    "tools/aidlc-state.ts",
-    "tools/aidlc-swarm.ts",
-    "tools/aidlc-tiers.ts",
-    "tools/aidlc-utility.ts",
-    "tools/aidlc-validate.ts",
-    "tools/aidlc-version.ts",
-    "tools/aidlc-worktree.ts",
-    "tools/aidlc.ts"
-  ],
-);
+const AIDLC_PREFIX = /^aidlc(?:[ \t]|$)/;
 
 /** Parse one expansion-free shell command into argv, or reject shell syntax. */
 function directShellWords(command: string): string[] | null {
@@ -231,21 +168,13 @@ function directShellWords(command: string): string[] | null {
 /** Return a denial reason only when the static AIDLC allow-prefix would match. */
 function aidlcBashBoundaryViolation(
   command: string,
-  allowedEntrypoints: ReadonlySet<string> = shippedAidlcEntrypoints,
 ): string | null {
-  if (!AIDLC_BUN_PREFIX.test(command)) return null;
+  if (!AIDLC_PREFIX.test(command)) return null;
   const words = directShellWords(command);
-  const target = words?.[1]?.match(AIDLC_ENTRYPOINT);
-  if (
-    words?.[0] === "bun" &&
-    target &&
-    allowedEntrypoints.has(`${target[1]}/${target[2]}`)
-  ) {
-    return null;
-  }
+  if (words?.[0] === "aidlc") return null;
   return (
-    "AIDLC bash permission allows one direct invocation of a shipped tool or hook only. " +
-    "Use an unchanged .aidlc entrypoint without chaining, redirection, expansion, or command substitution."
+    "AIDLC bash permission allows one direct invocation of aidlc only. " +
+    "Do not use chaining, redirection, expansion, or command substitution."
   );
 }
 
@@ -339,8 +268,13 @@ function sessionStartHandled(stdout: string): boolean {
 export default async ({
   client,
   directory,
-  aidlcEntrypoints = shippedAidlcEntrypoints,
+  aidlcCommand = ["aidlc"],
 }: PluginInput) => {
+  const runCore = (
+    hookFile: string,
+    input: Record<string, unknown>,
+    _cwd = directory,
+  ) => runCoreHook(hookFile, input, directory, aidlcCommand);
   // Sessions whose session-start hook reached an active workflow.
   const started = new Set<string>();
   // Main sessions that delivered a real human turn. Stop enforcement keys on
@@ -402,7 +336,7 @@ export default async ({
       const args = output.args ?? {};
       if (input.tool === "bash") {
         const command = (args.command as string) ?? "";
-        const violation = aidlcBashBoundaryViolation(command, aidlcEntrypoints);
+        const violation = aidlcBashBoundaryViolation(command);
         if (violation) throw new Error(violation);
       }
 

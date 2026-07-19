@@ -1601,6 +1601,16 @@ export async function collectDoctorReport(
         fix: `verify file exists in ${harness}/hooks/`,
       });
     }
+    if (harness === ".aidlc") {
+      // opencode's adapter is a plugin (its hook seam) in the .opencode shell,
+      // not a hooks/ shim inside the engine dir.
+      const adapterPath = join(projectDir, ".opencode", "plugin", "aidlc-opencode-adapter.ts");
+      results.push({
+        pass: existsSync(adapterPath),
+        label: "plugin/aidlc-opencode-adapter.ts present (hook wiring)",
+        fix: "copy from `dist/opencode/.opencode/plugin/aidlc-opencode-adapter.ts`",
+      });
+    }
   }
 
   // 4. Harness wiring config present. Claude Code: settings.json (hooks +
@@ -1665,6 +1675,22 @@ export async function collectDoctorReport(
         ? "hook trust: merge the shipped native trust-seed.toml entries into $CODEX_HOME/config.toml or run one TUI trust pass"
         : "hook trust: pre-seed [hooks.state] with `bun scripts/package.ts codex trust --project <dir>` or run one TUI trust pass",
     });
+  } else if (harness === ".aidlc") {
+    // opencode: the wiring config is the project-root opencode.json/jsonc
+    // (permissions + the method-include instructions glob) plus the /aidlc
+    // command entry; the plugin adapter is checked with the hook roster above.
+    const opencodeJson = join(projectDir, "opencode.json");
+    const opencodeJsonc = join(projectDir, "opencode.jsonc");
+    results.push({
+      pass: existsSync(opencodeJson) || existsSync(opencodeJsonc),
+      label: "opencode.json or opencode.jsonc present (permissions + method instructions glob)",
+      fix: "copy `dist/opencode/opencode.json` beside .opencode/, or merge it into opencode.jsonc",
+    });
+    results.push({
+      pass: existsSync(join(projectDir, ".opencode", "command", "aidlc.md")),
+      label: ".opencode/command/aidlc.md present (/aidlc entry point)",
+      fix: "copy from `dist/opencode/.opencode/command/aidlc.md`",
+    });
   } else {
     const settingsPath = join(projectDir, harness, "settings.json");
     results.push({
@@ -1677,7 +1703,7 @@ export async function collectDoctorReport(
   // 4b. Dual-harness coexistence (D-11): another harness tree installed AND a
   // workflow active is supported-but-untested — warn (advisory pass with a
   // visible label), never block.
-  const otherTrees = [".claude", ".kiro", ".codex"].filter(
+  const otherTrees = [".claude", ".kiro", ".codex", ".aidlc"].filter(
     (h) => h !== harness && existsSync(join(projectDir, h, "tools", "aidlc-lib.ts")),
   );
   if (
@@ -3225,6 +3251,8 @@ const SCAN_EXCLUDE = new Set([
   ".claude",
   ".kiro",
   ".codex",
+  ".opencode",
+  ".aidlc",
   "aidlc-docs",
   "node_modules",
   ".git",
@@ -5131,15 +5159,18 @@ function handleConfigChange(projectDir: string, flags: Record<string, string>): 
 // set-status — atomically update statusline fields at stage start
 // ---------------------------------------------------------------------------
 
-function handleSetStatus(projectDir: string, flags: Record<string, string>): void {
+export function setStatus(
+  projectDir: string,
+  flags: Record<string, string>,
+): { phase: string; stage: string; agent: string } {
   const sp = stateFilePath(projectDir, flags.intent, flags.space);
-  if (!existsSync(sp)) die("No state file found. Start a workflow first by describing what to build (/aidlc \"build the auth service\").");
+  if (!existsSync(sp)) throw new Error(NO_STATE_FILE_MESSAGE);
 
   const stage = flags.stage;
-  if (!stage) die("--stage is required for set-status");
+  if (!stage) throw new Error("--stage is required for set-status");
 
   const entry = findStageBySlug(stage);
-  if (!entry) die(`Unknown stage: ${stage}`);
+  if (!entry) throw new Error(`Unknown stage: ${stage}`);
 
   const phase = (flags.phase || entry.phase).toUpperCase();
   const agent = flags.agent || entry.lead_agent;
@@ -5154,7 +5185,16 @@ function handleSetStatus(projectDir: string, flags: Record<string, string>): voi
   content = setCheckbox(content, stage, "in-progress");
   writeStateFile(projectDir, content, flags.intent, flags.space);
 
-  process.stdout.write(`${JSON.stringify({ updated: true, phase, stage, agent })}\n`);
+  return { phase, stage, agent };
+}
+
+function handleSetStatus(projectDir: string, flags: Record<string, string>): void {
+  try {
+    const result = setStatus(projectDir, flags);
+    process.stdout.write(`${JSON.stringify({ updated: true, ...result })}\n`);
+  } catch (error) {
+    die(errorMessage(error));
+  }
 }
 
 // ---------------------------------------------------------------------------

@@ -1,14 +1,12 @@
 // covers: file:settings.json
 //
-// t219 - Claude settings must quote CLAUDE_PROJECT_DIR command paths.
+// t219 - Claude settings must use native aidlc commands.
 //
-// Regression pin for issue 519: Claude Code expands the settings.json command
-// strings through a shell, so `bun $CLAUDE_PROJECT_DIR/...` splits when the
-// workspace path contains spaces. The authored harness settings and the
-// generated Claude dist copy must both keep every `$CLAUDE_PROJECT_DIR`
-// occurrence inside double quotes. The permissions glob deliberately leaves the
-// `*` outside the quotes so Claude's Bash matcher still globs:
-// `Bash(bun "$CLAUDE_PROJECT_DIR/.claude/tools/"*)`.
+// Regression pin for issue 519: Claude Code expands settings commands through a
+// shell, so project-relative Bun script paths could split when the workspace
+// path contained spaces. Native installs remove that path argument entirely.
+// The authored settings use the projection token and the generated settings use
+// `aidlc`; neither executable surface may retain Bun or CLAUDE_PROJECT_DIR.
 //
 // Mechanism: none. This reads and parses the two static JSON files on disk,
 // walks only command fields and permission entries (the executable surfaces),
@@ -23,18 +21,16 @@ const SUBJECTS = [
   {
     label: "authored Claude harness settings",
     path: join(REPO_ROOT, "harness", "claude", "settings.json"),
+    invoke: "{{INVOKE}}",
   },
   {
     label: "generated Claude dist settings",
     path: join(REPO_ROOT, "dist", "claude", ".claude", "settings.json"),
+    invoke: "aidlc",
   },
 ] as const;
 
-const PROJECT_DIR = "$CLAUDE_PROJECT_DIR";
-const PROJECT_DIR_RE = /\$CLAUDE_PROJECT_DIR/g;
-const BUG_SHAPE_RE = /(^|[\s(])\$CLAUDE_PROJECT_DIR\b/;
-const EXPECTED_PROJECT_DIR_REFERENCES = 14; // 13 + the reviewer-scope PreToolUse hook
-const EXPECTED_PERMISSION_GLOB = 'Bash(bun "$CLAUDE_PROJECT_DIR/.claude/tools/"*)';
+const EXPECTED_COMMANDS = 13;
 
 interface Settings {
   permissions?: { allow?: unknown };
@@ -74,81 +70,18 @@ function executableSettingsStrings(settings: unknown): string[] {
   return [...collectCommandStrings(settings), ...permissionEntries(settings)];
 }
 
-function projectDirReferenceCount(values: string[]): number {
-  return values.reduce(
-    (count, value) => count + [...value.matchAll(PROJECT_DIR_RE)].length,
-    0,
-  );
-}
-
-function isInsideDoubleQuotes(value: string, index: number): boolean {
-  let inDoubleQuotes = false;
-  let escaped = false;
-
-  for (let i = 0; i < index; i++) {
-    const ch = value[i];
-    if (escaped) {
-      escaped = false;
-      continue;
-    }
-    if (ch === "\\") {
-      escaped = true;
-      continue;
-    }
-    if (ch === '"') inDoubleQuotes = !inDoubleQuotes;
-  }
-
-  return inDoubleQuotes;
-}
-
-function hasClosingDoubleQuote(value: string, index: number): boolean {
-  let escaped = false;
-
-  for (let i = index; i < value.length; i++) {
-    const ch = value[i];
-    if (escaped) {
-      escaped = false;
-      continue;
-    }
-    if (ch === "\\") {
-      escaped = true;
-      continue;
-    }
-    if (ch === '"') return true;
-  }
-
-  return false;
-}
-
-function unquotedProjectDirReferences(value: string): string[] {
-  return [...value.matchAll(PROJECT_DIR_RE)]
-    .filter(
-      (match) =>
-        !isInsideDoubleQuotes(value, match.index) ||
-        !hasClosingDoubleQuote(value, match.index),
-    )
-    .map((match) => value.slice(Math.max(0, match.index - 8)));
-}
-
-describe("t219 Claude settings quote CLAUDE_PROJECT_DIR command paths", () => {
+describe("t219 Claude settings use native commands without project paths", () => {
   for (const subject of SUBJECTS) {
-    test(`${subject.label}: executable settings quote every CLAUDE_PROJECT_DIR reference`, () => {
+    test(`${subject.label}: every executable setting uses the projected native invocation`, () => {
       const settings = readSettings(subject.path);
-      const values = executableSettingsStrings(settings).filter((value) =>
-        value.includes(PROJECT_DIR),
-      );
+      const commands = collectCommandStrings(settings);
+      const values = executableSettingsStrings(settings);
 
-      expect(projectDirReferenceCount(values)).toBe(EXPECTED_PROJECT_DIR_REFERENCES);
-      expect(permissionEntries(settings)).toContain(EXPECTED_PERMISSION_GLOB);
-
-      const unquoted = values.filter((value) =>
-        unquotedProjectDirReferences(value).length > 0,
-      );
-      expect(unquoted).toEqual([]);
-
-      // Pin the original shell-splitting bug shape directly: reverting the fix
-      // to `bun $CLAUDE_PROJECT_DIR/...` trips this even if formatting moves.
-      expect(values.filter((value) => BUG_SHAPE_RE.test(value))).toEqual([]);
+      expect(commands).toHaveLength(EXPECTED_COMMANDS);
+      expect(commands.every((value) => value.startsWith(subject.invoke))).toBe(true);
+      expect(permissionEntries(settings)).toContain(`Bash(${subject.invoke} *)`);
+      expect(values.some((value) => value.includes("CLAUDE_PROJECT_DIR"))).toBe(false);
+      expect(values.some((value) => /\bbun\b/.test(value))).toBe(false);
     });
   }
 });

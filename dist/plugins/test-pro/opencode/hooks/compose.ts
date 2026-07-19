@@ -40,23 +40,26 @@ const HARNESS_DIR = join(PROJECT_DIR, HARNESS_LEAF);
 const STAGES_DIR = join(HARNESS_DIR, "aidlc-common", "stages");
 const SKILLS_DIR = join(HARNESS_DIR, "skills");
 const PHASES = ["initialization", "ideation", "inception", "construction", "operation"];
-const SCOPE_TABLE_BEGIN =
-  "<!-- BEGIN: compiled scope grid via `bun aidlc-utility.ts scope-table` - do NOT hand-edit -->";
+const NATIVE_RUNTIME = Boolean(process.env.AIDLC_COMPILED_EXECUTABLE?.trim());
 const SCOPE_TABLE_END = "<!-- END: compiled scope grid -->";
-const STAGE_TABLE_BEGIN =
-  "<!-- BEGIN: compiled stage graph via `bun aidlc-utility.ts stage-table` - do NOT hand-edit -->";
 const STAGE_TABLE_END = "<!-- END: compiled stage graph -->";
+const SAFE_PLUGIN_KEY = /^[a-z][a-z0-9-]*$/;
 
 function pluginNameFromRoot(): string {
+  const supplied = process.env.AIDLC_PLUGIN_KEY?.trim();
+  if (supplied && SAFE_PLUGIN_KEY.test(supplied)) return supplied;
   if (!PLUGIN_ROOT) return "plugin";
-  const fromContent = firstPluginFieldInPlugin();
-  if (fromContent) return fromContent;
   for (const md of [".claude-plugin", ".codex-plugin", ".kiro-plugin"]) {
     try {
       const m = JSON.parse(readFileSync(join(PLUGIN_ROOT, md, "plugin.json"), "utf-8"));
-      if (typeof m?.name === "string" && m.name) return m.name;
+      if (typeof m?.name === "string" && m.name.startsWith("aidlc-")) {
+        const key = m.name.slice("aidlc-".length);
+        if (SAFE_PLUGIN_KEY.test(key)) return key;
+      }
     } catch { /* try next / fall through */ }
   }
+  const fromContent = firstPluginFieldInPlugin();
+  if (fromContent) return fromContent;
   const parts = PLUGIN_ROOT.replace(/\\/g, "/").replace(/\/+$/, "").split("/");
   return parts[parts.length - 2] || parts[parts.length - 1] || "plugin";
 }
@@ -91,7 +94,8 @@ function firstPluginFieldInPlugin(): string | null {
 // plugin-root basename: a projection root is `dist/plugins/<name>/<harness>`, so
 // its basename is the harness leaf (claude/kiro), shared by every plugin — keying
 // on it would let two plugins on one harness clobber each other's drops/retry
-// files. Prefer the manifest `name`; fall back to the parent-dir <name> segment.
+// files. Transactional sync injects the normalized host-manifest key; direct
+// compatibility composition derives the same key from that manifest.
 const PLUGIN_NAME = pluginNameFromRoot();
 const PLUGIN_KEY = PLUGIN_NAME.replace(/[^\w.-]/g, "_");
 
@@ -185,7 +189,10 @@ function selectCommandForPlugin(): string {
   const selected = selectedPlugins();
   const names = new Set<string>(selected ?? ["aidlc"]);
   names.add(PLUGIN_NAME);
-  return `bun ${HARNESS_LEAF}/tools/aidlc-utility.ts select-plugins ${[...names].sort().join(",")}`;
+  const selection = [...names].sort().join(",");
+  return NATIVE_RUNTIME
+    ? `aidlc plugin select ${selection}`
+    : `bun ${HARNESS_LEAF}/tools/aidlc-utility.ts select-plugins ${selection}`;
 }
 
 function installedToolCommand(tool: "utility" | "graph" | "runner", args: string[]): string[] {
@@ -222,7 +229,6 @@ function installedToolEnv(): NodeJS.ProcessEnv {
 
 function refreshSkillGeneratedRegion(
   verb: "scope-table" | "stage-table",
-  beginMarker: string,
   endMarker: string,
 ): void {
   const skillMd = installedOrchestratorSkillPath();
@@ -232,11 +238,15 @@ function refreshSkillGeneratedRegion(
   }
 
   const before = readFileSync(skillMd, "utf-8").replace(/\r\n/g, "\n");
-  if (!before.includes(beginMarker)) {
+  const kind = verb === "stage-table" ? "stage graph" : "scope grid";
+  const beginMatch = before.match(
+    new RegExp(`<!-- BEGIN: compiled ${kind}[^\\n]* -->`),
+  );
+  if (!beginMatch || beginMatch.index === undefined) {
     recordDrop(`${verb} refresh skipped: SKILL.md missing BEGIN marker`, "advisory");
     return;
   }
-  const beginIdx = before.indexOf(beginMarker);
+  const beginIdx = beginMatch.index;
   const endIdx = before.indexOf(endMarker, beginIdx);
   if (endIdx === -1) {
     recordDrop(`${verb} refresh failed: SKILL.md missing END marker after BEGIN marker`);
@@ -255,7 +265,10 @@ function refreshSkillGeneratedRegion(
   }
 
   const region = (r.stdout || "").replace(/\r\n/g, "\n").replace(/\n$/, "");
-  if (!region.includes(beginMarker) || !region.includes(endMarker)) {
+  if (
+    !new RegExp(`<!-- BEGIN: compiled ${kind}[^\\n]* -->`).test(region) ||
+    !region.includes(endMarker)
+  ) {
     recordDrop(`aidlc-utility ${verb} emitted an invalid generated region`);
     return;
   }
@@ -367,6 +380,13 @@ function installedNameCollisionPrecheck(dst: string, kind: "agents" | "scopes"):
     // plugin: would generate a runner dir on core's `aidlc-<name>` path and
     // silently clobber it. Reject the file, mirroring the compile-side guard.
     const declaredPlugin = frontmatter(content).match(/^plugin:\s*(.+)$/m)?.[1].trim();
+    if (declaredPlugin !== PLUGIN_NAME) {
+      recordDrop(
+        `plugin "${PLUGIN_NAME}" ${kind} file "${relative(PLUGIN_ROOT, file)}" declares plugin "${declaredPlugin ?? ""}"; expected "${PLUGIN_NAME}"; not copied`,
+        "degraded",
+      );
+      return false;
+    }
     if (declaredPlugin?.startsWith("aidlc-")) {
       recordDrop(
         `plugin "${PLUGIN_NAME}" ${kind} file "${relative(PLUGIN_ROOT, file)}" declares plugin "${declaredPlugin}"; the "aidlc-" prefix is reserved for core (it collides with core runner paths); not copied`,
@@ -492,7 +512,9 @@ async function installedStageSchemaPrecheck(): Promise<CopyPrecheck> {
       const fmBlock = frontmatter(content);
       const declaredPlugin = fmBlock.match(/^plugin:\s*(.+)$/m)?.[1].trim();
       const declaredSlug = fmBlock.match(/^slug:\s*(.+)$/m)?.[1].trim() ?? "";
-      if (declaredPlugin === "aidlc") {
+      if (declaredPlugin !== PLUGIN_NAME) {
+        errors = [`declares plugin "${declaredPlugin ?? ""}"; expected "${PLUGIN_NAME}" from the host manifest`];
+      } else if (declaredPlugin === "aidlc") {
         errors = ['declares plugin "aidlc"; omit plugin for core stages'];
       } else if (declaredPlugin?.startsWith("aidlc-")) {
         errors = [`declares plugin "${declaredPlugin}"; the "aidlc-" prefix is reserved for core (a plugin named aidlc-<x> collides with core runner paths)`];
@@ -889,6 +911,12 @@ try {
       // so a plugin containing `:` would break the peer-block scan's `[^:]+` and
       // silently misorder splices. Reject it up front (round-6).
       if (plugin.includes(":")) { recordDrop(`contribution "${file}" has an invalid plugin "${plugin}" (must not contain ':'); skipped`); continue; }
+      if (plugin !== PLUGIN_NAME) {
+        recordDrop(
+          `contribution "${file}" declares plugin "${plugin}"; expected "${PLUGIN_NAME}" from the host manifest; skipped`,
+        );
+        continue;
+      }
       const stageFile = findStageFile(target);
       if (!stageFile) { recordDrop(`contribution "${file}" targets missing stage "${target}"`); continue; }
 
@@ -1157,8 +1185,8 @@ try {
       if (retryPending) {
         try { rmSync(retryMarker, { force: true }); } catch { /* best-effort */ }
       }
-      refreshSkillGeneratedRegion("stage-table", STAGE_TABLE_BEGIN, STAGE_TABLE_END);
-      refreshSkillGeneratedRegion("scope-table", SCOPE_TABLE_BEGIN, SCOPE_TABLE_END);
+      refreshSkillGeneratedRegion("stage-table", STAGE_TABLE_END);
+      refreshSkillGeneratedRegion("scope-table", SCOPE_TABLE_END);
     }
   }
 

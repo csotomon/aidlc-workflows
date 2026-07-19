@@ -19,7 +19,7 @@
 // reached only through `main()` at :1965 via the `next` case at :1984). The
 // directive lands on stdout through `console.log`; errors land through the
 // composed sibling tools the non-happy-path branches shell out to
-// (aidlc-jump.ts resolve/execute, aidlc-utility.ts resolve-env-scope /
+// (`aidlc __delegate jump` resolve/execute, `aidlc __delegate utility` resolve-env-scope /
 // init — none importable, all spawned). An in-process twin
 // would forfeit both the stdout-JSON seam AND the real-tool composition the
 // branches depend on. So all `next` invocations stay spawns. Mirrors the .sh's
@@ -64,7 +64,7 @@
 //   :858 Branch 3b UNCONDITIONAL invalid --scope -> "Unknown scope ...".
 //   :873 Branch 4  env source -> shells resolve-env-scope -> verbatim "Invalid AWS_AIDLC_DEFAULT_SCOPE ...".
 //   :934 Branch 5  scope-change print ("scope-change --scope <s>").
-//  :1034 Branch 7  --stage/--phase jump -> emitJumpDirective; with-state -> print "aidlc-jump.ts execute --target ... --direction ...".
+//  :1034 Branch 7  --stage/--phase jump -> emitJumpDirective; with-state -> print the native jump execute route.
 //  :1116 Branch 10 happy path -> run-stage for the in-flight current stage.
 //   :754 computeGate -> gate:true for every EXECUTE stage except initialization (the gate axis is NOT the execution axis).
 
@@ -195,7 +195,7 @@ describe("t114 scope precedence + validation", () => {
   });
 
   test("8: invalid env scope -> verbatim AWS_AIDLC_DEFAULT_SCOPE error", () => {
-    // The env path validates by composing `aidlc-utility.ts resolve-env-scope`,
+    // The env path validates by composing `aidlc __delegate utility resolve-env-scope`,
     // which owns the canonical `Invalid AWS_AIDLC_DEFAULT_SCOPE "..."` wording.
     proj = createTestProject();
     const out = runNext(proj, [], {
@@ -239,7 +239,7 @@ describe("t114 help-request routing", () => {
     proj = createTestProject();
     const out = runNext(proj, ["help"]).out;
     expect(out).toContain('"kind":"print"');
-    expect(out).toContain("aidlc-utility.ts help");
+    expect(out).toContain("aidlc __delegate utility help");
     expect(out).not.toContain('"kind":"ask"');
   });
 
@@ -247,7 +247,7 @@ describe("t114 help-request routing", () => {
     proj = createTestProject();
     const out = runNext(proj, ["-h"]).out;
     expect(out).toContain('"kind":"print"');
-    expect(out).toContain("aidlc-utility.ts help");
+    expect(out).toContain("aidlc __delegate utility help");
     expect(out).not.toContain('"kind":"ask"');
   });
 
@@ -263,16 +263,16 @@ describe("t114 help-request routing", () => {
     proj = createTestProject();
     const out = runNext(proj, ["intent", "help"]).out;
     expect(out).toContain('"kind":"print"');
-    expect(out).toContain("aidlc-utility.ts help");
-    expect(out).not.toContain("aidlc-utility.ts intent help");
+    expect(out).toContain("aidlc __delegate utility help");
+    expect(out).not.toContain("aidlc __delegate utility intent help");
   });
 
   test("`space help` -> global help print, not a switch to a space named help", () => {
     proj = createTestProject();
     const out = runNext(proj, ["space", "help"]).out;
     expect(out).toContain('"kind":"print"');
-    expect(out).toContain("aidlc-utility.ts help");
-    expect(out).not.toContain("aidlc-utility.ts space help");
+    expect(out).toContain("aidlc __delegate utility help");
+    expect(out).not.toContain("aidlc __delegate utility space help");
   });
 
   test("`help` inside a longer description stays freeform intent text", () => {
@@ -287,7 +287,7 @@ describe("t114 help-request routing", () => {
     proj = createTestProject();
     const out = runNext(proj, ["intent", "-h"]).out;
     expect(out).toContain('"kind":"print"');
-    expect(out).toContain("aidlc-utility.ts help");
+    expect(out).toContain("aidlc __delegate utility help");
   });
 
   test("`space -h` routes to help like `space help`", () => {
@@ -296,8 +296,8 @@ describe("t114 help-request routing", () => {
     proj = createTestProject();
     const out = runNext(proj, ["space", "-h"]).out;
     expect(out).toContain('"kind":"print"');
-    expect(out).toContain("aidlc-utility.ts help");
-    expect(out).not.toContain("aidlc-utility.ts space -h");
+    expect(out).toContain("aidlc __delegate utility help");
+    expect(out).not.toContain("aidlc __delegate utility space -h");
   });
 
   test("a marker-led blob stays freeform and reaches the safe ask funnel", () => {
@@ -308,7 +308,7 @@ describe("t114 help-request routing", () => {
     proj = createTestProject();
     const out = runNext(proj, ["/aidlc intent help"]).out;
     expect(out).toContain('"kind":"ask"');
-    expect(out).not.toContain("aidlc-utility.ts intent");
+    expect(out).not.toContain("aidlc __delegate utility intent");
   });
 });
 
@@ -320,14 +320,14 @@ describe("t114 with-state jump -> execute print", () => {
     // state-mid-ideation is feature scope, Current Stage=feasibility; --phase
     // construction resolves forward to functional-design. A jump against an
     // existing workflow is a MUTATION, and `next` is read-only — so the engine
-    // emits a `print` naming `aidlc-jump.ts execute`, carrying the tool-resolved
+    // emits a `print` naming the native jump execute route, carrying the tool-resolved
     // target + direction.
     proj = createTestProject();
     seedStateFile(proj, MID_IDEATION);
     const out = runNext(proj, ["--phase", "construction"]).out;
     expect(out).toContain('"kind":"print"');
     expect(out).toContain(
-      "aidlc-jump.ts execute --target functional-design --direction forward",
+      "aidlc __delegate jump execute --target functional-design --direction forward",
     );
   });
 });
@@ -379,42 +379,42 @@ describe("t114 cutover: no --args swallow", () => {
 // Workspace navigation verbs route through the conductor (Branch 1b). A LEADING
 // space/space-create/intent token is the explicit "cd" between teams/intents
 // (workspace-vision §3). It dispatches BEFORE any state inspection and maps to a
-// TERMINAL print naming the deterministic aidlc-utility.ts handler, so the
+// TERMINAL print naming the deterministic native utility handler, so the
 // engine never treats it as freeform new-work text that advances the active
 // intent (the bug this fixes). The handler itself branches list-vs-switch on the
 // <name> arg, so the engine just passes args[1] through when present.
 // ===========================================================================
 describe("t114 workspace verbs -> terminal print naming the handler", () => {
-  test("20: `space teamB` -> print naming aidlc-utility.ts space teamB (switch, not freeform)", () => {
+  test("20: `space teamB` -> print naming the native utility space route (switch, not freeform)", () => {
     proj = createTestProject();
     const out = runNext(proj, ["space", "teamB"]).out;
     expect(out).toContain('"kind":"print"');
-    expect(out).toContain("aidlc-utility.ts space teamB");
+    expect(out).toContain("aidlc __delegate utility space teamB");
     // It must NOT be misread as a new-work freeform intent that advances state.
     expect(out).not.toContain('"kind":"run-stage"');
   });
 
-  test("21: bare `space` (no arg) -> print naming aidlc-utility.ts space (read-only listing)", () => {
+  test("21: bare `space` (no arg) -> print naming the native utility space route (read-only listing)", () => {
     proj = createTestProject();
     const out = runNext(proj, ["space"]).out;
     expect(out).toContain('"kind":"print"');
-    expect(out).toContain("aidlc-utility.ts space");
+    expect(out).toContain("aidlc __delegate utility space");
     // No trailing name arg leaks into the directive.
-    expect(out).not.toContain("aidlc-utility.ts space ");
+    expect(out).not.toContain("aidlc __delegate utility space ");
   });
 
-  test("22: `intent some-slug` -> print naming aidlc-utility.ts intent some-slug", () => {
+  test("22: `intent some-slug` -> print naming the native utility intent route", () => {
     proj = createTestProject();
     const out = runNext(proj, ["intent", "some-slug"]).out;
     expect(out).toContain('"kind":"print"');
-    expect(out).toContain("aidlc-utility.ts intent some-slug");
+    expect(out).toContain("aidlc __delegate utility intent some-slug");
   });
 
-  test("23: `space-create teamB` -> print naming aidlc-utility.ts space-create teamB", () => {
+  test("23: `space-create teamB` -> print naming the native utility space-create route", () => {
     proj = createTestProject();
     const out = runNext(proj, ["space-create", "teamB"]).out;
     expect(out).toContain('"kind":"print"');
-    expect(out).toContain("aidlc-utility.ts space-create teamB");
+    expect(out).toContain("aidlc __delegate utility space-create teamB");
   });
 
   test("24: REGRESSION -- freeform containing 'space' NOT as leading token stays freeform (i===0 guard)", () => {
@@ -423,7 +423,7 @@ describe("t114 workspace verbs -> terminal print naming the handler", () => {
     // space-switch print naming the workspace handler.
     proj = createTestProject();
     const out = runNext(proj, ["add", "a", "settings", "space"]).out;
-    expect(out).not.toContain("aidlc-utility.ts space");
+    expect(out).not.toContain("aidlc __delegate utility space");
   });
 });
 

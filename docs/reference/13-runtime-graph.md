@@ -389,14 +389,14 @@ load-bearing tenet documented in
 Runtime-graph compile is data-plane substrate that must be observable
 from outside any specific session. Coupling it to LLM-invoked tools
 means LLM omission breaks the determinism guarantee — if the
-conductor forgets to call `aidlc-orchestrate.ts report --stage <slug> --result approved` after a human
+conductor forgets to call `aidlc __delegate orchestrate report --stage <slug> --result approved` after a human
 clicks Approve, the audit row never appends AND the compile never
 fires; runtime-graph silently lags, recovery substrate is corrupt.
 
-The PostToolUse Bash hook fires on the conductor's actual
-subprocess invocation regardless of what the LLM does next. The
-audit-emit-side seam (`bun aidlc-(state|jump|bolt|utility).ts`) is
-the deterministic anchor.
+The PostToolUse Bash hook fires on the conductor's actual command invocation
+regardless of what the LLM does next. The audit-emitting hidden dispatcher
+routes (`aidlc __delegate state ...`, `jump ...`, `bolt ...`, and
+`utility ...`) are the deterministic anchor.
 
 ---
 

@@ -475,7 +475,15 @@ describe("t205: approve-time gate-revision backstop", () => {
     const mainShard = seededAuditShard(proj);
     const cloneShard = join(seededAuditDir(proj), "0-aaa.md");
     const body = readFileSync(mainShard, "utf-8");
-    const blocks = body.split("\n---\n");
+    let ordinal = 0;
+    const blocks = body.split("\n---\n").map((block) => {
+      if (!block.includes("**Event**:")) return block;
+      const second = String(ordinal++).padStart(2, "0");
+      return block.replace(
+        /^\*\*Timestamp\*\*: .+$/m,
+        `**Timestamp**: 2025-01-01T00:00:${second}Z`,
+      );
+    });
     // Keep header + first events in main; last two event blocks go to the clone.
     const cut = blocks.length - 2;
     writeFileSync(mainShard, blocks.slice(0, cut).join("\n---\n"), "utf-8");

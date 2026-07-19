@@ -743,6 +743,22 @@ export function classifyTerminalCommand(args: string[]): TerminalCommand | null 
 // strings match, which is a pre-existing class shared with the old detectors.
 // That direction fails closed: over-detection nudges, never releases.
 
+// Authored methodology uses the native dispatcher's hidden tool route while the
+// public CLI keeps the shorter workflow grammar. Canonicalize only the engine
+// tools these detectors own so both spellings share one classification policy.
+// Other delegated tools remain untouched.
+function canonicalEngineCommand(text: string): string {
+  return text
+    .replace(
+      /\baidlc\s+__delegate\s+(orchestrate|state|jump|bolt|swarm)\b/g,
+      "aidlc $1",
+    )
+    .replace(
+      /\baidlc\s+__delegate\s+utility\s+(status|doctor|version|help)\b/g,
+      "aidlc $1",
+    );
+}
+
 // A workflow-engine tool call: a Bash invocation of legacy
 // aidlc-orchestrate/aidlc-state, a new-grammar `aidlc ...` engine command, or a
 // tool whose name itself references aidlc. These are the calls that mean "the
@@ -756,7 +772,9 @@ export function isEngineToolCall(name: string, input: unknown): boolean {
       : "";
   // The command text to inspect: a Bash/Shell command, or (for harnesses that
   // surface the tool by name) the tool name itself.
-  const text = /^(bash|shell|execute_bash)$/i.test(name) ? cmd : name;
+  const text = canonicalEngineCommand(
+    /^(bash|shell|execute_bash)$/i.test(name) ? cmd : name,
+  );
   // Fast reject: no AIDLC engine/state/workspace tool named at all -> not a
   // workflow engagement (a chat turn that ran git/cat/ls etc.).
   if (
@@ -919,16 +937,18 @@ const runtimeCompileSelf = new RegExp(
 export function classifyRuntimeCompileCommand(
   command: string,
 ): "reject" | "fire" | "pass" {
-  const invokesRuntime = shellCommandSegments(command)
-    .some((segment) => /^\s*aidlc\s+runtime\b/.test(segment));
+  const canonical = canonicalEngineCommand(command);
+  const invokesRuntime = shellCommandSegments(command).some((segment) =>
+    /^\s*aidlc\s+(?:__delegate\s+)?runtime\s+compile\b/.test(segment)
+  );
   if (runtimeCompileSelf.test(command) || invokesRuntime) {
     return "reject";
   }
   if (
-    runtimeCompileTool.test(command) ||
-    runtimeCompileReport.test(command) ||
-    /\baidlc\s+(?:state|jump|bolt)\b|\baidlc\s+(?:status|doctor|version|help)\b|\baidlc\s+scope\s+change\b|\baidlc\s+config\s+set\b/.test(command) ||
-    /\baidlc\s+report\b|\baidlc\s+orchestrate\s+report\b|\baidlc\s+next\b.*\breport\b/.test(command)
+    runtimeCompileTool.test(canonical) ||
+    runtimeCompileReport.test(canonical) ||
+    /\baidlc\s+(?:state|jump|bolt)\b|\baidlc\s+(?:status|doctor|version|help)\b|\baidlc\s+scope\s+change\b|\baidlc\s+config\s+set\b/.test(canonical) ||
+    /\baidlc\s+report\b|\baidlc\s+orchestrate\s+report\b|\baidlc\s+next\b.*\breport\b/.test(canonical)
   ) {
     // Utility split rationale: the new grammar keeps D2 parity for the public
     // one-shots (status/doctor/version/help fire, because the old regex catches

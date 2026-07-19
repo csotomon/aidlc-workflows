@@ -8,7 +8,7 @@ prerequisites.
 
 ## Install
 
-Choose one harness: `claude`, `kiro`, `kiro-ide`, or `codex`.
+Choose one harness: `claude`, `kiro`, `kiro-ide`, `codex`, or `opencode`.
 
 macOS and Linux:
 
@@ -120,6 +120,7 @@ Successful init prints the matching host next step:
 | Kiro CLI | Run `kiro-cli chat`, then `/aidlc --doctor` |
 | Kiro IDE | Open the project in Kiro IDE, then run `/aidlc --doctor` |
 | Codex CLI | Run `codex`, then `$aidlc --doctor` |
+| OpenCode | Run `opencode`, then `/aidlc --doctor` |
 
 ## Upgrade, Roll Back, and Retain Versions
 

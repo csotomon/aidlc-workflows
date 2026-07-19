@@ -2,7 +2,7 @@
 # Codex's NATIVE rules dir (this file), distinct from the AIDLC markdown rule
 # layers at .codex/aidlc-rules/ (D-10 rename).
 #
-# Native runtime allowlist: the release projection invokes the self-contained binary.
+# Native runtime allowlist: framework commands invoke the self-contained binary.
 prefix_rule(pattern = ["aidlc"], decision = "allow")
 
 # Git allow-rules (S9d): workspace-write keeps .git read-only in-sandbox and

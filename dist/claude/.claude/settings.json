@@ -7,11 +7,11 @@
       "Read",
       "Edit",
       "Write",
+      "Bash(aidlc *)",
       "Glob",
       "Grep",
       "Task",
-      "WebSearch",
-      "Bash(aidlc *)"
+      "WebSearch"
     ]
   },
   "statusLine": {

@@ -21,6 +21,7 @@ const CORE_HOOKS = [
   "aidlc-audit-logger.ts",
   "aidlc-log-subagent.ts",
   "aidlc-mint-presence.ts",
+  "aidlc-reviewer-scope.ts",
   "aidlc-runtime-compile.ts",
   "aidlc-sensor-fire.ts",
   "aidlc-session-end.ts",

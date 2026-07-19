@@ -113,7 +113,7 @@ Architect synthesizes scan results into 9 artifacts:
 Run the read-only tool
 
 ```
-bun {{HARNESS_DIR}}/tools/aidlc-utility.ts codekb-path --repo <repo>
+{{INVOKE}} __delegate utility codekb-path --repo <repo>
 ```
 
 (omit `--repo` for a single/unrecorded repo — the engine resolves the repo name).

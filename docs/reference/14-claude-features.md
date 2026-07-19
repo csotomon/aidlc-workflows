@@ -154,10 +154,10 @@ Each file carries topical `##` headings (Way of Working, Testing Posture, Deploy
 The rule files are not static — the v0.5.0 learning loop turns an in-workflow correction into a standing rule for next time. The division of labor is deliberate: the LLM's only job is to write observations to the stage's `memory.md` diary while the stage runs (Interpretations / Deviations / Tradeoffs / Open questions). Everything else is a deterministic tool or a human decision:
 
 1. **Diary (LLM).** During the stage, observations accumulate in the intent's record dir at `<record>/<phase>/<stage>/memory.md` (`<record>/` = `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/`).
-2. **Surface (tool).** At the approval gate, `aidlc-learnings.ts surface` reads the diary and emits structured candidates — the LLM does not re-parse or classify.
+2. **Surface (tool).** At the approval gate, `aidlc __delegate learnings surface` reads the diary and emits structured candidates — the LLM does not re-parse or classify.
 3. **Confirm (human).** The conductor renders the candidates; you pick which to keep and, for free-text additions, pick the single heading that derives the destination.
 4. **Admission check (knowledge).** Each kept learning is checked against `org.md`'s matching section; a contradiction is surfaced for you to revise, skip, or escalate.
-5. **Persist (tool).** `aidlc-learnings.ts persist` writes each confirmed learning as a practice to `aidlc/spaces/<space>/memory/{project,team}.md` as dated entries and, for a sensor-binding learning, installs the manifest plus the stage `sensors:` import inside one locked transaction. It emits `RULE_LEARNED` / `SENSOR_PROPOSED`.
+5. **Persist (tool).** `aidlc __delegate learnings persist` writes each confirmed learning as a practice to `aidlc/spaces/<space>/memory/{project,team}.md` as dated entries and, for a sensor-binding learning, installs the manifest plus the stage `sensors:` import inside one locked transaction. It emits `RULE_LEARNED` / `SENSOR_PROPOSED`.
 
 The user-facing walk-through (with a worked example) is in [Rules and the Learning Loop](../guide/09-rules-and-the-learning-loop.md); the harness-engineer authoring angle is in [Rules and the Learning Loop](../harness-engineering/05-rules-and-the-loop.md).
 
@@ -233,14 +233,14 @@ Runs periodically (not just on tool use) to keep the terminal status current.
     "matcher": "",
     "hooks": [{
       "type": "command",
-      "command": "bun \"$CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-session-start.ts\""
+      "command": "aidlc hook session-start"
     }]
   }],
   "SessionEnd": [{
     "matcher": "",
     "hooks": [{
       "type": "command",
-      "command": "bun \"$CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-session-end.ts\""
+      "command": "aidlc hook session-end"
     }]
   }]
 }

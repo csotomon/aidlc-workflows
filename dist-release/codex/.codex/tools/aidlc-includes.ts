@@ -7,6 +7,7 @@
 //   • Claude — an @-import stub at <harness>/rules/aidlc.md naming each method file.
 //   • Kiro / Kiro-IDE — a `resources` glob in each agents/*.json.
 //   • Codex — the AIDLC_RULES_DIR env var in config.toml.
+//   • opencode — the `instructions` glob in the project-root opencode.json.
 //
 // These surfaces stay COMMITTED (each carries load-bearing engine wiring beyond
 // the include — Kiro's agent JSON holds the conductor prompt + hook block,
@@ -14,8 +15,8 @@
 // gitignored+generated without a fresh-clone chicken-and-egg). They ship pointed
 // at the `default` space. `repointHarnessIncludes(projectDir, space)` does a
 // SURGICAL in-place rewrite of ONLY the `aidlc/spaces/<X>/memory` pointer
-// segment, leaving every other byte untouched. Identical treatment for all three
-// harnesses — no file is created, regenerated whole, or special-cased.
+// segment, leaving every other byte untouched. Identical treatment for all
+// harnesses. No file is created, regenerated whole, or special-cased.
 //
 // It runs at two moments: bootstrap (first `/aidlc` / --doctor / SessionStart —
 // idempotent no-op when the pointer already matches the active space) and on a
@@ -105,6 +106,28 @@ function repointCodexConfig(raw: string, space: string): string | null {
   return next === raw ? null : next;
 }
 
+/** Rewrite the method glob in an opencode.json/jsonc `instructions` array to
+ *  the given space, preserving comments, trailing commas, and every byte
+ *  outside the one matching string. Returns null when there is no method glob
+ *  or it already matches. */
+function repointOpencodeInstructions(raw: string, space: string): string | null {
+  const target = `${spaceMemoryRel(space)}/**/*.md`;
+  const next = raw.replace(
+    /(")aidlc\/spaces\/[^/"]+\/memory\/\*\*\/\*\.md(")/g,
+    `$1${target}$2`,
+  );
+  return next === raw ? null : next;
+}
+
+/** Rewrite active-space memory paths in an opencode persona body. */
+function repointOpencodeAgentMemory(raw: string, space: string): string | null {
+  const next = raw.replace(
+    /aidlc\/spaces\/[^/]+\/memory\//g,
+    `${spaceMemoryRel(space)}/`,
+  );
+  return next === raw ? null : next;
+}
+
 /** Surgically repoint a single committed include file to `space` using `rewrite`,
  *  writing atomically only when the content changes. Records the workspace-
  *  relative path in `written`. Absent / unreadable / malformed → skipped (the
@@ -176,6 +199,51 @@ export function repointHarnessIncludes(projectDir: string, space?: string): stri
       const raw = readSafe(configPath);
       if (raw !== null) {
         repointFile(configPath, join(harness, "config.toml"), raw, sp, repointCodexConfig, written);
+      }
+    }
+    return written;
+  }
+
+  if (harness === ".aidlc") {
+    // opencode (engine dir .aidlc): opencode reads the project-root
+    // opencode.json/jsonc, whose `instructions` glob is the method include.
+    const jsonPath = join(projectDir, "opencode.json");
+    const jsoncPath = join(projectDir, "opencode.jsonc");
+    for (const [configPath, relPath] of [
+      [jsonPath, "opencode.json"],
+      [jsoncPath, "opencode.jsonc"],
+    ] as const) {
+      if (!existsSync(configPath)) continue;
+      const raw = readSafe(configPath);
+      if (raw !== null) {
+        repointFile(
+          configPath,
+          relPath,
+          raw,
+          sp,
+          repointOpencodeInstructions,
+          written,
+        );
+      }
+    }
+    // Inline and native persona bodies carry explicit method paths for
+    // on-demand reads. Keep both aligned with the active-space cursor.
+    for (const relDir of [join(".aidlc", "agents"), join(".opencode", "agents")]) {
+      const agentsDir = join(projectDir, relDir);
+      if (!existsSync(agentsDir)) continue;
+      for (const name of readdirSync(agentsDir).sort()) {
+        if (!name.endsWith(".md")) continue;
+        const p = join(agentsDir, name);
+        const raw = readSafe(p);
+        if (raw === null) continue;
+        repointFile(
+          p,
+          join(relDir, name),
+          raw,
+          sp,
+          repointOpencodeAgentMemory,
+          written,
+        );
       }
     }
     return written;

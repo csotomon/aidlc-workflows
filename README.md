@@ -83,7 +83,7 @@ aidlc init
 aidlc doctor
 ```
 
-Replace `claude` with `kiro`, `kiro-ide`, or `codex`. On Windows, download
+Replace `claude` with `kiro`, `kiro-ide`, `codex`, or `opencode`. On Windows, download
 `install.ps1`, run `install.ps1 -Harness <name>`, then run the same `aidlc init`
 and `aidlc doctor` commands. The native runtime needs neither Bun nor Node.js.
 Configure your harness and model provider before the first chat session.
@@ -234,19 +234,16 @@ The shipped project `opencode.json` pins no session model — your global openco
 **2. Set up your project**
 
 ```bash
-cp -r dist/opencode/.aidlc/    your-project/.aidlc/     # the AIDLC engine (opencode never scans it)
-cp -r dist/opencode/.opencode/ your-project/.opencode/  # native shell: subagents + /aidlc command + adapter plugin
-cp -r dist/opencode/aidlc/     your-project/aidlc/      # the workspace shell — a sibling of .aidlc/, not inside it
-cp dist/opencode/opencode.json your-project/opencode.json  # or merge into yours (keep skills.paths + instructions + permissions)
-cp dist/opencode/AGENTS.md     your-project/AGENTS.md      # or merge into yours
+aidlc init --project-dir your-project --from "$PWD/dist/opencode" --harness opencode
 ```
 
 The engine deliberately lives in `.aidlc/`, NOT `.opencode/` — opencode auto-imports `.opencode/tools/*.ts` as custom tools, which would crash on the engine's CLI scripts. `opencode.json`'s `skills.paths` points opencode at `.aidlc/skills` for discovery.
 
-After copying, apply the `.gitignore` entries from the shipped `AGENTS.md` before your first workflow, then verify:
+Initialization merges the managed `opencode.json`, `.gitignore`, and `AGENTS.md`
+content without replacing project-owned entries. Verify:
 
 ```bash
-bun .aidlc/tools/aidlc-utility.ts doctor
+aidlc doctor
 ```
 
 Invoke the orchestrator with `/aidlc` followed by a scope or description. The [opencode guide](docs/guide/harnesses/opencode.md) covers the split layout, the adapter plugin, and what differs on this harness in full.
@@ -303,7 +300,7 @@ aidlc-claude/
 │   ├── kiro-ide/{AGENTS.md, .kiro/}          # what Kiro IDE users copy
 │   ├── kiro/{AGENTS.md, .kiro/}              # what Kiro CLI users copy
 │   ├── codex/{AGENTS.md, .agents/, .codex/}  # what Codex CLI users copy
-│   └── plugins/<name>/{claude,codex,kiro,kiro-ide}/  # one real host plugin per harness — install alongside dist/<harness>/
+│   └── plugins/<name>/{claude,codex,kiro,kiro-ide,opencode}/  # one real host plugin per harness — install alongside dist/<harness>/
 ├── dist-release/               # GENERATED binary-invocation projections packaged into release archives
 │
 │  ─────────── SUPPORTING ───────────

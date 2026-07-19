@@ -613,10 +613,9 @@ function checkEnum(
 
 // --- CLI self-check ---
 //
-// `bun aidlc-directive.ts` constructs one well-formed example of each of the 9
-// kinds, validates each, prints one line per kind ("<kind>: VALID" or the
-// errors), and exits 0 iff all 9 validate. Satisfies the acceptance check
-// "bun .../aidlc-directive.ts validates the 9 kinds".
+// This module's CLI self-check constructs one well-formed example of each of
+// the 9 kinds, validates each, prints one line per kind ("<kind>: VALID" or the
+// errors), and exits 0 iff all 9 validate.
 if (import.meta.main) {
   // One well-formed example per kind. run-stage mirrors the engine design's example
   // directive verbatim (application-design); the others follow the same catalogue table.

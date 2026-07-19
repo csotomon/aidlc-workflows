@@ -13,6 +13,7 @@ import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   type ClaudeCodeHookInput,
+  errorMessage,
   getField,
   hookDebug,
   hooksHealthDir,
@@ -22,10 +23,11 @@ import {
   parseCheckboxes,
   readAllAuditShards,
   readStateFile,
+  recordHookDrop,
   resolveProjectDirFromHook,
   stateFilePath,
-  harnessDir,
 } from "../tools/aidlc-lib.ts";
+import { setStatus } from "../tools/aidlc-utility.ts";
 
 export async function run(input: string): Promise<number> {
 const projectDir = resolveProjectDirFromHook(import.meta.url);
@@ -105,13 +107,13 @@ const healthDir = hooksHealthDir(projectDir);
 mkdirSync(healthDir, { recursive: true });
 writeFileSync(join(healthDir, "sync-statusline.last"), isoTimestamp(), "utf-8");
 
-// Update state file via set-status (call the utility tool directly)
-const toolPath = join(projectDir, harnessDir(), "tools", "aidlc-utility.ts");
+// Update state through the same utility implementation as the CLI route.
 hookDebug(projectDir, "sync-statusline", "set-status", { slug });
-Bun.spawnSync(["bun", toolPath, "set-status", "--stage", slug, "--project-dir", projectDir], {
-  stdout: "ignore",
-  stderr: "ignore",
-});
+try {
+  setStatus(projectDir, { stage: slug });
+} catch (error) {
+  recordHookDrop(projectDir, "sync-statusline", errorMessage(error));
+}
 return 0;
 }
 

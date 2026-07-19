@@ -126,6 +126,30 @@ describe("t145 packaging parity — dist/ is in sync with core/ + harness/", () 
     expect(res.status).toBe(0);
     expect(res.stdout).toContain("[claude] --check: OK");
   }, CHECK_TIMEOUT_MS);
+
+  test("every generated distribution file is tracked, including projection-ignored files", () => {
+    const visible = spawnSync(
+      "git",
+      ["ls-files", "--others", "--exclude-standard", "--", "dist", "dist-release"],
+      { cwd: REPO_ROOT, encoding: "utf-8" },
+    );
+    const ignored = spawnSync(
+      "git",
+      [
+        "ls-files",
+        "--others",
+        "--ignored",
+        "--exclude-standard",
+        "--",
+        "dist",
+        "dist-release",
+      ],
+      { cwd: REPO_ROOT, encoding: "utf-8" },
+    );
+    expect(visible.status).toBe(0);
+    expect(ignored.status).toBe(0);
+    expect(`${visible.stdout}${ignored.stdout}`).toBe("");
+  });
 });
 
 describe("t145 packager contract regressions", () => {
@@ -298,7 +322,7 @@ describe("t145 packager contract regressions", () => {
       );
       const before = readFileSync(manifest, "utf-8");
       const after = before.replace(
-        /    \{\n      path: "\.mcp\.json",[\s\S]*?^    \},\n/m,
+        / {4}\{\n {6}path: "\.mcp\.json",[\s\S]*?^ {4}\},\n/m,
         "",
       );
       expect(after).not.toBe(before);

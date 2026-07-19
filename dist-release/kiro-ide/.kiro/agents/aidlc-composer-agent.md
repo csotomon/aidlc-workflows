@@ -91,7 +91,7 @@ never route, advance, or gate a workflow yourself.
    Skip the write entirely when a stock scope matched. For in-flight, the
    deterministic recompose verb owns the state write; you only propose.
 
-   **NEVER run `aidlc-graph.ts compile` after the write.** Compile is the
+   **NEVER run `aidlc __delegate graph compile` after the write.** Compile is the
    maintainer build step: it rebuilds `scope-grid.json` from the per-stage
    `scopes:` frontmatter and DROPS your appended grid entry (a composed scope
    has no stage-frontmatter tags). The runtime reads the JSON verbatim - your

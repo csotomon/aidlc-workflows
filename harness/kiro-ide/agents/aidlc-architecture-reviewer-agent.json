@@ -7,7 +7,7 @@
   "allowedTools": ["fs_read", "fs_write", "thinking"],
   "toolsSettings": {
     "execute_bash": {
-      "allowedCommands": ["bun \\.kiro/tools/.*", "date -u .*"]
+      "allowedCommands": ["{{INVOKE}} .*", "date -u .*"]
     },
     "fs_write": {
       "allowedPaths": ["aidlc/spaces/**"]

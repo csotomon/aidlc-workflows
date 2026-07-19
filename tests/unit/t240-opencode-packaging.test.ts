@@ -67,7 +67,7 @@ describe("t240 dist/opencode packaging parity + shell shape", () => {
     expect(r.stdout).toContain("in sync");
   });
 
-  test("2: every packaged .ts file is byte-identical to its dist/claude source (code is never transformed)", () => {
+  test("2: packaged .ts files differ only at declared projection tokens", () => {
     const divergent: string[] = [];
     for (const sub of ["tools", "hooks"]) {
       const dstDir = join(ENGINE, sub);
@@ -75,7 +75,15 @@ describe("t240 dist/opencode packaging parity + shell shape", () => {
         if (!file.endsWith(".ts")) continue;
         const rel = file.slice(dstDir.length + 1);
         const src = join(CLAUDE_SRC, sub, rel);
-        if (!readFileSync(file).equals(readFileSync(src))) divergent.push(`${sub}/${rel}`);
+        let opencode = readFileSync(file, "utf-8");
+        const claude = readFileSync(src, "utf-8");
+        if (rel === "aidlc-plugin.ts") {
+          opencode = opencode.replace(
+            '.replaceAll(".aidlc", harnessDir)',
+            '.replaceAll(".claude", harnessDir)',
+          );
+        }
+        if (opencode !== claude) divergent.push(`${sub}/${rel}`);
       }
     }
     expect(divergent).toEqual([]);
@@ -189,7 +197,7 @@ describe("t240 dist/opencode packaging parity + shell shape", () => {
     expect(r.status).toBe(1);
   });
 
-  test("8: the shipped opencode.json wires skills, method instructions, and the bun allowlist", () => {
+  test("8: the shipped opencode.json wires skills, method instructions, and the native allowlist", () => {
     const cfg = JSON.parse(readFileSync(join(OPENCODE_ROOT, "opencode.json"), "utf-8")) as {
       skills?: { paths?: string[] };
       instructions?: string[];
@@ -200,31 +208,17 @@ describe("t240 dist/opencode packaging parity + shell shape", () => {
     };
     expect(cfg.skills?.paths).toContain(".aidlc/skills");
     expect(cfg.instructions).toContain("aidlc/spaces/default/memory/**/*.md");
-    expect(cfg.permission?.bash?.["bun .aidlc/tools/*"]).toBe("allow");
+    expect(cfg.permission?.bash?.["aidlc *"]).toBe("allow");
     expect(cfg.permission?.edit?.[".aidlc/tools/**"]).toBe("ask");
     expect(cfg.permission?.edit?.[".aidlc/hooks/**"]).toBe("ask");
   });
 
-  test("9: the adapter embeds exactly the shipped tool and hook entrypoints", async () => {
+  test("9: the adapter enforces one direct native aidlc invocation", async () => {
     const moduleExports = await import(
       "../../dist/opencode/.opencode/plugin/aidlc-opencode-adapter.ts"
     );
     expect(Object.keys(moduleExports)).toEqual(["default"]);
 
-    const expected = ["hooks", "tools"].flatMap((dir) =>
-      readdirSync(join(ENGINE, dir), { withFileTypes: true })
-        .filter((entry) => entry.isFile() && entry.name.endsWith(".ts"))
-        .map((entry) => `${dir}/${entry.name}`)
-    ).sort();
-    const adapter = readFileSync(
-      join(OPENCODE_ROOT, ".opencode", "plugin", "aidlc-opencode-adapter.ts"),
-      "utf-8",
-    );
-    const emitted = adapter.match(
-      /\/\* @aidlc-shipped-entrypoints@ \*\/\s*(\[[\s\S]*?\])\s*,\s*\n\);/,
-    )?.[1];
-    expect(emitted).toBeDefined();
-    expect(JSON.parse(emitted ?? "[]")).toEqual(expected);
     const adapterHooks = await createAdapter({
       client: {
         session: {
@@ -235,22 +229,24 @@ describe("t240 dist/opencode packaging parity + shell shape", () => {
       directory: OPENCODE_ROOT,
     });
     const before = adapterHooks["tool.execute.before"];
-    for (const entrypoint of expected) {
-      await expect(
-        before(
-          { tool: "bash", sessionID: "main", callID: entrypoint },
-          { args: { command: `bun .aidlc/${entrypoint}` } },
-        ),
-      ).resolves.toBeUndefined();
-    }
     await expect(
       before(
-        { tool: "bash", sessionID: "main", callID: "unknown" },
-        { args: { command: "bun .aidlc/tools/payload.ts" } },
+        { tool: "bash", sessionID: "main", callID: "direct" },
+        { args: { command: "aidlc __delegate state approve" } },
       ),
-    ).rejects.toThrow(
-      "shipped tool or hook",
-    );
+    ).resolves.toBeUndefined();
+    await expect(
+      before(
+        { tool: "bash", sessionID: "main", callID: "compound" },
+        { args: { command: "aidlc status && touch /tmp/unsafe" } },
+      ),
+    ).rejects.toThrow("one direct invocation");
+    await expect(
+      before(
+        { tool: "bash", sessionID: "main", callID: "unrelated" },
+        { args: { command: "git status" } },
+      ),
+    ).resolves.toBeUndefined();
   });
 
   test("10: doctor accepts an opencode.jsonc-only install", () => {

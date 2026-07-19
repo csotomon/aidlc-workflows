@@ -86,11 +86,10 @@ describe("t150 dist/codex packaging parity + drift guard", () => {
     expect(r.stdout).toContain("in sync");
   });
 
-  test("2: packaged .ts files differ only at the declared invocation projection", () => {
+  test("2: packaged .ts files differ only at declared projection tokens", () => {
     // tools/ + hooks/ carry the deterministic core. The codex adapter
     // (authored shell, aidlc-codex-*.ts) has no claude counterpart and is
-    // exempt. aidlc-runtime-paths.ts projects {{INVOKE}} once per harness;
-    // normalize that constant before enforcing byte parity.
+    // exempt. Both final channels project {{INVOKE}} to aidlc.
     const divergent: string[] = [];
     for (const sub of ["tools", "hooks"]) {
       const dstDir = join(CODEX_DST, sub);
@@ -99,19 +98,15 @@ describe("t150 dist/codex packaging parity + drift guard", () => {
         if (/aidlc-codex-[^/]+\.ts$/.test(file)) continue;
         const rel = file.slice(dstDir.length + 1);
         const src = join(CLAUDE_SRC, sub, rel);
-        let dstBytes = readFileSync(file);
-        const srcBytes = readFileSync(src);
-        if (sub === "tools" && rel === "aidlc-runtime-paths.ts") {
-          const dstText = dstBytes.toString("utf-8");
-          expect(dstText).toContain('const PROJECTED_INVOKE = "bun .codex/tools/aidlc.ts";');
-          dstBytes = Buffer.from(
-            dstText.replace(
-              'const PROJECTED_INVOKE = "bun .codex/tools/aidlc.ts";',
-              'const PROJECTED_INVOKE = "bun .claude/tools/aidlc.ts";',
-            ),
+        let codex = readFileSync(file, "utf-8");
+        const claude = readFileSync(src, "utf-8");
+        if (rel === "aidlc-plugin.ts") {
+          codex = codex.replace(
+            '.replaceAll(".codex", harnessDir)',
+            '.replaceAll(".claude", harnessDir)',
           );
         }
-        if (!dstBytes.equals(srcBytes)) divergent.push(`${sub}/${rel}`);
+        if (codex !== claude) divergent.push(`${sub}/${rel}`);
       }
     }
     expect(divergent).toEqual([]);
@@ -168,7 +163,7 @@ describe("t150 dist/codex packaging parity + drift guard", () => {
     for (const groups of Object.values(wiring.hooks)) {
       for (const g of groups) {
         for (const h of g.hooks) {
-          expect(h.command).toMatch(/^bun \.codex\/hooks\/aidlc-codex-adapter\.ts [a-z-]+$/);
+          expect(h.command).toMatch(/^aidlc adapter codex [a-z-]+$/);
         }
       }
     }
@@ -196,10 +191,7 @@ describe("t150 dist/codex packaging parity + drift guard", () => {
     const bodyStart = shipped.indexOf("[hooks.state");
     expect(bodyStart).toBeGreaterThan(-1);
     const header = shipped.slice(0, bodyStart);
-    expect(header).toContain(
-      "bun scripts/package.ts codex trust --project <abs-dir> [--hooks-json <abs-path>]",
-    );
-    expect(header).toContain("bun install --frozen-lockfile");
+    expect(header).toContain("native `aidlc adapter codex ...`");
     expect(header).toContain("replace the full set");
     expect(header).toContain("appending a second set creates invalid TOML");
     expect(header).not.toMatch(/replac\w*\s+<PROJECT_DIR>/i);
@@ -210,7 +202,7 @@ describe("t150 dist/codex packaging parity + drift guard", () => {
     // — a concrete anchor so a silent recipe change can't pass by emitting a
     // self-consistent but wrong hash for every entry.
     expect(shippedBody).toContain(
-      'session_start:0:0"]\ntrusted_hash = "sha256:ec7321a5902723dfe5d1b79fe13a48724fdf69a2029f83d4168ae28da6121c96"',
+      'session_start:0:0"]\ntrusted_hash = "sha256:c8b9f242882ebe6747e18f2f183814cf4bf48a3c53696912834009df3de7613e"',
     );
   });
 
@@ -251,7 +243,7 @@ describe("t150 dist/codex packaging parity + drift guard", () => {
     // The common Unix form remains byte-identical to the historical output.
     expect(emitTrustEntries("/tmp/example-proj")).toStartWith(
       '[hooks.state."/tmp/example-proj/.codex/hooks.json:session_start:0:0"]\n' +
-        'trusted_hash = "sha256:ec7321a5902723dfe5d1b79fe13a48724fdf69a2029f83d4168ae28da6121c96"\n\n',
+        'trusted_hash = "sha256:c8b9f242882ebe6747e18f2f183814cf4bf48a3c53696912834009df3de7613e"\n\n',
     );
   });
 
@@ -404,9 +396,9 @@ describe("t150 dist/codex packaging parity + drift guard", () => {
         expect(readFileSync(guard, "utf-8")).toContain("allow_implicit_invocation: false");
       }
     }
-    // Stage runners drive the codex tools path (harness interpolation held).
+    // Stage runners drive the native dispatcher.
     const probe = readFileSync(join(skillsDir, "aidlc-intent-capture", "SKILL.md"), "utf-8");
-    expect(probe).toContain("bun .codex/tools/aidlc-orchestrate.ts next --stage intent-capture --single");
+    expect(probe).toContain("aidlc __delegate orchestrate next --stage intent-capture --single");
   });
 
   test("12: trust subcommand substitutes the project path into every entry", () => {

@@ -14,6 +14,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -113,7 +114,12 @@ describe("t238 build-binaries release builder", () => {
     expect(existsSync(native.artifact)).toBe(true);
     expect(relative(REPO_ROOT, native.artifact).replace(/\\/g, "/").startsWith("build/binaries/")).toBe(true);
     expect(native.bytes).toBeGreaterThan(10 * 1024 * 1024);
-    for (const harness of ["claude", "codex", "kiro", "kiro-ide"]) {
+    const distributions = readdirSync(join(REPO_ROOT, "dist-release"), {
+      withFileTypes: true,
+    })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name);
+    for (const harness of distributions) {
       expect(existsSync(join(dirname(native.artifact), "runtime", harness))).toBe(true);
     }
     const stagedRunner = readFileSync(

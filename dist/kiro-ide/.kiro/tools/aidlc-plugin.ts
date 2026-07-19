@@ -793,7 +793,7 @@ function pluginPrimitiveTargets(
 function projectedSourceBytes(source: string, harnessDir: string): Buffer {
   const bytes = readFileSync(source);
   return source.endsWith(".md")
-    ? Buffer.from(bytes.toString("utf-8").replaceAll("{{HARNESS_DIR}}", harnessDir))
+    ? Buffer.from(bytes.toString("utf-8").replaceAll(".kiro", harnessDir))
     : bytes;
 }
 

@@ -1740,7 +1740,12 @@ describe("t240 projection channel", () => {
     }
     expect(sha256Bytes(readFileSync(join(CLAUDE_RELEASE, ".claude", "tools", "aidlc.ts"))))
       .toMatch(/^sha256:[a-f0-9]{64}$/);
-    for (const harness of ["claude", "codex", "kiro", "kiro-ide"]) {
+    const distributions = readdirSync(join(REPO_ROOT, "dist-release"), {
+      withFileTypes: true,
+    })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name);
+    for (const harness of distributions) {
       const copy = join(REPO_ROOT, "dist", harness);
       const release = join(REPO_ROOT, "dist-release", harness);
       expect(walkFiles(copy)).toEqual(walkFiles(release));

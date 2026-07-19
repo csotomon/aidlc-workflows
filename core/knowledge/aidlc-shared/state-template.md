@@ -5,8 +5,8 @@ engine writes the concrete state file and enumerates stages from the compiled
 stage graph plus scope grid; this template must not hand-list shipped stages.
 
 Authoritative generated views:
-- Stage graph: `bun {{HARNESS_DIR}}/tools/aidlc-utility.ts stage-table`
-- Scope grid: `bun {{HARNESS_DIR}}/tools/aidlc-utility.ts scope-table`
+- Stage graph: `{{INVOKE}} __delegate utility stage-table`
+- Scope grid: `{{INVOKE}} __delegate utility scope-table`
 
 ## Project Information
 - **Project**: [project description]
