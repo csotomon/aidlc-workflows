@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.4.7] - 2026-07-20
+
+The adaptive composer now estimates implementation entropy before composing. It scores five components - intent ambiguity, codebase structural uncertainty, verification entropy, risk, and unresolved assumptions - from the task and the workspace, then composes the minimum viable workflow: the least sufficient EXECUTE/SKIP grid that still produces every artifact the outcome depends on. When CodeKB MCP tools are configured and the relevant spaces are indexed, the composer grounds its structural estimates in CodeKB call-graph and component analysis instead of scanning the workspace; without CodeKB it falls back to the bounded workspace scan. This is a prompt-only release - no new tools, schema fields, or engine changes. **Upgrade:** re-copy your `dist/<harness>/` shell into the project.
+
+* `/aidlc compose` proposals now carry an entropy-score breakdown (five components with bands, plus rationale) alongside the EXECUTE/SKIP grid and per-SKIP reasons at the approval gate.
+* Composed grids fold overlapping ideation/inception stages by default (each fold names its un-SKIP trigger); the human still approves, edits, or rejects every proposal at the gate.
+* With CodeKB evidence covering the affected codebase, the composer may propose skipping Reverse Engineering; the proposal must disclose that downstream stages then run without the local RE artifact store, and the human decides at the gate.
+
 ## [2.4.6] - 2026-07-17
 
 Adds a fifth harness distribution: **opencode** (opencode.ai, verified live on 1.17.18). `dist/opencode/` ships the same deterministic core as every other harness, projected for opencode's native surfaces: skills, subagents, a `/aidlc` command, and a hook-adapter plugin. One layout note: the engine tree ships at `.aidlc/`, not `.opencode/`, because opencode auto-imports `.opencode/tools/*.ts` as custom tool definitions and the engine's CLI scripts would crash the session; the shipped `opencode.json` points opencode's skill discovery at `.aidlc/skills` and carries the method-tree `instructions` glob plus the `bun .aidlc/tools/*` permission allowlist. **Upgrade:** existing installs on other harnesses are unaffected; to run on opencode copy `dist/opencode/` into your project per the README's opencode Quick Start.
