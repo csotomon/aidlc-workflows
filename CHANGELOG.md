@@ -6,9 +6,10 @@ All notable changes to this project will be documented in this file.
 
 The adaptive composer now estimates implementation entropy before composing. It scores five components - intent ambiguity, codebase structural uncertainty, verification entropy, risk, and unresolved assumptions - from the task and the workspace, then composes the minimum viable workflow: the least sufficient EXECUTE/SKIP grid that still produces every artifact the outcome depends on. When CodeKB MCP tools are configured and the relevant spaces are indexed, the composer grounds its structural estimates in CodeKB call-graph and component analysis instead of scanning the workspace; without CodeKB it falls back to the bounded workspace scan. This is a prompt-only release - no new tools, schema fields, or engine changes. **Upgrade:** re-copy your `dist/<harness>/` shell into the project.
 
-* `/aidlc compose` proposals now carry an entropy-score breakdown (five components with bands, plus rationale) alongside the EXECUTE/SKIP grid and per-SKIP reasons at the approval gate.
+* `/aidlc compose` proposals now carry an entropy-score breakdown alongside the EXECUTE/SKIP grid: the gate renders three blocks - the validator's summary line, a five-component score table with bands and an advisory composite, and a per-stage decision table with reasoning for every EXECUTE and SKIP.
 * Composed grids fold overlapping ideation/inception stages by default (each fold names its un-SKIP trigger); the human still approves, edits, or rejects every proposal at the gate.
-* With CodeKB evidence covering the affected codebase, the composer may propose skipping Reverse Engineering; the proposal must disclose that downstream stages then run without the local RE artifact store, and the human decides at the gate.
+* In-flight recompose proposals re-estimate the entropy components from what completed stages actually resolved, name that evidence per proposed flip, and strict-validate before the gate so a starved flip is caught before approval, not after.
+* With CodeKB evidence covering the affected codebase, the composer may propose skipping Reverse Engineering; the proposal must disclose that downstream stages then run without the local RE artifact store, and the human decides at the gate. CodeKB is an optional external MCP server (see the Scopes and Depth guide for per-harness setup); without it the composer scores from the workspace scan, and on Kiro CLI / Kiro IDE the fallback is always used.
 
 ## [2.4.6] - 2026-07-17
 
