@@ -24,7 +24,7 @@ AI-DLC is designed to adapt to your team's needs. This chapter covers settings o
 
 ## ML Methodology Profiles
 
-The optional [AWS MLOps plugin](aws-mlops.md) adds a reusable SageMaker
+The optional [AWS MLOps plugin](../../plugins/aws-mlops/docs/aws-mlops.md) adds a reusable SageMaker
 platform profile and an initial CRISP-ML(Q) model profile. The person chooses
 the methodology explicitly; CRISP-DM, TDSP, SEMMA and KDD are planned profiles.
 Its shared AWS capabilities, specialist agents, versioned local methodology

@@ -155,4 +155,4 @@ on AWS services independently of an AI conversation.
 SEMMA/KDD profiles should explicitly label the business/deployment/operations
 steps added for production. The shared platform must not be duplicated per method.
 
-See the [AWS MLOps user guide](../../docs/guide/aws-mlops.md).
+See the [AWS MLOps user guide](docs/aws-mlops.md).

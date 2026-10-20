@@ -363,4 +363,4 @@ Rutas relativas a este archivo (`plugins/aws-mlops/docs/knowledge-transfer.md`).
 | Las personas que trabajan los stages | `../agents/aws-mlops-*-agent.md` |
 | Cómo funciona el mecanismo de plugins | `../../../docs/reference/18-plugin-mechanism.md` |
 | Guía de autoría de plugins | `../../../docs/harness-engineering/10-authoring-a-plugin.md` |
-| Guía de usuario del plugin | `../../../docs/guide/aws-mlops.md` |
+| Guía de usuario del plugin | `aws-mlops.md` |

@@ -1,14 +1,14 @@
 # Machine learning and MLOps on AWS
 
-The optional [AWS MLOps plugin](../../plugins/aws-mlops/README.md) adds a
+The optional [AWS MLOps plugin](../README.md) adds a
 person-selected ML methodology to AI-DLC. It initially implements CRISP-ML(Q)
 and shares one AWS SageMaker platform across future methodology profiles.
 
 ## Start with the platform
 
 Install and compose the plugin in the project you want AI-DLC to deliver, using
-your [harness's setup](harnesses/README.md) and the
-[plugin installation procedure](../harness-engineering/10-authoring-a-plugin.md#5-distribution--install).
+your [harness's setup](../../../docs/guide/harnesses/README.md) and the
+[plugin installation procedure](../../../docs/harness-engineering/10-authoring-a-plugin.md#5-distribution--install).
 This repository's `dist/plugins/aws-mlops/<harness>/` projections are generated
 development assets; they are not a published marketplace release.
 
@@ -81,7 +81,7 @@ thresholds. It is advisory by default and does not verify that referenced cloud
 jobs or human decisions actually occurred.
 
 CRISP-ML(Q) has a
-[local operating reference](../../plugins/aws-mlops/knowledge/aidlc-shared/aws-mlops-crisp-mlq.md),
+[local operating reference](../knowledge/aidlc-shared/aws-mlops-crisp-mlq.md),
 revision `1.0.0`. It supplies phase goals, tasks, evidence and correction paths
 along with quality/risk assessment in every phase. The publication's section
 references are mapped to 20 plugin requirements in
@@ -97,7 +97,7 @@ risk evidence. Platform commissioning is explicitly scoped separately.
 The plugin also includes six controlled scenarios for comparing model responses
 with the same supplied reference. Live calls are opt-in, spend model tokens and
 use existing CLI providers; the
-[plugin test instructions](../../plugins/aws-mlops/README.md#controlled-checks-with-different-models)
+[plugin test instructions](../README.md#controlled-checks-with-different-models)
 explain the command and reports. Structural tests, model-response checks and
 actual AWS workflow execution are separate evidence.
 
