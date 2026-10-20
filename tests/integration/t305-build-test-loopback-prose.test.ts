@@ -20,8 +20,8 @@
 //      NO EMERGENT carve-out and both Artifact
 //      Re-use overrides.
 //   4. dist/claude/.claude/aidlc-common/protocols/stage-protocol-recovery.md
-//      — the crash-resume bullet (logged-but-not-jumped detection), now under
-//      "Session resume" rather than "Stage re-run".
+//      - the crash-resume bullet (logged-but-not-jumped detection), under
+//      "Session resume".
 //
 // FIXTURE DISCIPLINE: inputs are the REAL committed shipped files (AIDLC_SRC
 // = <repo>/dist/claude/.claude from tests/harness/fixtures.ts) plus authored
@@ -81,7 +81,7 @@ describe("t305 build-and-test.md — Step 9 failure-escalation ladder", () => {
       "**On failure**: Run the same failure-escalation ladder for command failures,\n" +
         "`Not Met` targets, and `Unverified` targets:",
     );
-    // The retired flat prose must be gone (replaced, not duplicated).
+    // The flat prose must be absent, not duplicated.
     expect(STAGE).not.toContain(
       "If unable to fix after 2 attempts, log the failure in test-results.md and present the issue to the user at the approval gate",
     );
@@ -354,16 +354,16 @@ describe("t305 construction protocol module — Build-and-Test failure loop-back
   });
 
   test("Artifact Re-use tail: deterministic auto-decision, Redo forbidden, still audited", () => {
-    const tailIdx = MAIN_PROTOCOL.indexOf("### Artifact Re-use (backward jump / redo)");
+    const tailIdx = LOOPBACK_PROTOCOL.indexOf("### Artifact Re-use on a failure loop-back replay");
     expect(tailIdx).toBeGreaterThan(-1);
-    const tail = MAIN_PROTOCOL.slice(tailIdx);
+    const tail = LOOPBACK_PROTOCOL.slice(tailIdx);
     expect(tail).toContain("**Autonomous failure loop-back**");
     expect(tail).toContain("the 3-option question is NOT presented");
     expect(tail).toContain("**Modify** for the unit(s) the fix targets");
     expect(tail).toContain("**Keep** for all other units");
     expect(tail).toContain("**Modify** for build-and-test itself");
     expect(tail).toContain("Redo is forbidden there — it would erase the Loop-Back Log");
-    // Nit fix: the audit call is spelled out in full (positional slug +
+    // The audit call is spelled out in full (positional slug +
     // --artifacts), never abbreviated to a form that errors if run literally.
     expect(tail).toContain(
       'aidlc-state.ts reuse-artifact <slug>\n--decision <keep|modify> --artifacts "<comma-separated list of existing\nartifacts found>"',
@@ -371,8 +371,8 @@ describe("t305 construction protocol module — Build-and-Test failure loop-back
   });
 
   test("Finding 1 (must-fix): Gated failure loop-back mirrors the autonomous override", () => {
-    const tailIdx = MAIN_PROTOCOL.indexOf("### Artifact Re-use (backward jump / redo)");
-    const tail = MAIN_PROTOCOL.slice(tailIdx);
+    const tailIdx = LOOPBACK_PROTOCOL.indexOf("### Artifact Re-use on a failure loop-back replay");
+    const tail = LOOPBACK_PROTOCOL.slice(tailIdx);
     const gatedIdx = tail.indexOf("**Gated failure loop-back**");
     expect(gatedIdx).toBeGreaterThan(-1);
     const gated = tail.slice(gatedIdx);
@@ -534,7 +534,6 @@ describe("t305 stage-protocol-recovery.md — crash-resume bullet", () => {
     expect(RECOVERY).toContain(
       "re-execute the jump per the loop-back\nprotocol module (`aidlc-common/protocols/stage-protocol-loopback.md`)",
     );
-    // A loop-back cut off between two Units' reopens reopens the rest.
     expect(RECOVERY).toContain("reopen the others\nthe same way before going on");
   });
 

@@ -13,6 +13,7 @@ import {
   ENGINE_DIR,
   attemptEventDefinitelyBefore,
   auditBlockField,
+  changesSinceLastReview,
   constructionCheckpointsApply,
   errorMessage,
   extractMarkdownSection,
@@ -1069,13 +1070,13 @@ export function deriveReviewFindingsList(
   };
 }
 
-/**
- * The current derived list for every selected stage scope.
- */
 export function readReviewArtifactContexts(
   projectDir: string,
   stage: ReviewFingerprintStage,
   unit?: string,
+  // The gate brief also keeps a scope whose latest review did not finish, to
+  // say so; the reviewer's context and the approval read reviews only.
+  keepUnfinished = false,
 ): ReviewArtifactContext[] {
   const contexts: ReviewArtifactContext[] = [];
   const entries = reviewArtifactEntries(projectDir, stage, unit);
@@ -1098,12 +1099,13 @@ export function readReviewArtifactContexts(
       workspaceArtifactPath(projectDir, entry),
       scopeUnit,
     );
-    // A retried incomplete review with nothing listed stays context-free, so
-    // the gate supplies its explicit fallback finding.
+    // A retried incomplete review with nothing listed stays context-free,
+    // except at the gate, which says the review did not finish.
     if (
       (!context.incompleteReview && context.verdict !== null) ||
       context.findings.length > 0 ||
-      context.findingsText !== undefined
+      context.findingsText !== undefined ||
+      (keepUnfinished && context.incompleteReview === true)
     ) {
       contexts.push(context);
     }
@@ -2012,7 +2014,8 @@ export function reviewInvalidationDetails(
 
 /**
  * The CHANGE_ACCEPTED rows for reviewed content of `stageSlug` in the current
- * attempt: the human line each carried and the paths it named, oldest first.
+ * attempt that no later finished review of the same work covered: the human
+ * line each carried and the paths it named, oldest first.
  */
 export function acceptedReviewChanges(
   projectDir: string,
@@ -2025,17 +2028,16 @@ export function acceptedReviewChanges(
     readAuditShardEvents(projectDir),
     stageSlug,
   );
+  const events = attemptView.events.filter((event) => attemptEventAfterFrontier(attemptView.floor, event));
+  // The final gate of a per-Unit stage pairs each change with its own Unit's reviews.
+  const units = unit !== undefined
+    ? [unit]
+    : [...new Set(events.filter((event) => event.event === "CHANGE_ACCEPTED")
+      .map((event) => auditBlockField(event.block, "Unit") ?? undefined))];
+  const unseen = new Set(units.flatMap((each) => changesSinceLastReview(projectDir, events, stageSlug, each)));
   const accepted: Array<{ notice: string; changed: string[] | null }> = [];
-  for (const event of attemptView.events) {
-    if (
-      event.event !== "CHANGE_ACCEPTED" ||
-      !attemptEventAfterFrontier(attemptView.floor, event) ||
-      auditBlockField(event.block, "Stage") !== stageSlug ||
-      auditBlockField(event.block, "Checkpoint") !== "review-receipt" ||
-      (unit !== undefined && auditBlockField(event.block, "Unit") !== unit)
-    ) {
-      continue;
-    }
+  for (const event of events) {
+    if (!unseen.has(event)) continue;
     const changed = auditBlockField(event.block, "Changed");
     accepted.push({
       notice: auditBlockField(event.block, "Details") ?? "Reviewed content changed after it was reviewed.",
@@ -2066,6 +2068,15 @@ function unitOwnApproval(projectDir: string, unit: string): boolean {
   }
 }
 
+// What the person reads for a review that did not finish, with the reason the
+// conductor gives when it knows one.
+function unfinishedReviewFinding(reason?: string): string {
+  const said = "The review did not finish, so there is no review result to rely on.";
+  const why = reason?.trim() ?? "";
+  if (why === "") return said;
+  return `${said} ${why.charAt(0).toUpperCase()}${why.slice(1)}${/[.!?]$/.test(why) ? "" : "."}`;
+}
+
 export function renderReviewBrief(
   projectDir: string,
   stage: ReviewFingerprintStage & { name: string },
@@ -2078,30 +2089,31 @@ export function renderReviewBrief(
   const contextUnit = stage.for_each === "unit-of-work" && !(unit && unitOwnApproval(projectDir, unit))
     ? undefined
     : unit;
-  let contexts = readReviewArtifactContexts(projectDir, stage, contextUnit);
-  if (fallbackFinding) {
-    // The incomplete fallback re-checked nothing, so a list carried from
-    // earlier reviews also shows the recorded finding, under the next unused
-    // ID so it never lands on an earlier decision's ID.
-    contexts = contexts.map((context) => {
-      if (!context.incompleteReview) return context;
-      const finding: ReviewFinding = {
-        artifact: context.artifact,
-        ...(context.unit ? { unit: context.unit } : {}),
-        id: nextFindingId(context.findings),
-        severity: "Major",
-        location: `${context.artifact} > review completion`,
-        finding: fallbackFinding,
-        requiredAction: "Request changes and rerun the reviewer.",
-        status: "Unresolved",
-        fingerprint: "",
-      };
-      return {
-        ...context,
-        findings: [...context.findings, withFingerprint(finding)],
-      };
-    });
-  }
+  let contexts = readReviewArtifactContexts(projectDir, stage, contextUnit, true);
+  // The incomplete fallback re-checked nothing: the record says the review did
+  // not finish, and the conductor's --fallback-finding, given only when what
+  // the reviewer returned says why, follows it. A list carried from earlier
+  // reviews shows it under the next unused ID so it never lands on an earlier
+  // decision's ID.
+  const unfinished = unfinishedReviewFinding(fallbackFinding);
+  contexts = contexts.map((context) => {
+    if (!context.incompleteReview) return context;
+    const finding: ReviewFinding = {
+      artifact: context.artifact,
+      ...(context.unit ? { unit: context.unit } : {}),
+      id: nextFindingId(context.findings),
+      severity: "Major",
+      location: `${context.artifact} > review completion`,
+      finding: unfinished,
+      requiredAction: "Request changes and rerun the reviewer.",
+      status: "Unresolved",
+      fingerprint: "",
+    };
+    return {
+      ...context,
+      findings: [...context.findings, withFingerprint(finding)],
+    };
+  });
   if (contexts.length === 0 && fallbackFinding) {
     const entry = reviewArtifactEntries(projectDir, stage, unit)?.[0];
     const artifact = entry
@@ -2113,7 +2125,7 @@ export function renderReviewBrief(
       id: "R-01",
       severity: "Major",
       location: `${artifact} > review completion`,
-      finding: fallbackFinding,
+      finding: unfinished,
       requiredAction: "Request changes and rerun the reviewer.",
       status: "Unresolved",
       fingerprint: "",
@@ -2146,32 +2158,25 @@ export function renderReviewBrief(
         : contexts.some((context) => context.verdict === "NOT-READY")
           ? "The review did not complete with actionable findings."
           : "No blocking concerns were found.";
-  // `stale` also covers a conductor edit that self-invalidated the receipt, so naming
-  // only upstream change misleads; the accurate cause is appended below either way.
-  const why = {
-    first: "First review completed.",
-    revision: "Revision re-checked.",
-    stale: "Re-check required: the previous review receipt is no longer valid.",
-  }[reason];
-
+  // No "why now" label: which pass this is changes nothing the person decides,
+  // and the record keeps it (the review rows' iteration and who asked). The
+  // reason still selects the stale lines below.
   const lines = [
     `**Stage:** ${stage.name}`,
     `**Review outcome:** ${outcome}`,
-    `**Why now:** ${why}`,
   ];
-  // Reviewed content that changed after the receipt and was accepted under
-  // Change Control `relaxed` (the ledger's CHANGE_ACCEPTED rows for this stage
-  // in the current attempt). The verdict above is the reviewer's; these lines
-  // tell the human what moved since it was recorded.
+  // Reviewed content that changed after the review and was kept under a relaxed
+  // or off Guard Policy, and that no later finished review covered. The verdict
+  // above is the reviewer's; this tells the person what it did not see. The
+  // paths say it; the change's own sentence is said only when there are none.
   // The final gate of a per-Unit stage omits --unit and says every Unit's change.
   const changesFor = stage.for_each === "unit-of-work" ? unit : undefined;
   for (const accepted of acceptedReviewChanges(projectDir, stage.slug, changesFor)) {
-    lines.push(`**Reviewed content differs:** ${accepted.notice}`);
-    if (accepted.changed !== null) {
-      lines.push(
-        `**Changed after review:** ${accepted.changed.map((path) => `\`${path}\``).join(", ")}`,
-      );
-    }
+    lines.push(
+      accepted.changed !== null
+        ? `**Changed after review:** ${accepted.changed.map((path) => `\`${path}\``).join(", ")}`
+        : `**Reviewed content differs:** ${accepted.notice}`,
+    );
   }
   if (reason === "stale") {
     const invalidation = reviewInvalidationDetails(
@@ -2235,7 +2240,8 @@ export function renderSummaryConfirmationBrief(
       `Summary confirmation questions file must exist inside the active intent record: ${questionsFile}`,
     );
   }
-  const entries = reviewArtifactEntries(projectDir, stage, unit) ?? [];
+  // The questions file is what the person confirms, never one of the files made from it.
+  const entries = (reviewArtifactEntries(projectDir, stage, unit) ?? []).filter((entry) => !entry.summaryInput);
   const artifacts = entries.map((entry) =>
     `\`${workspaceArtifactPath(projectDir, entry)}\``
   );
@@ -2246,7 +2252,6 @@ export function renderSummaryConfirmationBrief(
   return [
     `**Stage:** ${stage.name}`,
     `**Confirming:** Consolidated answers in \`${questions}\` before generating ${generated}.`,
-    "**Why now:** All stage questions are answered; artifact generation will use this confirmed summary.",
     "**Decision options:**",
     "- **Looks correct** - record this confirmation and generate the named artifacts.",
     "- **Request changes** - nothing is generated yet; say what to change in your answers, and they are updated first.",

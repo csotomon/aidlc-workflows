@@ -48,7 +48,7 @@ function prose(note: string): string {
   return note.replace(/`[^`]*`/g, " ");
 }
 
-/** True when the text names a JSON field (one with an underscore) as a word, outside a code span. */
+/** The JSON fields (ones with an underscore) the text names as words, outside a code span. */
 function namesAField(text: string): string[] {
   const plain = prose(text);
   return knownDirectiveFieldNames()
@@ -315,7 +315,6 @@ describe("the engine renders every question it asks", () => {
       ["The bugfix plan", `${INVOCATION} next --scope bugfix --request a1b2c3d4`],
       ["The classic plan", `${INVOCATION} next --scope classic --request a1b2c3d4`],
     ]);
-    // A plan offer shows each ready-made plan with its length, as the rows did.
     expect(str(notes(ask("compose-offer")).numbered_prose_question)).toContain("2. **The bugfix plan** \u2014 7 stages");
   });
 
@@ -398,6 +397,23 @@ describe("a stage step carries its instructions, not the fields to branch on", (
     expect(note).toContain("no mode question and nothing recorded for the mode");
     expect(note).not.toContain("decision --stage");
     expect(notes(runStage()).answer_mode_note).toBeUndefined();
+  });
+
+  // Kiro CLI showed the agent reading the object aloud ("The answer mode needs
+  // to be asked (answer_mode.ask: true)"), so the note is all the step carries.
+  test("the answer mode reaches the agent as its note alone, never as the fields it was made from", () => {
+    for (const mode of [ASK_MODE, REUSED_MODE]) {
+      const step = notes(runStage({ answer_mode: mode }));
+      expect(str(step.answer_mode_note)).toContain(mode.notice);
+      expect("answer_mode" in step).toBe(false);
+      expect(validateDirective(step).valid).toBe(true);
+      // The step goes out twice through the notes (before and after transport): the note stays.
+      expect(notes(step).answer_mode_note).toBe(step.answer_mode_note);
+    }
+    // A step whose body does not run here gets no note, and no field either.
+    const settled = notes(runStage({ answer_mode: ASK_MODE, gate_only: true }));
+    expect(settled.answer_mode_note).toBeUndefined();
+    expect("answer_mode" in settled).toBe(false);
   });
 
   test("what to read first, in order, then the stage file and the inputs, pointed at by meaning", () => {
@@ -511,7 +527,7 @@ describe("a stage step carries its instructions, not the fields to branch on", (
   test("each instruction is a legal field only beside what it is about", () => {
     const valid = (step: Json) => validateDirective(step).valid;
     expect(valid(notes(runStage({ answer_mode: ASK_MODE, gate_only: true, consumes_absent: [{ path: "a", expected: false }] })))).toBe(true);
-    expect(valid({ ...runStage(), answer_mode_note: "x" })).toBe(false);
+    expect(valid({ ...ask("intent-pick"), answer_mode_note: "x" })).toBe(false);
     expect(valid({ ...runStage(), inputs_note: "x" })).toBe(false);
     expect(valid({ ...runStage(), plan_note: "x" })).toBe(false);
     expect(valid({ ...runStage(), context_note: "" })).toBe(false);

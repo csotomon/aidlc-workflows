@@ -1,8 +1,11 @@
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import {
   KIRO_WORKFLOWS_ISSUE_ID,
+  KIRO_WORKFLOWS_UNREADABLE_ISSUE_ID,
   kiroWorkflowsFix,
   kiroWorkflowsIssueMessage,
+  kiroWorkflowsUnreadableFix,
+  kiroWorkflowsUnreadableMessage,
   readKiroIdeWorkflows,
   readKiroWorkflowsAnswer,
   type KiroWorkflowsAnswer,
@@ -18,18 +21,17 @@ import {
 } from "./aidlc-kiro-ide-terminal.ts";
 import { spawnSync } from "node:child_process";
 import {
-  accessSync,
-  constants,
   existsSync,
   lstatSync,
   readFileSync,
   readdirSync,
   realpathSync,
   statSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { homedir, platform as hostPlatform } from "node:os";
-import { delimiter, dirname, extname, join, relative, resolve } from "node:path";
+import { delimiter, dirname, join, relative, resolve } from "node:path";
 import {
   assertProjectionPathHasNoSymlinks,
   isSafeOnboardingPath,
@@ -38,6 +40,7 @@ import {
   jsonFileText,
   jsoncRootMembers,
   jsoncSettingValue,
+  kiroUpgradedAgentFile,
   managedBlockIsSafe,
   managedBlockMarkers,
   mergeBlock,
@@ -59,7 +62,16 @@ import {
 } from "./aidlc-runtime-paths.ts";
 import { AIDLC_VERSION } from "./aidlc-version.ts";
 import { compareVersions, VERSION_ID } from "./aidlc-channel.ts";
+import {
+  claudeUserSettingsPath,
+  managedSettingsFiles,
+  readSettingsObject,
+  resolveManagedSettingsCandidates,
+  writeSettingsObject,
+} from "./aidlc-statusline-choice.ts";
 import { installedExecutablePath } from "./aidlc-install-paths.ts";
+import { cmdScriptLaunch, isCmdScript, pathEntries, resolveExecutableOnPath } from "./aidlc-executable-path.ts";
+import { personaTwinRels } from "./aidlc-plugin.ts";
 import { readBoundedRegularFile } from "./aidlc-inline-context.ts";
 import {
   HARNESS_PRODUCT_NAMES,
@@ -127,7 +139,7 @@ export function providerMenuCopy(
 ): ProviderMenuCopy {
   switch (harness) {
     case "claude":
-      return { bedrock: "write the AWS region and profile to settings.json" };
+      return { bedrock: "write the AWS region and profile to settings.local.json, just for you" };
     case "codex":
       return { bedrock: "record the AWS region and profile and guide user-level Codex setup" };
     case "opencode":
@@ -257,7 +269,7 @@ export type TrustStatus = {
   files: string[];
   issues: DiagnosticIssue[];
   /** Kiro IDE only: its Workflows switch and the person's answer on this machine. */
-  kiroWorkflows?: { enabled: boolean; settingsPath: string; answer: KiroWorkflowsAnswer | null };
+  kiroWorkflows?: { enabled: boolean; readable: boolean; settingsPath: string; answer: KiroWorkflowsAnswer | null };
   /** Kiro IDE on Windows only: whether its terminal is Command Prompt, and the person's answer on this machine. */
   kiroTerminal?: { commandPrompt: boolean; profile: string | null; settingsPath: string; answer: KiroTerminalAnswer | null };
 };
@@ -559,18 +571,16 @@ function defaultRun(
   command: string,
   args: readonly string[],
 ): { status: number; stdout: string } {
-  // Windows runs a .cmd or .bat (what npm installs, for example copilot.cmd)
-  // only through cmd.exe. The path is quoted whole; one that cmd.exe would
-  // expand (% or !) or cannot quote (") is not run.
-  if (process.platform === "win32" && /\.(?:cmd|bat)$/i.test(command)) {
-    if (/[%!"]/.test(command) || args.some((arg) => !/^[A-Za-z0-9_./:=-]*$/.test(arg))) {
-      return { status: -1, stdout: "" };
-    }
-    const result = spawnSync(
-      process.env.ComSpec ?? "cmd.exe",
-      ["/d", "/s", "/c", `""${command}" ${args.join(" ")}"`],
-      { encoding: "utf-8", timeout: DEFAULT_SUBPROCESS_TIMEOUT_MS, windowsVerbatimArguments: true },
-    );
+  // npm's copilot.cmd on Windows runs only through cmd.exe.
+  if (process.platform === "win32" && isCmdScript(command)) {
+    const launch = cmdScriptLaunch(command, args, process.env.ComSpec);
+    if (launch === null) return { status: -1, stdout: "" };
+    const result = spawnSync(launch.file, launch.args, {
+      encoding: "utf-8",
+      env: { ...process.env, ...launch.env },
+      timeout: DEFAULT_SUBPROCESS_TIMEOUT_MS,
+      windowsVerbatimArguments: true,
+    });
     return { status: result.status ?? -1, stdout: result.stdout ?? "" };
   }
   const result = spawnSync(command, [...args], {
@@ -583,36 +593,8 @@ function defaultRun(
   };
 }
 
-function pathEntries(value: string, platform: NodeJS.Platform): string[] {
-  return value.split(platform === "win32" ? ";" : delimiter).filter(Boolean);
-}
-
-function executableCandidates(command: string, platform: NodeJS.Platform): string[] {
-  if (platform !== "win32" || extname(command)) return [command];
-  // Windows runs only a file with an executable extension; npm puts an
-  // extensionless shell script beside its copilot.cmd, so it comes last.
-  return [`${command}.exe`, `${command}.cmd`, `${command}.bat`, command];
-}
-
-export function resolveExecutableOnPath(
-  command: string,
-  pathValue: string,
-  platform: NodeJS.Platform = hostPlatform(),
-): string | null {
-  for (const directory of pathEntries(pathValue, platform)) {
-    for (const candidate of executableCandidates(command, platform)) {
-      const path = resolve(directory, candidate);
-      try {
-        if (!statSync(path).isFile()) continue;
-        if (platform !== "win32") accessSync(path, constants.X_OK);
-        return path;
-      } catch {
-        // Keep searching.
-      }
-    }
-  }
-  return null;
-}
+// Its callers (aidlc-kiro-session.ts) import it from here; the rule is aidlc-executable-path.ts's.
+export { resolveExecutableOnPath };
 
 export function deriveNonInteractivePath(
   options: RuntimeProbeOptions = {},
@@ -726,7 +708,6 @@ function pathAssignments(
   return entries;
 }
 
-// systemd environment.d: every *.conf in the directory, sorted, PATH= lines.
 function environmentDirectoryPaths(directory: string, home: string): string[] {
   let files: string[];
   try {
@@ -1267,22 +1248,13 @@ function writeJson(path: string, value: unknown): void {
   writeFileSync(path, jsonFileText(value, existsSync(path) ? readFileSync(path, "utf-8") : ""));
 }
 
-function writeClaudeProvider(
+// The Bedrock answer's env is the person's own and never goes into the shared
+// settings.json (applyClaudeLocalProvider writes it); the project's aws-mcp
+// server follows the recorded region.
+function writeClaudeMcpRegion(
   projectionRoot: string,
-  harnessDir: string,
   record: ProvidersRecord,
 ): void {
-  const settingsPath = join(projectionRoot, harnessDir, "settings.json");
-  const settings = readJsonFile(settingsPath) as Record<string, unknown>;
-  const env = isRecord(settings.env) ? { ...settings.env } : {};
-  stripLegacyClaudeModelAliases(env);
-  env.CLAUDE_CODE_USE_BEDROCK = "1";
-  env.AWS_REGION = record.region;
-  if (record.profile) env.AWS_PROFILE = record.profile;
-  else delete env.AWS_PROFILE;
-  settings.env = env;
-  writeJson(settingsPath, settings);
-
   const mcpPath = join(projectionRoot, ".mcp.json");
   if (!existsSync(mcpPath)) return;
   const mcp = readJsonFile(mcpPath) as Record<string, unknown>;
@@ -1348,6 +1320,233 @@ export function hasLegacyClaudeProviderConfig(
   return Object.entries(LEGACY_CLAUDE_BEDROCK_ENV).every(
     ([key, value]) => env[key] === value,
   );
+}
+
+// A Bedrock answer on Claude Code is the person's own (#2712): its env lives
+// in their .claude/settings.local.json, which git ignores and Claude Code reads
+// over the shared settings.json, and the record in harness.json keeps no
+// profile. The profile is read back from that file wherever it is shown.
+export const CLAUDE_PROVIDER_NOT_SET_UP_ID = "provider-claude-not-set-up";
+
+function claudeLocalSettingsFile(projectDir: string, harnessDir: string): string {
+  return join(projectDir, harnessDir, "settings.local.json");
+}
+
+/** The record as it is shared: a Claude answer's profile stays out of harness.json. */
+export function sharedProvidersRecord(record: ProvidersRecord | null): ProvidersRecord | null {
+  if (!record || record.profile === undefined) return record;
+  const { profile: _personal, ...shared } = record;
+  return shared;
+}
+
+/** A Claude Bedrock record with the profile this person's settings.local.json gives it. */
+export function withLocalClaudeProfile(
+  projectDir: string,
+  harnessDir: string,
+  record: ProvidersRecord | null,
+): ProvidersRecord | null {
+  if (record?.provider !== "amazon-bedrock") return record;
+  try {
+    const value = readJsonFile(claudeLocalSettingsFile(projectDir, harnessDir));
+    const profile = isRecord(value) && isRecord(value.env) ? value.env.AWS_PROFILE : undefined;
+    return typeof profile === "string" && profile !== "" ? { ...record, profile } : record;
+  } catch {
+    // No local file, or one AI-DLC cannot read: the record says what it has.
+    return record;
+  }
+}
+
+/**
+ * Write a providers answer into the person's .claude/settings.local.json, once
+ * AI-DLC's record is saved. Every other key of the file stays. Moving off
+ * Bedrock takes out the switch and region the earlier answer wrote; an
+ * AWS_PROFILE stays, since nothing proves it was AI-DLC's. Returns the lines
+ * to say; a file AI-DLC cannot edit is one of them, never a failure.
+ */
+export function applyClaudeLocalProvider(
+  projectDir: string,
+  harnessDir: string,
+  previous: ProvidersRecord | null,
+  next: ProvidersRecord | null,
+): string[] {
+  const shown = `${harnessDir}/settings.local.json`;
+  const path = claudeLocalSettingsFile(projectDir, harnessDir);
+  const lines: string[] = [];
+  try {
+    const { text, value } = readSettingsObject(path);
+    const before = isRecord(value.env) ? value.env : {};
+    const env = { ...before };
+    if (next?.provider === "amazon-bedrock" && next.region) {
+      env.CLAUDE_CODE_USE_BEDROCK = "1";
+      env.AWS_REGION = next.region;
+      if (next.profile) env.AWS_PROFILE = next.profile;
+      else if (env.AWS_PROFILE !== undefined) {
+        lines.push(
+          `AWS_PROFILE in ${shown} stays, so Claude Code uses that profile with Amazon Bedrock; ` +
+            "delete it there to use the default credential chain.",
+        );
+      }
+    } else if (
+      previous?.provider === "amazon-bedrock" &&
+      env.CLAUDE_CODE_USE_BEDROCK === "1" &&
+      env.AWS_REGION === previous.region
+    ) {
+      delete env.CLAUDE_CODE_USE_BEDROCK;
+      delete env.AWS_REGION;
+      if (env.AWS_PROFILE !== undefined) {
+        lines.push(`AWS_PROFILE stays in ${shown}; delete it there if it was only for Amazon Bedrock.`);
+      }
+    }
+    if (JSON.stringify(env) === JSON.stringify(before)) return lines;
+    if (Object.keys(env).length > 0) value.env = env;
+    else delete value.env;
+    if (Object.keys(value).length === 0) unlinkSync(path);
+    else writeSettingsObject(path, value, text);
+    return lines;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException)?.code;
+    return [
+      `Could not write your Amazon Bedrock settings to ${shown} (${
+        code ?? "it is not a JSON object AI-DLC can edit"
+      }); fix that file, then run ${invocationForHarness(harnessDir)} config providers again.`,
+    ];
+  }
+}
+
+// Where this project's Bedrock answer is: an earlier release left it in the
+// shared settings.json, and only the next providers answer moves it.
+function claudeBedrockAnswerFile(projectDir: string, harnessDir: string, record: ProvidersRecord): string {
+  const envIn = (file: string): Record<string, unknown> => {
+    try {
+      const value = readJsonFile(join(projectDir, harnessDir, file));
+      return isRecord(value) && isRecord(value.env) ? value.env : {};
+    } catch {
+      return {};
+    }
+  };
+  const shared = envIn("settings.json");
+  return envIn("settings.local.json").CLAUDE_CODE_USE_BEDROCK === undefined &&
+      shared.CLAUDE_CODE_USE_BEDROCK === "1" && shared.AWS_REGION === record.region
+    ? "settings.json"
+    : "settings.local.json";
+}
+
+type ClaudeEnvLayer = {
+  /** The file that sets these, or null for the environment Claude Code starts in. */
+  file: string | null;
+  managed: boolean;
+  env: Record<string, unknown>;
+};
+
+function managedClaudeEnv(env: NodeJS.ProcessEnv): ClaudeEnvLayer | null {
+  for (const candidate of resolveManagedSettingsCandidates(hostPlatform(), env)) {
+    let found: ClaudeEnvLayer | null = null;
+    for (const file of managedSettingsFiles(candidate)) {
+      try {
+        const value = readJsonFile(file);
+        if (isRecord(value) && isRecord(value.env)) found = { file, managed: true, env: value.env };
+      } catch {
+        // An absent or unreadable managed file sets nothing.
+      }
+    }
+    if (found) return found;
+  }
+  return null;
+}
+
+// Every place Claude Code takes env from, highest first: the organization's
+// managed settings, the project's settings.local.json, its settings.json, the
+// person's user file, then the environment it starts in (measured on 2.1.304:
+// local over project over user over the shell, key by key). The project's
+// files must be readable; a person's own file that is not sets nothing here.
+function claudeEnvLayers(
+  projectDir: string,
+  harnessDir: string,
+  env: NodeJS.ProcessEnv = process.env,
+): ClaudeEnvLayer[] {
+  const layers: ClaudeEnvLayer[] = [];
+  const managed = managedClaudeEnv(env);
+  if (managed) layers.push(managed);
+  for (const file of [
+    claudeLocalSettingsFile(projectDir, harnessDir),
+    join(projectDir, harnessDir, "settings.json"),
+  ]) {
+    if (!existsSync(file)) continue;
+    const value = readJsonFile(file);
+    layers.push({ file, managed: false, env: isRecord(value) && isRecord(value.env) ? value.env : {} });
+  }
+  const user = claudeUserSettingsPath(env);
+  if (user && existsSync(user)) {
+    try {
+      const value = readJsonFile(user);
+      if (isRecord(value) && isRecord(value.env)) layers.push({ file: user, managed: false, env: value.env });
+    } catch {
+      // Claude Code reports its own unreadable user file.
+    }
+  }
+  layers.push({ file: null, managed: false, env });
+  return layers;
+}
+
+// What Claude Code makes of the recorded Bedrock answer, with the step that
+// fixes it. A value set above settings.local.json (managed settings) is named
+// with its file: writing the answer again would not change it.
+function claudeBedrockIssues(
+  projectDir: string,
+  harnessDir: string,
+  record: ProvidersRecord,
+): DiagnosticIssue[] {
+  const layers = claudeEnvLayers(projectDir, harnessDir);
+  const holder = (key: string) => layers.find((layer) => layer.env[key] !== undefined);
+  const value = (key: string) => holder(key)?.env[key];
+  const invoke = invocationForHarness(harnessDir);
+  const local = `${harnessDir}/settings.local.json`;
+  if (value("CLAUDE_CODE_USE_BEDROCK") === undefined) {
+    return [{
+      id: CLAUDE_PROVIDER_NOT_SET_UP_ID,
+      severity: "warn",
+      message:
+        `Amazon Bedrock (${record.region}) is recorded for this project but not turned on in your Claude Code settings; ` +
+        `to use it, run ${invoke} config providers`,
+      remediation: `Run ${invoke} config providers; it writes the region and your AWS profile to ${local}, just for you.`,
+    }];
+  }
+  const keys = [
+    ...(value("CLAUDE_CODE_USE_BEDROCK") !== "1" ? ["CLAUDE_CODE_USE_BEDROCK"] : []),
+    ...(value("AWS_REGION") !== record.region ? ["AWS_REGION"] : []),
+    ...(record.profile && value("AWS_PROFILE") !== record.profile ? ["AWS_PROFILE"] : []),
+  ];
+  if (keys.length === 0) return [];
+  const managed = keys.map(holder).find((layer) => layer?.managed);
+  if (managed?.file) {
+    const held = keys.filter((key) => holder(key) === managed).join(", ");
+    return [{
+      id: "provider-claude-managed-override",
+      message:
+        `Your organization's managed Claude Code settings (${managed.file}) set ${held} differently from the recorded ` +
+        "Amazon Bedrock answer, and they outrank this project's settings; change that file, or ask whoever manages it",
+      remediation: `Change ${held} in ${managed.file}, or ask whoever manages that file.`,
+    }];
+  }
+  const holders = [...new Set(keys.map(holder).filter((layer): layer is ClaudeEnvLayer => layer !== undefined))];
+  const places = holders.map((layer) =>
+    layer.file === null
+      ? "the environment Claude Code starts in"
+      : layer.file.startsWith(projectDir)
+      ? relative(projectDir, layer.file).replaceAll("\\", "/")
+      : layer.file
+  );
+  const step = `run ${invoke} config providers to write it to ${local}`;
+  return [{
+    id: holders.some((layer) => layer.file === claudeLocalSettingsFile(projectDir, harnessDir))
+      ? "provider-claude-local-override"
+      : "provider-claude-settings",
+    message: places.length > 0
+      ? `${keys.join(", ")} in ${places.join(" and ")} ${keys.length === 1 ? "does" : "do"} not match the ` +
+        `recorded Amazon Bedrock answer; ${step}`
+      : `Claude Code turns Amazon Bedrock on without the recorded ${keys.join(", ")}; ${step}`,
+    remediation: `Run ${invoke} config providers to write the recorded answer to ${local}.`,
+  }];
 }
 
 function clearClaudeProvider(
@@ -1470,13 +1669,13 @@ export function hasLegacyCodexProviderConfig(
 }
 
 // The `aws-mcp` region in `.kiro/settings/mcp.json` is plain MCP configuration.
-// Kiro CLI no longer asks a provider question, so no record drives it; but every
+// Kiro CLI does not ask a provider question, so no record drives it; but every
 // refresh restages that file from the release bytes, which would silently move a
 // region the project already carries (set by an earlier build's Bedrock answer,
 // or by hand) back to the shipped one. Carry the project's current endpoint
-// region and `AWS_REGION` metadata into the staged file instead, so the staged
-// bytes equal the current bytes and the refresh preserves the file. Reads only
-// the two aws-mcp arguments; everything else comes from the release.
+// region and `AWS_REGION` metadata into the staged file instead, so the refresh
+// preserves the region. Reads only the two aws-mcp arguments; everything else
+// comes from the release.
 export function preserveKiroMcpRegion(
   projectDir: string,
   stagedRoot: string,
@@ -1528,9 +1727,8 @@ export function preserveKiroMcpRegion(
 }
 
 
-// A staged opencode.json as plain JSON, or null when it is the team's own file
-// with comments (a copy's own tree), which holds no provider block AI-DLC
-// writes or clears here.
+// A staged opencode.json as plain JSON, or null when it cannot be read as an
+// object, including the team's own file with comments (a copy's own tree).
 function openCodeJsonOrNull(path: string): Record<string, unknown> | null {
   try {
     const value = readJsonFile(path);
@@ -1743,7 +1941,7 @@ export function applyConfigDiagnosticRecords(
   }
   if (!provider.region) return;
   if (harness === "claude") {
-    writeClaudeProvider(projectionRoot, harnessDir, provider);
+    writeClaudeMcpRegion(projectionRoot, provider);
   } else if (harness === "opencode") {
     writeOpenCodeProvider(projectionRoot, provider);
   }
@@ -1790,7 +1988,7 @@ export function providerFiles(
   if (harness === "claude") {
     files.push({
       setting: "AWS region and profile",
-      file: join(harnessDir, "settings.json"),
+      file: join(harnessDir, claudeBedrockAnswerFile(projectDir, harnessDir, record)),
     });
     if (existsSync(join(projectDir, ".mcp.json"))) {
       files.push({
@@ -2309,43 +2507,7 @@ export function providerSurfaceIssues(
         PROVIDER_PENDING_ACTIONS["codex-provider-configuration"].remediation,
       );
     } else if (harness === "claude") {
-      const settingsPath = join(projectDir, harnessDir, "settings.json");
-      const settings = readJsonFile(settingsPath) as Record<string, unknown>;
-      const env = isRecord(settings.env) ? settings.env : {};
-      if (
-        env.CLAUDE_CODE_USE_BEDROCK !== "1" ||
-        env.AWS_REGION !== record.region ||
-        (record.profile && env.AWS_PROFILE !== record.profile)
-      ) {
-        mismatch("provider-claude-settings", settingsPath, "Claude settings do not enable Bedrock with the recorded AWS region/profile");
-      }
-      const localPath = join(projectDir, harnessDir, "settings.local.json");
-      if (existsSync(localPath)) {
-        const local = readJsonFile(localPath) as Record<string, unknown>;
-        const localEnv = isRecord(local.env) ? local.env : {};
-        const conflicts = [
-          ...(Object.hasOwn(localEnv, "CLAUDE_CODE_USE_BEDROCK") &&
-              localEnv.CLAUDE_CODE_USE_BEDROCK !== "1"
-            ? ["CLAUDE_CODE_USE_BEDROCK"]
-            : []),
-          ...(Object.hasOwn(localEnv, "AWS_REGION") &&
-              localEnv.AWS_REGION !== record.region
-            ? ["AWS_REGION"]
-            : []),
-          ...(record.profile &&
-              Object.hasOwn(localEnv, "AWS_PROFILE") &&
-              localEnv.AWS_PROFILE !== record.profile
-            ? ["AWS_PROFILE"]
-            : []),
-        ];
-        if (conflicts.length > 0) {
-          mismatch(
-            "provider-claude-local-override",
-            localPath,
-            `Claude local settings override the recorded Bedrock choice with: ${conflicts.join(", ")}`,
-          );
-        }
-      }
+      issues.push(...claudeBedrockIssues(projectDir, harnessDir, record));
       const mcpPath = join(projectDir, ".mcp.json");
       if (existsSync(mcpPath)) {
         const text = readFileSync(mcpPath, "utf-8");
@@ -2412,11 +2574,11 @@ export function copilotConfigPath(
 }
 
 // The global opencode config files that merge before a project opencode.json,
-// in opencode's own order (v1.18.18 config/config.ts:258-260 and :401-403):
-// config.json, opencode.json and opencode.jsonc under its config directory,
-// then the file OPENCODE_CONFIG names. The directory is xdg-basedir's
-// (XDG_CONFIG_HOME, else os.homedir()/.config, on every platform; the home is
-// USERPROFILE on Windows, never APPDATA) plus "opencode" (core/global.ts:13).
+// in opencode's own order (v1.18.18 config/config.ts): config.json,
+// opencode.json and opencode.jsonc under its config directory, then the file
+// OPENCODE_CONFIG names. The directory is xdg-basedir's (XDG_CONFIG_HOME, else
+// os.homedir()/.config, on every platform; the home is USERPROFILE on Windows,
+// never APPDATA) plus "opencode" (core/global.ts).
 export function openCodeGlobalConfigFiles(
   env: NodeJS.ProcessEnv = process.env,
   platform: NodeJS.Platform = hostPlatform(),
@@ -2654,10 +2816,10 @@ export function codexTrustIssues(
 }
 
 // A missing sibling is repaired by the same `--harness` refresh as a missing
-// shell. The old remediation was a bare `aidlc config`, which on a project that
-// already has a harness directory takes the interactive walk and rebuilds
-// nothing. `harnessDir` selects the channel-correct command; callers without one
-// (tests) get the native spelling.
+// shell. A bare `aidlc config` on a project that already has a harness
+// directory takes the interactive walk and rebuilds nothing. `harnessDir`
+// selects the channel-correct command; callers without one (tests) get the
+// native spelling.
 export function workspaceSiblingIssues(
   projectDir: string,
   harness: ModelHarness,
@@ -2814,7 +2976,22 @@ export function trustStatus(
   let kiroWorkflows: TrustStatus["kiroWorkflows"];
   if (harness === "kiro-ide") {
     const state = readKiroIdeWorkflows(env);
-    kiroWorkflows = { enabled: state.enabled, settingsPath: state.settingsPath, answer: readKiroWorkflowsAnswer() };
+    kiroWorkflows = {
+      enabled: state.enabled,
+      readable: state.readable,
+      settingsPath: state.settingsPath,
+      answer: readKiroWorkflowsAnswer(),
+    };
+    // A file AI-DLC cannot read may hold Workflows on whatever the person
+    // answered before, so it is named while the file stays that way, as doctor does.
+    if (!state.readable) {
+      issues.push({
+        id: KIRO_WORKFLOWS_UNREADABLE_ISSUE_ID,
+        message: kiroWorkflowsUnreadableMessage(),
+        remediation: kiroWorkflowsUnreadableFix(state.settingsPath),
+        severity: "warn",
+      });
+    }
     if (state.enabled && kiroWorkflows.answer === null) {
       issues.push({
         id: KIRO_WORKFLOWS_ISSUE_ID,
@@ -2891,6 +3068,16 @@ export function shellOnlyRuntimes(
     .map((binary) => binary.name);
 }
 
+// The runtime fixes setup asks the person for, at its top line and its end
+// alike. A runtime found on this shell's PATH needs nothing from a harness
+// started from a terminal; the doctor says what to do if its hooks never run.
+export function runtimeFixesNeeded(diagnostics: RuntimeDiagnostics): DiagnosticIssue[] {
+  return runtimeIssues({
+    ...diagnostics,
+    binaries: diagnostics.binaries.filter((binary) => binary.status !== "interactive-only"),
+  });
+}
+
 export function postApplyOutstandingActions(
   projectDir: string,
   harnessDir: string,
@@ -2909,13 +3096,7 @@ export function postApplyOutstandingActions(
       ...options.runtime,
       includeHarnessCli: false,
     });
-    // A runtime found on this shell's PATH needs nothing from a harness started
-    // from a terminal; the doctor says what to do if its hooks never run.
-    const needed = {
-      ...diagnostics,
-      binaries: diagnostics.binaries.filter((binary) => binary.status !== "interactive-only"),
-    };
-    actions.push(...runtimeIssues(needed).map((issue) => ({
+    actions.push(...runtimeFixesNeeded(diagnostics).map((issue) => ({
       section: "runtime" as const,
       id: issue.id,
       message: issue.message,
@@ -2936,6 +3117,17 @@ export function postApplyOutstandingActions(
           id: issue.id,
           message: issue.message,
           command: `${invoke} config trust --kiro-workflows off`,
+        };
+      }
+      // No AI-DLC command repairs the file: the step is the person's, and the
+      // command only checks the result.
+      if (issue.id === KIRO_WORKFLOWS_UNREADABLE_ISSUE_ID) {
+        return {
+          section: "trust" as const,
+          id: issue.id,
+          message: issue.message,
+          command: `${invoke} config trust --check`,
+          step: issue.remediation,
         };
       }
       if (issue.id === KIRO_TERMINAL_ISSUE_ID) {
@@ -3395,8 +3587,8 @@ export function kiroIdeWorkflowsDoctorCheck(
     return {
       pass: false,
       severity: "warn",
-      label: `Kiro Workflows: ${state.settingsPath} could not be read as JSONC`,
-      fix: "correct the file, or in Kiro run Disable Workflows from the Command Palette",
+      label: kiroWorkflowsUnreadableMessage(),
+      fix: kiroWorkflowsUnreadableFix(state.settingsPath),
     };
   }
   if (!state.enabled) return { pass: true, label: "Kiro Workflows is off" };
@@ -3523,7 +3715,6 @@ export function vscodeWorkspaceRequestCapDoctorCheck(
 
 const REQUEST_CAP_PAUSES = 'below 100, VS Code stops a long stage to ask "Continue to iterate?" and the chat waits until someone answers';
 
-// The install's added-once record for .vscode/settings.json.
 function requestCapAddedBefore(harnessRoot: string): boolean {
   try {
     const baseline = readJsonFile(join(harnessRoot, "tools", "data", "aidlc-manifest.json")) as {
@@ -3795,11 +3986,13 @@ function changedFrameworkFiles(
 ): string[] {
   const data = join(projectDir, harnessDir, "tools", "data");
   let onboarding = harness === "claude" ? `${harnessDir}/CLAUDE.md` : undefined;
+  let distribution: string = harness;
   try {
     const descriptor: unknown = JSON.parse(readFileSync(join(data, "aidlc-projection.json"), "utf-8"));
     if (isRecord(descriptor) && isSafeOnboardingPath(descriptor.onboarding, harnessDir)) {
       onboarding = descriptor.onboarding;
     }
+    if (isRecord(descriptor) && typeof descriptor.distribution === "string") distribution = descriptor.distribution;
   } catch {
     // The instruction row reports an unreadable descriptor.
   }
@@ -3808,9 +4001,30 @@ function changedFrameworkFiles(
     // The engine writes Kiro IDE's steering copy of the project's memory itself.
     `${harnessDir}/steering/aidlc-active-memory.md`,
   ];
-  // Config takes a plugin's additions to stage files out before it compares.
-  const pluginStages = existsSync(data) &&
-    readdirSync(data).some((name) => /^plugin-contrib-.+\.json$/.test(name));
+  // Config takes a plugin's additions to stage files and personas, and the
+  // personas' per-harness copies, out before it compares. A persona carries
+  // only fragments, so one a plugin composed holds that plugin's marker.
+  const composedBy = existsSync(data)
+    ? readdirSync(data).flatMap((name) => /^plugin-contrib-(.+)\.json$/.exec(name)?.[1] ?? [])
+    : [];
+  const pluginStages = composedBy.length > 0;
+  const carriesFragment = (rel: string): boolean => {
+    try {
+      const text = readFileSync(join(projectDir, rel), "utf-8");
+      return composedBy.some((name) => text.includes(`<!-- plugin:${name}:`));
+    } catch {
+      return false;
+    }
+  };
+  const personas = new Set<string>();
+  const personaDir = `${harnessDir}/agents/`;
+  for (const rel of pluginStages ? Object.keys(baseline.files ?? {}) : []) {
+    const slug = rel.startsWith(personaDir) && rel.endsWith(".md") ? rel.slice(personaDir.length, -3) : "";
+    if (slug === "" || slug.includes("/")) continue;
+    for (const file of [rel, ...personaTwinRels(distribution, harnessDir, slug)]) {
+      if (carriesFragment(file)) personas.add(file);
+    }
+  }
   const changed: string[] = [];
   for (const [rel, hash] of Object.entries(baseline.files ?? {})) {
     if (
@@ -3819,6 +4033,7 @@ function changedFrameworkFiles(
       baseline.entries?.[rel] !== undefined ||
       generated.includes(rel) ||
       (pluginStages && rel.startsWith(`${harnessDir}/aidlc-common/stages/`)) ||
+      personas.has(rel) ||
       rel.startsWith("/") ||
       rel.split("/").includes("..")
     ) continue;
@@ -3859,8 +4074,18 @@ export function frameworkFilesDoctorCheck(
     // The instruction row reports a missing or unreadable record.
     return { pass: true, label: "AI-DLC files: not checked, no record of what AI-DLC wrote" };
   }
-  const changed = changedFrameworkFiles(projectDir, selected.harnessDir, selected.harness, baseline);
-  if (changed.length === 0) return { pass: true, label: "AI-DLC files: unchanged since AI-DLC wrote them" };
+  const differ = changedFrameworkFiles(projectDir, selected.harnessDir, selected.harness, baseline);
+  // An agent file Kiro upgraded for its 3.0 engine is not the person's change.
+  const upgraded = differ.filter((rel) => kiroUpgradedAgentFile(projectDir, rel));
+  const changed = differ.filter((rel) => !upgraded.includes(rel));
+  if (changed.length === 0) {
+    const kept = upgraded.length === 0
+      ? ""
+      : `, apart from ${upgraded.length} agent ${
+        upgraded.length === 1 ? "file" : "files"
+      } Kiro upgraded for its 3.0 engine`;
+    return { pass: true, label: `AI-DLC files: unchanged since AI-DLC wrote them${kept}` };
+  }
   const invoke = invocationForHarness(selected.harnessDir);
   const one = changed.length === 1;
   const shown = changed.slice(0, 10).join(", ");

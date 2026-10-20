@@ -93,6 +93,27 @@ Core ships 11 named scopes. Each scope defines a stage set, a default depth leve
 
 Override ceremonies for an intent with `/aidlc --sensors on|off`, `/aidlc --learnings on|off`, `/aidlc --summary-confirmation on|off`, `/aidlc --plan-approval on|off`, or `/aidlc --collaborators on|off`. The global kill switches `AIDLC_DISABLE_SENSORS=1`, `AIDLC_DISABLE_LEARNINGS=1`, `AIDLC_DISABLE_SUMMARY_CONFIRMATION=1`, `AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1`, and `AIDLC_DISABLE_COLLABORATORS=1` force them off. Apart from plan approval, which only you turn off, approval gates, human-turn authority, audit, and team write protection still apply. See [ceremony customization](13-customization.md#ceremony-switches).
 
+#### Fewer stops for a workshop or small work
+
+Two per-stage checks add the most stops to a long run: the learnings question
+and the summary confirmation. To start a plan without them, type both switches
+with the request, so the new work is created with them off:
+
+```
+/aidlc workshop --learnings off --summary-confirmation off <the work>
+```
+
+| Switch | What it removes at each stage | What you lose |
+|--------|-------------------------------|---------------|
+| `--learnings off` | The "Anything to add for next time?" question before the approval gate, and the stage diary (`memory.md`) | Nothing from this work is written to `memory/project.md` or `memory/team.md`, so the next run does not pick up what this one taught. Practices already in memory still load |
+| `--summary-confirmation off` | The `Looks correct` check on a summary of your answers before the stage writes its artifact | The stage writes straight from your answers. A misread answer shows up in the artifact at the approval gate, where fixing it costs a revision |
+
+Neither switch removes a stage's questions or its approval gate. `bugfix` and
+`express` already start with both off, and `classic` with summary confirmation
+off. On work already under way, ask for either one in your own words, or type
+`/aidlc --learnings off` or `/aidlc --summary-confirmation off`; summary
+confirmation goes off only when you ask for it.
+
 #### Upgrading an in-flight classic intent
 
 The saved stage plan is preserved: an older classic intent whose Operation
@@ -160,8 +181,6 @@ Authoritative data lives in the `.claude/scopes/aidlc-<name>.md` files (scope id
 | (proposed) | Varies | Varies | Varies | The agent proposes one from your freeform intent; you confirm it |
 
 Scopes differ by an order of magnitude in ceremony: `poc` runs a narrow single-pass path, while `feature` runs 30 stages after Initialization with 30 approval gates (29 of each on a new project, where Reverse Engineering is skipped) and five stages that repeat for each Unit of Work in Construction (four design stages and Code Generation). The scope confirmation line names the effective numbers - stage count, approval-gate count, and any per-unit fan-out - computed from the compiled grid and workspace scan, never estimated. Greenfield work excludes reverse engineering, and scopes that skip `units-generation` omit the per-unit clause because no Unit DAG exists. You know what you are consenting to before the workflow starts.
-
-The confirmation also lists what the effective policy turns off, including creation flags and environment kill switches. Classic defaults add `; no summary confirmation; lead agent only`; opting summary confirmation in removes its part, because an advisory review cap is not a disabled ceremony, and collaborators on removes `lead agent only`. Scopes with every ceremony enabled, collaborators on, and no `none` review cap omit that clause.
 
 > **Per-project default scope:** teams can pre-set the default scope for a project by setting `AWS_AIDLC_DEFAULT_SCOPE` in `.claude/settings.json`. See [Customization § Per-Project Default Scope](13-customization.md#per-project-default-scope).
 
@@ -234,8 +253,7 @@ the line says 6 stages and 6 approval gates:
 ```text
  Plan
  I'd run the "bugfix" plan for: "Fix the timeout on the export endpoint" - 5 stages, 5 approval
- gates; no learnings ritual or summary confirmation; lead agent only. Do you want me to go ahead
- with it, use a different plan, or tailor one to this task?
+ gates. Do you want me to go ahead with it, use a different plan, or tailor one to this task?
  > 1. Go ahead with the "bugfix" plan
       5 stages focused on fixing this specific bug.
    2. Use a different plan
@@ -282,7 +300,7 @@ The composer agent reads your task, then estimates five implementation-entropy c
 
 **Settings at the gate:** besides the stage grid, a front/report proposal names the plan's Guard Policy and its six scope settings (`sensors`, `learnings`, `summary_confirmation`, `plan_approval`, `collaborators`, and `review_cap`), each group on its own row with a one-line reason. That lets a composed plan trim the ceremony inside its stages as well as the stages themselves: a small, well-understood fix might run with sensors and learnings off and reviews capped at advisory. A matched proposal starts from the stock scope's values. A custom plan picks its own stages but starts from the `classic` scope's ceremony, the workflow you get without composing: Guard Policy off, summary confirmation and collaborators off, reviews advisory, and sensors, learnings, and plan approval on. The composer moves a setting only when your task gives it a reason (summary confirmation comes back on only when the task is highly ambiguous) and keeps Guard Policy off unless a memory layer holds it strict; you can raise it on the gate. Either way, values that differ from the stock scope the plan runs on apply to this piece of work only, with no new scope file, and a plan you save stores them in its frontmatter. Ask for any change before approving and it is made; lowering a stock plan's Guard Policy makes it a custom plan, on a stock scope that carries that value. Plan approval keeps the value the gate shows, so a custom plan keeps it on even when the stock scope it runs on builds without asking; say "skip plan approval for this work" at the gate and the work is created with it off, set by you. No other setting removes an approval gate. Mid-workflow, ask in plain words ("turn sensors off", "give this full reviews") and the change is applied to the running work without a gate (see [Ceremony Switches](13-customization.md#ceremony-switches)); a review level set for the piece of work replaces its scope's ceiling, so stronger reviews change no stages, and setting the scope's own level returns to its normal reviews. A setting the composer suggests on its own during a mid-workflow compose appears on the gate and applies only if you approve it. Turning summary confirmation off mid-workflow is a change you make yourself: ask in plain words ("skip the looks correct check from now on") or approve it on the gate, and the agent turns it off and says so in one line, with your words and how to turn it back on. Plan approval is turned off only by you, in your own words or by typing `/aidlc config set plan-approval off`; the composer never proposes turning it off mid-workflow.
 
-**CodeKB grounding (optional):** CodeKB is an external MCP server that serves pre-computed structural analysis of a codebase (call graphs, component inventories, cross-package coupling). AI-DLC does not ship or require it - without it the composer scores structure from the bounded workspace scan, which is the normal path. When you do connect one, the composer uses it as the sole structural evidence source and cites it in the proposal (`method: codekb`). How to connect it depends on the harness: on Claude Code add the server to your project's `.mcp.json` (subagents inherit session MCP servers); on Codex add an `mcp_servers` entry to your `config.toml`; on opencode add it to your opencode config; on Copilot CLI add it to `~/.copilot/mcp-config.json`, and in VS Code to `.vscode/mcp.json`. On Kiro CLI the shipped composer config sets `includeMcpJson: true`, so connecting CodeKB means adding it to `.kiro/settings/mcp.json` without `"disabled": true` and adding its `@<server>` grant to the composer agent's `tools`; Kiro IDE remains fallback-only. Do not confuse CodeKB with the framework's own "codekb" directory (`aidlc/spaces/<space>/codekb/`) - that is the local artifact store the Reverse Engineering stage writes, unrelated to the MCP server. Note that with CodeKB evidence the composer may propose skipping Reverse Engineering; the proposal must disclose that downstream stages then run without that local store, and you decide at the gate.
+**CodeKB grounding (optional):** CodeKB is an external MCP server that serves pre-computed structural analysis of a codebase (call graphs, component inventories, cross-package coupling). AI-DLC does not ship or require it - without it the composer scores structure from the bounded workspace scan, which is the normal path. When you do connect one, the composer uses it as the sole structural evidence source and cites it in the proposal (`method: codekb`). How to connect it depends on the harness: on Claude Code add the server to your project's `.mcp.json` (subagents inherit session MCP servers); on Codex add an `mcp_servers` entry to your `config.toml`; on opencode add it to your opencode config; on Copilot CLI add it to `~/.copilot/mcp-config.json`, and in VS Code to `.vscode/mcp.json`. On Kiro add it to `.kiro/settings/mcp.json` (or your own `~/.kiro/settings/mcp.json`) without `"disabled": true`: on Kiro CLI's v2 engine then run config again, which grants it to the composer agent; on its v3 engine and on Kiro IDE the composer gets it as it is. Do not confuse CodeKB with the framework's own "codekb" directory (`aidlc/spaces/<space>/codekb/`) - that is the local artifact store the Reverse Engineering stage writes, unrelated to the MCP server. Note that with CodeKB evidence the composer may propose skipping Reverse Engineering; the proposal must disclose that downstream stages then run without that local store, and you decide at the gate.
 
 **Keyword hygiene:** saved scopes ship with `keywords: []`, so a saved plan carries no hints into the agent's plan proposal step. Giving it hints for future prompts is an explicit choice when you save it (`scope save --keywords <word,...>`, single words; a hint another plan already has is saved too, and the save says in one line that the plan proposal lists it under both), never a side effect.
 
@@ -519,7 +537,25 @@ You can change the test strategy at three points:
 | Lightweight requirements-to-deploy run | `express` |
 | AI-DLC workshop or training lab | `workshop` |
 
-When in doubt, start with `feature` for full-lifecycle coverage; choose `classic` for the v1-style Inception and Construction experience without Ideation or Operation.
+When in doubt, pick the plan by the size of the change. For a small,
+well-understood change, start with `express` (or `bugfix` for a known bug) and
+add the one stage you want, rather than starting with `feature`, which runs
+every stage:
+
+```
+/aidlc express --add functional-design <the change>
+/aidlc bugfix --add functional-design <what is broken>
+```
+
+`--add` puts a stage on this piece of work's plan only and keeps the rest of
+the scope as it is, so `express` with Functional Design still runs with no
+reviewers, sensors, learnings question, summary confirmation, or plan approval.
+Add `domain-design` instead when the change first needs its components named.
+On work already under way, `/aidlc --add <stage>` adds a stage that has not
+run yet (see `--skip` / `--add` in [CLI Commands](12-cli-commands.md)).
+Choose `feature` for a production feature that needs the full lifecycle, and
+`classic` for the v1-style Inception and Construction experience without
+Ideation or Operation.
 
 ---
 

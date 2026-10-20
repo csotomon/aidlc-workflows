@@ -25,7 +25,7 @@ import {
   delegateAdmittedVerbs,
   delegatedLifecycleCommand,
 } from "../../core/hooks/aidlc-state-transition-guard.ts";
-import { copyChannelDispatcherCommands, resolveAction, ROUTES } from "../../core/tools/aidlc.ts";
+import { admittedEngineRoute, copyChannelDispatcherCommands, ROUTES } from "../../core/tools/aidlc.ts";
 import { LAUNCHER_GLOBAL_FLAGS, trustedCommand, TRUSTED_ROUTE_NAMESPACE } from "../../core/tools/aidlc-command.ts";
 import { isWorkspaceNoun, parseWorkspaceCommand, WORKSPACE_NOUNS } from "../../core/tools/aidlc-lib.ts";
 
@@ -47,13 +47,6 @@ const exactQuery = (command: string): string[] => {
 };
 const exclusionsFor = (command: string): string[] =>
   delegateMayRun(command) ? both(command) : exactQuery(command);
-
-// An engine route verb is admitted when the script and verb the dispatcher
-// runs for it are.
-const admittedRoute = (admitted: Readonly<Record<string, readonly string[]>>, words: string[]): boolean => {
-  const action = resolveAction(["engine", ...words]);
-  return action.type === "delegate" && (admitted[action.tool] ?? []).includes(action.args[0] ?? "");
-};
 
 // A workspace noun's reads, as the workspace parser reads them: the bare noun
 // (excluded exactly, since `<noun> <name>` switches) and the list and help forms.
@@ -82,16 +75,17 @@ function engineRouteExclusions(agent: string, engine: string): string[] {
     const prefix = route.group === "top" ? "" : `${route.group} `;
     for (const verb of route.verbs.filter((verb) => !verb.startsWith("<"))) {
       const words = [...(route.group === "top" ? [] : [route.group]), ...verb.split(" ")];
-      if (admittedRoute(admitted, words)) exclude.push(...exclusionsFor(`${engine} ${prefix}${verb}`));
+      if (admittedEngineRoute(admitted, words)) exclude.push(...exclusionsFor(`${engine} ${prefix}${verb}`));
     }
   }
   return exclude;
 }
 
 // The copy channel's conductor allows the tool scripts, the dispatcher's
-// engine namespace, and the dispatcher's read-only commands exactly as written
-// (reading a setting, doctor, version, status), so the persona denies all
-// three. delegateAdmittedVerbs admits no persona any of those commands.
+// engine namespace, and the dispatcher's read-only and turn-back-on commands
+// exactly as written (reading a setting, doctor, version, status, turning a
+// check back on), so the persona denies all three. delegateAdmittedVerbs
+// admits no persona any of those commands.
 export function copyChannelDelegateShellDeny(harnessDir: string, agent: string): ShellDeny {
   const tool = (file: string) => `bun ${harnessDir}/tools/${file}`;
   const engine = `${tool("aidlc.ts")} ${TRUSTED_ROUTE_NAMESPACE}`;

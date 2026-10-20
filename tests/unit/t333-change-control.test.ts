@@ -41,7 +41,7 @@ import {
 import { waitForBarrierLine } from "../harness/barrier-file.ts";
 import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
   auditBlockField,
@@ -176,8 +176,16 @@ function utilityError(stderr: string): string {
   return parsed.error;
 }
 
-/** A project with the shipped memory and one intent on `scope`. */
-function project(scope: string, extra: string[] = []): { proj: string; state: string } {
+// A command typed at the person's own terminal, with no chat around it and no
+// agent host's mark on it.
+const TERMINAL: NodeJS.ProcessEnv = {
+  ...Object.fromEntries(Object.keys(process.env)
+    .filter((key) => /^(?:CLAUDECODE|CLAUDE_CODE_|CODEX_|CURSOR_|KIRO_|OPENCODE|COPILOT_|VSCODE_)/i.test(key))
+    .map((key) => [key, undefined])),
+  AIDLC_TEST_CONFIG_TTY: "1", AIDLC_SESSION_OVERRIDE: undefined, TERM_PROGRAM: undefined,
+};
+
+function project(scope: string, extra: string[] = [], env: NodeJS.ProcessEnv = {}): { proj: string; state: string } {
   const proj = createTestProject();
   tempDirs.push(proj);
   seedAidlcMemory(proj);
@@ -194,6 +202,7 @@ function project(scope: string, extra: string[] = []): { proj: string; state: st
       ...extra,
     ],
     proj,
+    env,
   );
   expect(created.status, created.stderr).toBe(0);
   const intents = join(proj, "aidlc", "spaces", "default", "intents");
@@ -207,7 +216,6 @@ function memoryFile(proj: string, layer: "org" | "team" | "project"): string {
   return join(proj, "aidlc", "spaces", "default", "memory", `${layer}.md`);
 }
 
-/** Declare a Mode under the shipped `## Guard Policy` heading. */
 function declareMemoryMode(proj: string, layer: "org" | "team" | "project", mode: string): void {
   const path = memoryFile(proj, layer);
   const content = readFileSync(path, "utf-8");
@@ -285,12 +293,10 @@ function rowsOf(proj: string, event: string) {
   return readAuditShardEvents(proj).filter((entry) => entry.event === event);
 }
 
-/** How many times the one-line rename notice appears in a stream. */
 function renameNotices(stream: string): number {
   return stream.split("\n").filter((line) => line === GUARD_POLICY_RENAME_NOTICE).length;
 }
 
-/** The frontmatter block of a shipped scope file. */
 function scopeFrontmatter(scope: string): string {
   const body = readFileSync(join(AIDLC_SRC, "scopes", `aidlc-${scope}.md`), "utf-8");
   const match = /^---\n([\s\S]*?)\n---/.exec(body);
@@ -412,7 +418,6 @@ describe("t333 (2) the grammar", () => {
     expect(structuredField("Ordering:\n  tests first.", "Ordering")).toBe("tests first.");
   });
 
-  // These layouts were already accepted before wrapped values were supported.
   // Nested notes, sibling fields, and new blocks are not part of the field;
   // only wrapped prose belongs to its value.
   test("a field value ends at the next item of any marker, a sibling field, or a block", () => {
@@ -675,7 +680,9 @@ describe("t333 (3) resolution precedence", () => {
     const { proj, state } = project("enterprise");
     const content = readFileSync(state, "utf-8");
     expect(memoryStrictHoldsGuardPolicy(proj, content)).toBe(false);
-    expect(fenceSwitchSentence(proj, "review-freeze", content)).toContain("guard.review-freeze off` yourself");
+    expect(fenceSwitchSentence(proj, "review-freeze", content)).toContain(
+      "guard.review-freeze off --person-words '<their words>'` yourself",
+    );
     const memory = memoryFile(proj, "project");
     rmSync(memory);
     mkdirSync(memory);
@@ -683,7 +690,6 @@ describe("t333 (3) resolution precedence", () => {
     const sentence = fenceSwitchSentence(proj, "review-freeze", content);
     expect(sentence).toContain("cannot be turned off from chat");
     expect(sentence).not.toContain("guard.review-freeze off");
-    // It says where the repair is made.
     expect(sentence).toContain("correct it there");
   });
 
@@ -747,6 +753,7 @@ describe("t333 (3) resolution precedence", () => {
 describe("t333 (4) config-change, the slash flag, and the status line", () => {
   test("config-change rewrites the line, records GUARD_POLICY_SET, and status shows the human as the source", () => {
     const { proj, state } = project("classic");
+    recordHumanPrompt(proj, "/aidlc --guard-policy strict");
     const flipped = run(UTILITY, ["config-change", "--guard-policy", "strict"], proj);
     expect(flipped.status, flipped.stderr).toBe(0);
     expect(flipped.stdout).toContain("Guard Policy changed: off (from scope classic) to strict (set by you)");
@@ -781,7 +788,6 @@ describe("t333 (4) config-change, the slash flag, and the status line", () => {
     expect(auditBlockField(rows[0].block, "Old Value")).toBe("strict");
     expect(auditBlockField(rows[0].block, "New Value")).toBe("off");
     expect(auditBlockField(rows[0].block, "Source")).toBe("you");
-    // Run again, the setter says it already holds.
     const unchanged = run(UTILITY, ["config-change", "--guard-policy", "off"], proj, FENCE_ENV_CLEAR);
     expect(unchanged.status, unchanged.stderr).toBe(0);
     expect(unchanged.stdout).toContain("Guard Policy is already off (set by you)");
@@ -804,7 +810,6 @@ describe("t333 (4) config-change, the slash flag, and the status line", () => {
     });
     expect(JSON.parse(listed.stdout)).not.toHaveProperty("guard.human-presence");
     expect(run(UTILITY, ["config-get", "guard.human-presence"], proj, FENCE_ENV_CLEAR).stdout).toBe("on (default)\n");
-    // Back to strict: the row records the move from off.
     const restored = run(UTILITY, ["config-change", "--guard-policy", "strict"], proj);
     expect(restored.status, restored.stderr).toBe(0);
     const after = guardPolicyRows(proj);
@@ -819,6 +824,7 @@ describe("t333 (4) config-change, the slash flag, and the status line", () => {
       state,
       setField(readFileSync(state, "utf-8"), GUARD_POLICY_FIELD, "stricct (set by you)"),
     );
+    recordHumanPrompt(proj, "/aidlc --guard-policy strict");
     const repaired = run(UTILITY, ["config-change", "--guard-policy", "strict"], proj);
     expect(repaired.status, repaired.stderr).toBe(0);
     expect(getField(readFileSync(state, "utf-8"), GUARD_POLICY_FIELD)).toBe("strict (set by you)");
@@ -876,7 +882,6 @@ describe("t333 (4) config-change, the slash flag, and the status line", () => {
     expect(strictStatus.stdout).not.toContain(STATUS_FENCES);
   });
 
-  /** The last JSON line `next` printed, narrowed to the two fields these tests read. */
   function lastDirective(stdout: string): { kind: string; message: string } {
     const parsed: unknown = JSON.parse(stdout.trim().split("\n").pop() ?? "");
     if (
@@ -946,6 +951,7 @@ describe("t333 (4) config-change, the slash flag, and the status line", () => {
     expect(directive.message).not.toContain("change-control");
     expect(renameNotices(routed.stderr)).toBe(1);
 
+    recordHumanPrompt(proj, "/aidlc --change-control strict");
     const flipped = run(UTILITY, ["config-change", "--change-control", "strict"], proj);
     expect(flipped.status, flipped.stderr).toBe(0);
     expect(renameNotices(flipped.stderr)).toBe(1);
@@ -960,7 +966,6 @@ describe("t333 (4) config-change, the slash flag, and the status line", () => {
     expect(read.status, read.stderr).toBe(0);
     expect(read.stdout).toBe("strict (set by you)\n");
     expect(renameNotices(read.stderr)).toBe(1);
-    // The new key prints no notice, and the list carries only the new key.
     const current = run(UTILITY, ["config-get", "guard-policy"], proj);
     expect(current.stdout).toBe("strict (set by you)\n");
     expect(renameNotices(current.stderr)).toBe(0);
@@ -978,6 +983,7 @@ describe("t333 (4) config-change, the slash flag, and the status line", () => {
     expect(refused.stderr).toContain("--change-control is the retired name of --guard-policy; pass one of them, not both.");
     expect(readFileSync(state, "utf-8")).toBe(before);
     expect(guardPolicyRows(proj)).toHaveLength(0);
+    recordHumanPrompt(proj, "/aidlc --guard-policy strict");
     const agreed = run(UTILITY, ["config-change", "--change-control", "strict", "--guard-policy", "strict"], proj);
     expect(agreed.status, agreed.stderr).toBe(0);
     expect(getField(readFileSync(state, "utf-8"), GUARD_POLICY_FIELD)).toBe("strict (set by you)");
@@ -999,13 +1005,13 @@ describe("t333 (4) config-change, the slash flag, and the status line", () => {
     expect(lastDirective(routed.stdout).message).toContain("engine config set guard-policy relaxed");
     expect(lastDirective(routed.stdout).message).not.toContain("already applied");
     expect(guardPolicyRows(proj)).toHaveLength(0);
-    // A value the state does not hold yet names the setter too.
     const strict = lastDirective(run(ORCHESTRATE, ["next", "--guard-policy", "strict"], proj).stdout);
     expect(strict.message).toContain("engine config set guard-policy strict");
   });
 
   test("the flag at creation writes the human as the source, under either spelling", () => {
-    const { state } = project("classic", ["--guard-policy", "strict"]);
+    // Typed at the person's own terminal.
+    const { state } = project("classic", ["--guard-policy", "strict"], TERMINAL);
     expect(getField(readFileSync(state, "utf-8"), GUARD_POLICY_FIELD)).toBe("strict (set by you)");
 
     const proj = createTestProject();
@@ -1015,6 +1021,7 @@ describe("t333 (4) config-change, the slash flag, and the status line", () => {
       UTILITY,
       ["intent-create", "--scope", "classic", "--arguments", "x", "--label", "retired", "--change-control", "strict"],
       proj,
+      TERMINAL,
     );
     expect(retired.status, retired.stderr).toBe(0);
     expect(renameNotices(retired.stderr)).toBe(1);
@@ -1163,7 +1170,8 @@ describe("t333 (4) config-change, the slash flag, and the status line", () => {
       FENCE_ENV_CLEAR,
     );
     expect(raise.status, raise.stderr).toBe(0);
-    expect(getField(readFileSync(project_state(proj), "utf-8"), GUARD_POLICY_FIELD)).toBe("relaxed (set by you)");
+    // Nobody asked for it, so it is the command's.
+    expect(getField(readFileSync(project_state(proj), "utf-8"), GUARD_POLICY_FIELD)).toBe("relaxed (set by a command)");
 
     // Scope change: naming the new scope's lower default is still a lowering.
     const raised = project("enterprise");
@@ -1304,14 +1312,15 @@ describe("t333 (4) config-change, the slash flag, and the status line", () => {
     const dispatcher = join(AIDLC_SRC, "tools", "aidlc.ts");
     const raised = run(dispatcher, ["engine", "config", "set", "guard-policy", "relaxed"], proj, FENCE_ENV_CLEAR);
     expect(raised.status, raised.stderr).toBe(0);
-    expect(getField(readFileSync(state, "utf-8"), GUARD_POLICY_FIELD)).toBe("relaxed (set by you)");
+    // "carry on" asked for no setting, so the raise is the command's.
+    expect(getField(readFileSync(state, "utf-8"), GUARD_POLICY_FIELD)).toBe("relaxed (set by a command)");
     expect(guardPolicyRows(proj).map((row) => auditBlockField(row.block, "New Value"))).toEqual(["relaxed"]);
     // Going back down to off is a lowering: the person's message since the last
     // decision stands for it; the answer the agent recorded from it is not a
     // second decision, so the agent carries out what it read in their words.
     const lowered = run(dispatcher, ["engine", "config", "set", "guard-policy", "off"], proj, FENCE_ENV_CLEAR);
     expect(lowered.status, lowered.stderr).toBe(0);
-    expect(getField(readFileSync(state, "utf-8"), GUARD_POLICY_FIELD)).toBe("off (set by you)");
+    expect(getField(readFileSync(state, "utf-8"), GUARD_POLICY_FIELD)).toBe("off (set by a command)");
     // Once another decision has used their message up, a lowering waits for their word.
     const raisedAgain = run(dispatcher, ["engine", "config", "set", "guard-policy", "relaxed"], proj, FENCE_ENV_CLEAR);
     expect(raisedAgain.status, raisedAgain.stderr).toBe(0);
@@ -1320,7 +1329,9 @@ describe("t333 (4) config-change, the slash flag, and the status line", () => {
     expect(refused.status).not.toBe(0);
     expect(refusalError(refused.stderr)).toContain("Setting Guard Policy off lowers fences, which is the person's call.");
     recordHumanPrompt(proj, "put the guards back off");
-    const asked = run(dispatcher, ["engine", "config", "set", "guard-policy", "off"], proj, FENCE_ENV_CLEAR);
+    const asked = run(dispatcher, [
+      "engine", "config", "set", "guard-policy", "off", "--person-words", "put the guards back off",
+    ], proj, FENCE_ENV_CLEAR);
     expect(asked.status, asked.stderr).toBe(0);
     expect(getField(readFileSync(state, "utf-8"), GUARD_POLICY_FIELD)).toBe("off (set by you)");
   });
@@ -1510,6 +1521,62 @@ describe("t333 (6) a memory edit observed by a governed check", () => {
     expect(resolved.value).toBe("strict");
     mkdirSync(join(proj, "nothing"), { recursive: true });
     expect(existsSync(join(proj, "aidlc", "spaces", "default", "intents", "audit"))).toBe(false);
+  });
+
+  // A teammate's clone keeps its own shard, and shards are read in filename
+  // order, which is not the order the rows were written in.
+  const stamp = () => new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+  function nextSecond(): void {
+    const second = Math.floor(Date.now() / 1000);
+    while (Math.floor(Date.now() / 1000) === second) {}
+  }
+  function teammateRow(proj: string, fields: Record<string, string>, timestamp: string): void {
+    const ours = readAuditShardEvents(proj).at(-1)!.shard;
+    const shard = isAbsolute(ours) ? ours : join(proj, ours);
+    const body = Object.entries(fields).map(([key, value]) => `**${key}**: ${value}\n`).join("");
+    // "~" sorts after ".", so the teammate's shard is read after ours.
+    writeFileSync(shard.replace(/\.md$/, "~teammate.md"),
+      `\n## Guard Policy Set\n**Timestamp**: ${timestamp}\n**Event**: GUARD_POLICY_SET\n${body}\n---\n`);
+  }
+  const ours = (proj: string) => guardPolicyRows(proj).filter((row) => !row.shard.endsWith("~teammate.md"));
+
+  test("the person's newer setting is the value a governed check starts from, though a teammate's older one is read last", () => {
+    const { proj, state } = project("enterprise");
+    teammateRow(proj, { "Old Value": "off", "New Value": "strict", Source: "you" }, stamp());
+    nextSecond();
+    writeFileSync(state, setField(readFileSync(state, "utf-8"), GUARD_POLICY_FIELD, "off (set by you)"));
+    appendAuditEntry("GUARD_POLICY_SET", { "Old Value": "strict", "New Value": "off", Source: "you" }, proj);
+    expect(guardPolicyRows(proj).at(-1)!.shard).toEndWith("~teammate.md");
+    expect(governedGuardPolicy(proj)).toMatchObject({ value: "off", source: "you" });
+    governedGuardPolicy(proj);
+    expect(ours(proj)).toHaveLength(1);
+    const status = run(UTILITY, ["status"], proj);
+    expect(status.stdout).toContain(`${STATUS_POLICY}off (set by you)\n`);
+  });
+
+  test("a memory edit undone is recorded, though a teammate's older setting naming the same value is read last", () => {
+    const { proj } = project("classic");
+    teammateRow(proj, { "Old Value": "strict", "New Value": "off", Source: "scope classic" }, stamp());
+    nextSecond();
+    declareMemoryMode(proj, "team", "strict");
+    expect(governedGuardPolicy(proj).value).toBe("strict");
+    const path = memoryFile(proj, "team");
+    writeFileSync(path, readFileSync(path, "utf-8").replace("Mode: strict\n", ""));
+    expect(governedGuardPolicy(proj).value).toBe("off");
+    const rows = ours(proj);
+    expect(rows).toHaveLength(2);
+    expect(auditBlockField(rows[1].block, "Old Value")).toBe("strict");
+    expect(auditBlockField(rows[1].block, "New Value")).toBe("off");
+    expect(auditBlockField(rows[1].block, "Source")).toBe("scope classic");
+  });
+
+  test("two settings in the same second in two shards: the record cannot tell, so the intent's own line is where it starts", () => {
+    const { proj, state } = project("enterprise");
+    writeFileSync(state, setField(readFileSync(state, "utf-8"), GUARD_POLICY_FIELD, "relaxed (set by you)"));
+    appendAuditEntry("GUARD_POLICY_SET", { "Old Value": "strict", "New Value": "relaxed", Source: "you" }, proj);
+    teammateRow(proj, { "Old Value": "relaxed", "New Value": "strict", Source: "you" }, guardPolicyRows(proj).at(-1)!.timestamp);
+    expect(governedGuardPolicy(proj).value).toBe("relaxed");
+    expect(ours(proj)).toHaveLength(1);
   });
 });
 
@@ -1718,7 +1785,6 @@ describe("t333 (8) intent-create --space is the creation target end to end", () 
     expect(rows.map((row) => row.event)).toContain("WORKFLOW_STARTED");
     expect(rows.map((row) => row.event)).toContain("WORKSPACE_INITIALISED");
     expect(existsSync(join(altIntents, createdDir, "verification"))).toBe(true);
-    // The active space is untouched: cursor, registry, records, rows.
     expect(snapshot(selected.proj, "default")).toEqual(defaultBefore);
     expect(readAuditShardEvents(selected.proj, selected.defaultIntent, "default")).toEqual(defaultRows);
     expect(readFileSync(join(selected.proj, "aidlc", "active-space"), "utf-8").trim()).toBe("default");
@@ -1959,7 +2025,7 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
       "review-freeze",
     ]);
     expect(run(UTILITY, ["config-get", "guard.human-presence"], proj, FENCE_ENV_CLEAR).stdout).toBe("on (default)\n");
-    // Back on: GUARD_RESTORED, the line shrinks, the read returns to the default.
+    recordHumanPrompt(proj, "/aidlc config set guard.state-transition on");
     const restored = run(UTILITY, ["config-change", "--guard.state-transition", "on"], proj, FENCE_ENV_CLEAR);
     expect(restored.status, restored.stderr).toBe(0);
     expect(restored.stdout).toContain("The state transition check is back on for this piece of work");
@@ -1993,6 +2059,7 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
   test("config set can raise a policy-lowered fence and the human-turn hook can lower it again without duplicate rows", () => {
     const { proj, state } = project("classic");
     const dispatcher = join(AIDLC_SRC, "tools", "aidlc.ts");
+    recordHumanPrompt(proj, "/aidlc config set guard.review-freeze on");
     const raised = run(dispatcher, ["engine", "config", "set", "guard.review-freeze", "on"], proj, FENCE_ENV_CLEAR);
     expect(raised.status, raised.stderr).toBe(0);
     const onState = readFileSync(state, "utf-8");
@@ -2034,14 +2101,15 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
   test("Guard Policy off set as a whole also turns off a check the person had kept on", () => {
     const { proj, state } = project("classic");
     const dispatcher = join(AIDLC_SRC, "tools", "aidlc.ts");
+    // Nobody asked, so the raise is the command's.
     expect(run(dispatcher, ["engine", "config", "set", "guard.review-freeze", "on"], proj, FENCE_ENV_CLEAR).status).toBe(0);
-    expect(getField(readFileSync(state, "utf-8"), GUARDS_ON_FIELD)).toBe("review-freeze (set by you)");
+    expect(getField(readFileSync(state, "utf-8"), GUARDS_ON_FIELD)).toBe("review-freeze (set by a command)");
     // With no word of the person's since the last decision, the agent cannot.
     const refused = run(UTILITY, ["config-change", "--guard-policy", "off"], proj, FENCE_ENV_CLEAR);
     expect(refused.status).not.toBe(0);
     // The agent runs it when they ask: no command is handed to them to type.
     expect(refused.stderr).not.toContain("They can also type");
-    expect(getField(readFileSync(state, "utf-8"), GUARDS_ON_FIELD)).toBe("review-freeze (set by you)");
+    expect(getField(readFileSync(state, "utf-8"), GUARDS_ON_FIELD)).toBe("review-freeze (set by a command)");
     // Typed by the person, the agent runs the setter, and the check is named in words.
     recordHumanPrompt(proj, "/aidlc --guard-policy off");
     const said = run(UTILITY, ["config-change", "--guard-policy", "off"], proj, FENCE_ENV_CLEAR);
@@ -2056,6 +2124,7 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
     expect(disabled).toHaveLength(1);
     expect(auditBlockField(disabled[0].block, "Guard")).toBe("review-freeze");
     expect(auditBlockField(disabled[0].block, "Source")).toBe("you");
+    recordHumanPrompt(proj, "/aidlc config set guard.review-freeze on");
     expect(run(dispatcher, ["engine", "config", "set", "guard.review-freeze", "on"], proj, FENCE_ENV_CLEAR).status).toBe(0);
     expect(getField(readFileSync(state, "utf-8"), GUARDS_ON_FIELD)).toBe("review-freeze (set by you)");
   });
@@ -2065,6 +2134,7 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
     recordHumanPrompt(proj, "/aidlc config set guard.state-transition off");
     expect(run(UTILITY, ["config-change", "--guard.state-transition", "off"], proj, FENCE_ENV_CLEAR).status).toBe(0);
     expect(getField(readFileSync(state, "utf-8"), GUARDS_OFF_FIELD)).toBe("state-transition (set by you)");
+    recordHumanPrompt(proj, "/aidlc --guard-policy strict");
     const strict = run(UTILITY, ["config-change", "--guard-policy", "strict"], proj, FENCE_ENV_CLEAR);
     expect(strict.status, strict.stderr).toBe(0);
     expect(strict.stdout).toContain("The state transition check is back on for this piece of work");
@@ -2177,15 +2247,16 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
       });
       expect(started.exitCode, started.stderr.toString()).toBe(0);
     }
+    // The switch lets the agent lower with nobody asking, so the settings are the command's.
     const fence = run(UTILITY, ["config-change", "--guard.state-transition", "off"], proj, env);
     expect(fence.status, fence.stderr).toBe(0);
-    expect(getField(readFileSync(state, "utf-8"), GUARDS_OFF_FIELD)).toBe("state-transition (set by you)");
+    expect(getField(readFileSync(state, "utf-8"), GUARDS_OFF_FIELD)).toBe("state-transition (set by a command)");
     expect(rowsOf(proj, "GUARD_DISABLED").map((row) => auditBlockField(row.block, "Guard"))).toEqual(["state-transition"]);
 
     const policy = run(UTILITY, ["config-change", "--guard-policy", "off"], proj, env);
     expect(policy.status, policy.stderr).toBe(0);
     const lowered = readFileSync(state, "utf-8");
-    expect(getField(lowered, GUARD_POLICY_FIELD)).toBe("off (set by you)");
+    expect(getField(lowered, GUARD_POLICY_FIELD)).toBe("off (set by a command)");
     expect(guardPolicyRows(proj).map((row) => auditBlockField(row.block, "New Value"))).toEqual(["off"]);
 
     const created = run(UTILITY, [
@@ -2197,7 +2268,7 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
     const active = readFileSync(join(intents, "active-intent"), "utf-8").trim();
     const createdState = join(intents, active, "aidlc-state.md");
     expect(createdState).not.toBe(state);
-    expect(getField(readFileSync(createdState, "utf-8"), GUARD_POLICY_FIELD)).toBe("relaxed (set by you)");
+    expect(getField(readFileSync(createdState, "utf-8"), GUARD_POLICY_FIELD)).toBe("relaxed (set by a command)");
     expect(readFileSync(state, "utf-8")).toBe(lowered);
   });
 
@@ -2234,7 +2305,7 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
     expect(readFileSync(state, "utf-8")).toBe(before);
     const asked = 'please relax the  "state" checks for this piece of work';
     recordHumanPrompt(proj, asked);
-    const changed = run(UTILITY, args, proj, FENCE_ENV_CLEAR);
+    const changed = run(UTILITY, [...args, "--person-words", asked], proj, FENCE_ENV_CLEAR);
     expect(changed.status, changed.stderr).toBe(0);
     expect(getField(readFileSync(state, "utf-8"), field)).toBe(lowered);
     // One line, in their words, with the way back; the record keeps the words as delivered.
@@ -2272,7 +2343,7 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
     // Their turn, then the same command: the new work starts with it, as theirs,
     // and the work already open is untouched.
     recordHumanPrompt(proj, "please relax the checks for the next piece of work");
-    const created = run(UTILITY, args, proj, FENCE_ENV_CLEAR);
+    const created = run(UTILITY, [...args, "--person-words", "please relax the checks for the next piece of work"], proj, FENCE_ENV_CLEAR);
     expect(created.status, created.stderr).toBe(0);
     const createdActive = readFileSync(join(intents, "active-intent"), "utf-8").trim();
     const createdState = join(intents, createdActive, "aidlc-state.md");
@@ -2325,7 +2396,7 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
     expect(recordHumanPrompt(proj, "Guard policy off.")).toBe("");
     expect(readFileSync(state, "utf-8")).toBe(before);
     expect(mutationRows(proj)).toEqual(ledger);
-    const lowered = run(UTILITY, ["config-change", "--guard-policy", "off"], proj, FENCE_ENV_CLEAR);
+    const lowered = run(UTILITY, ["config-change", "--guard-policy", "off", "--person-words", "Guard policy off."], proj, FENCE_ENV_CLEAR);
     expect(lowered.status, lowered.stderr).toBe(0);
     expect(recordHumanPrompt(proj, "/aidlc --guard-policy strict")).toBe("");
     expect(getField(readFileSync(state, "utf-8"), GUARD_POLICY_FIELD)).toBe("off (set by you)");
@@ -2363,7 +2434,9 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
     expect(recordHumanPrompt(proj, prompt)).toBe("");
     expect(readFileSync(state, "utf-8")).toBe(before);
     expect(guardPolicyRows(proj)).toHaveLength(0);
-    const lowered = run(UTILITY, ["config-change", "--guard-policy", value], proj, FENCE_ENV_CLEAR);
+    // Typed, the line is theirs; in plain words, the agent names their words.
+    const words = /^[/$]aidlc /.test(prompt) ? [] : ["--person-words", prompt];
+    const lowered = run(UTILITY, ["config-change", "--guard-policy", value, ...words], proj, FENCE_ENV_CLEAR);
     expect(lowered.status, lowered.stderr).toBe(0);
     expect(getField(readFileSync(state, "utf-8"), GUARD_POLICY_FIELD)).toBe(`${value} (set by you)`);
     const rows = guardPolicyRows(proj);
@@ -2596,7 +2669,9 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
     // Plain chat is never a command: the hook records the words and applies nothing.
     expect(readFileSync(state, "utf-8")).toBe(before);
     expect(rowsOf(proj, "GUARD_DISABLED")).toHaveLength(0);
-    const changed = run(UTILITY, args, proj, FENCE_ENV_CLEAR);
+    const changed = run(UTILITY, [
+      ...args, "--person-words", "aidlc --scope classic --guard-policy relaxed --guard.state-transition off",
+    ], proj, FENCE_ENV_CLEAR);
     expect(changed.status, changed.stderr).toBe(0);
     expect(getField(readFileSync(state, "utf-8"), GUARD_POLICY_FIELD)).toBe("relaxed (set by you)");
     expect(getField(readFileSync(state, "utf-8"), "Scope")).toBe("classic");
@@ -2744,7 +2819,6 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
     // No harness session: a plain CLI run, where the machine switch counts
     // (t-plan-approval-switch covers the session-start stamp).
     const env = { ...FENCE_ENV_CLEAR, AIDLC_DISABLE_PLAN_APPROVAL_GUARD: "1", AIDLC_SESSION_OVERRIDE: "" };
-    // The machine switch turns plan approval off on this machine, and the switch reads that.
     expect(run(UTILITY, ["config-get", "guard.plan-approval"], proj, env).stdout).toBe(
       "off (from env AIDLC_DISABLE_PLAN_APPROVAL_GUARD)\n",
     );
@@ -2815,15 +2889,44 @@ describe("t333 (10) retired policy confirmation", () => {
   // The old setting, said in plain words: what it does, and the choice.
   const relaxedNotice = "This work still has an old setting that lets AI-DLC skip some of its checks (it asks you to confirm less often). Do you want to keep that, or have AI-DLC check everything again? I'll ask again until you choose.";
   const offNotice = relaxedNotice;
-  const conflictNotice = "This work has two settings for how closely AI-DLC checks changes, and they disagree, so AI-DLC checks everything for now. Do you want it to keep checking everything, carry on with a note when something you approved changes, or also skip some of its own checks? I'll ask again until you choose.";
 
-  test("conflicting policy lines enforce strict and repeat the notice until a typed choice leaves one line", () => {
-    const { proj, state } = project("classic");
-    const conflicted = readFileSync(state, "utf-8").replace(
+  // Two policy lines that disagree are AI-DLC's own bookkeeping (a teammate on
+  // a release before the rename writes the retired line beside the new one):
+  // `next` keeps the one the record says was set last, writes it as the one
+  // line, records that it settled them, and asks nothing. When the record
+  // cannot tell, it keeps the scope's own value or the stricter, and says so once.
+  const settledRows = (proj: string) => guardPolicyRows(proj).filter((row) => auditBlockField(row.block, "Settled") !== null);
+  const policyLines = (text: string) => text.match(/^- \*\*(?:Guard Policy|Change Control)\*\*:.*$/gm);
+  function conflict(scope: string, guardPolicy: string, changeControl: string): { proj: string; state: string; text: string } {
+    const { proj, state } = project(scope);
+    const text = readFileSync(state, "utf-8").replace(
       /^- \*\*Guard Policy\*\*:.*$/m,
-      "- **Guard Policy**: off (set by you)\n- **Change Control**: strict (from scope classic)",
+      `- **Guard Policy**: ${guardPolicy}\n- **Change Control**: ${changeControl}`,
     );
-    writeFileSync(state, conflicted);
+    writeFileSync(state, text);
+    expect(resolveGuardPolicy(proj, text).source).toBe("conflicting state lines");
+    return { proj, state, text };
+  }
+  // Audit rows are second-precision: wait out this second so the next row is newer.
+  function nextSecond(): void {
+    const second = Math.floor(Date.now() / 1000);
+    while (Math.floor(Date.now() / 1000) === second) {}
+  }
+  function quietNexts(proj: string, state: string): void {
+    const settled = readFileSync(state, "utf-8");
+    const rows = settledRows(proj).length;
+    for (const args of [[], ["--resume"]]) {
+      const again = runOrchestrateNext(ORCHESTRATE, proj, args);
+      expect(again.status, again.stderr).toBe(0);
+      expect(again.directive?.change_notices).toBeUndefined();
+      for (const part of again.steering) expect(part.change_notices).toBeUndefined();
+    }
+    expect(readFileSync(state, "utf-8")).toBe(settled);
+    expect(settledRows(proj)).toHaveLength(rows);
+  }
+
+  test("conflicting policy lines: the one the person set is kept, written as one line, and nothing is asked", () => {
+    const { proj, state, text: conflicted } = conflict("classic", "off (set by you)", "strict (from scope classic)");
     expect(resolveGuardPolicy(proj, conflicted)).toMatchObject({
       value: "strict",
       source: "conflicting state lines",
@@ -2835,55 +2938,173 @@ describe("t333 (10) retired policy confirmation", () => {
     const status = run(UTILITY, ["status"], proj, FENCE_ENV_CLEAR);
     expect(status.status, status.stderr).toBe(0);
     expect(status.stdout).toContain(`${STATUS_POLICY}strict (from conflicting state lines)\n`);
-    for (const args of [[], ["--resume"]]) {
-      const next = runOrchestrateNext(ORCHESTRATE, proj, args);
-      expect(next.status, next.stderr).toBe(0);
-      expect(next.directive?.change_notices).toEqual([conflictNotice]);
-      for (const part of next.steering) expect(part.change_notices).toEqual([conflictNotice]);
-      expect(readFileSync(state, "utf-8")).toBe(conflicted);
-    }
 
-    const generation = setField(conflicted, "Current Stage", "code-generation");
-    writeFileSync(state, generation);
-    writeActiveDirectiveMarker(proj, {
-      kind: "run-stage", stage: "code-generation", state_sha256: stateDigest(generation),
-    });
-    mkdirSync(join(proj, "src"), { recursive: true });
-    const guarded = Bun.spawnSync({
-      cmd: [BUN, join(AIDLC_SRC, "hooks", "aidlc-plan-approval-guard.ts")],
-      cwd: proj,
-      env: { ...process.env, ...FENCE_ENV_CLEAR, CLAUDE_PROJECT_DIR: proj },
-      stdin: Buffer.from(JSON.stringify({
-        hook_event_name: "PreToolUse", tool_name: "Write", cwd: proj,
-        tool_input: { file_path: join(proj, "src", "unapproved.ts"), content: "export const unapproved = true;\n" },
-      })),
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    expect(guarded.exitCode, guarded.stderr.toString()).toBe(2);
-    expect(rowsOf(proj, "PLAN_APPROVAL_BLOCKED")).toHaveLength(1);
-    expect(rowsOf(proj, "GUARD_STOOD_ASIDE")).toHaveLength(0);
-    expect(guardPolicyRows(proj)).toHaveLength(0);
-
-    recordHumanPrompt(proj, "guard policy off");
-    expect(run(UTILITY, ["config-change", "--guard-policy", "off"], proj, FENCE_ENV_CLEAR).status).toBe(0);
-    const confirmed = readFileSync(state, "utf-8");
-    expect(confirmed.match(/^- \*\*Guard Policy\*\*:.*$/gm)).toEqual(["- **Guard Policy**: off (set by you)"]);
-    expect(getField(confirmed, CHANGE_CONTROL_FIELD)).toBeNull();
-    expect(confirmed).not.toContain("- **Change Control**:");
-    const rows = guardPolicyRows(proj);
-    expect(rows).toHaveLength(1);
-    expect(auditBlockField(rows[0].block, "Old Value")).toBe("strict");
-    expect(auditBlockField(rows[0].block, "New Value")).toBe("off");
-    const unchanged = run(UTILITY, ["config-change", "--guard-policy", "off"], proj, FENCE_ENV_CLEAR);
-    expect(unchanged.status, unchanged.stderr).toBe(0);
-    expect(unchanged.stdout).toContain("Guard Policy is already off (set by you)");
-    expect(readFileSync(state, "utf-8")).toBe(confirmed);
-    expect(guardPolicyRows(proj)).toEqual(rows);
     const next = runOrchestrateNext(ORCHESTRATE, proj);
     expect(next.status, next.stderr).toBe(0);
     expect(next.directive?.change_notices).toBeUndefined();
     for (const part of next.steering) expect(part.change_notices).toBeUndefined();
+    const settled = readFileSync(state, "utf-8");
+    expect(policyLines(settled)).toEqual(["- **Guard Policy**: off (set by you)"]);
+    expect(getField(settled, CHANGE_CONTROL_FIELD)).toBeNull();
+    expect(resolveGuardPolicy(proj, settled)).toMatchObject({ value: "off", source: "you" });
+    const rows = settledRows(proj);
+    expect(rows).toHaveLength(1);
+    expect(auditBlockField(rows[0].block, "Old Value")).toBe("strict");
+    expect(auditBlockField(rows[0].block, "New Value")).toBe("off");
+    expect(auditBlockField(rows[0].block, "Source")).toBe("command");
+    expect(auditBlockField(rows[0].block, "Settled")).toBe("off (set by you); strict (from scope classic)");
+    expect(auditBlockField(rows[0].block, "Kept By")).toBe("set by you");
+    quietNexts(proj, state);
+  });
+
+  test("conflicting policy lines: the newer of two of the person's settings is kept, by its row", () => {
+    const { proj, state } = conflict("classic", "off (set by you)", "strict (set by you)");
+    appendAuditEntry("GUARD_POLICY_SET", { "Old Value": "strict", "New Value": "off", Source: "you" }, proj);
+    nextSecond();
+    // A teammate on a release before the rename set it under the retired name.
+    appendAuditEntry("CHANGE_CONTROL_SET", { "Old Value": "off", "New Value": "strict", Source: "you" }, proj);
+    // A check that ran while the lines disagreed recorded the strict in force.
+    nextSecond();
+    appendAuditEntry("GUARD_POLICY_SET", { "Old Value": "off", "New Value": "off", Source: "conflicting state lines" }, proj);
+    const next = runOrchestrateNext(ORCHESTRATE, proj);
+    expect(next.status, next.stderr).toBe(0);
+    expect(next.directive?.change_notices).toBeUndefined();
+    const settled = readFileSync(state, "utf-8");
+    expect(policyLines(settled)).toEqual(["- **Guard Policy**: strict (set by you)"]);
+    expect(auditBlockField(settledRows(proj)[0].block, "Kept By")).toBe("set last");
+    quietNexts(proj, state);
+
+    // The teammate sets it again on the old release: settled again, by its newer row.
+    nextSecond();
+    writeFileSync(state, settled.replace(
+      /^- \*\*Guard Policy\*\*:.*$/m,
+      "- **Guard Policy**: strict (set by you)\n- **Change Control**: off (set by you)",
+    ));
+    appendAuditEntry("CHANGE_CONTROL_SET", { "Old Value": "strict", "New Value": "off", Source: "you" }, proj);
+    const again = runOrchestrateNext(ORCHESTRATE, proj);
+    expect(again.status, again.stderr).toBe(0);
+    expect(again.directive?.change_notices).toBeUndefined();
+    expect(policyLines(readFileSync(state, "utf-8"))).toEqual(["- **Guard Policy**: off (set by you)"]);
+    expect(settledRows(proj)).toHaveLength(2);
+    quietNexts(proj, state);
+  });
+
+  // A teammate's clone keeps its own shard, and shards are read in filename
+  // order, which is not the order the rows were written in.
+  function teammateRow(proj: string, event: string, fields: Record<string, string>, timestamp: string): void {
+    const ours = rowsOf(proj, "GUARD_POLICY_SET").at(-1);
+    expect(ours).toBeDefined();
+    const shard = isAbsolute(ours!.shard) ? ours!.shard : join(proj, ours!.shard);
+    // "0" sorts before any host name, so the teammate's shard is read first.
+    const body = Object.entries(fields).map(([key, value]) => `**${key}**: ${value}\n`).join("");
+    writeFileSync(join(dirname(shard), "0-teammate-0000000000000000.md"),
+      `\n## Setting Changed\n**Timestamp**: ${timestamp}\n**Event**: ${event}\n${body}\n---\n`);
+  }
+
+  test("conflicting policy lines: a teammate's newer setting in a shard read first is the one set last", () => {
+    const { proj, state } = conflict("classic", "off (set by you)", "strict (set by you)");
+    appendAuditEntry("GUARD_POLICY_SET", { "Old Value": "strict", "New Value": "off", Source: "you" }, proj);
+    nextSecond();
+    teammateRow(proj, "CHANGE_CONTROL_SET", { "Old Value": "off", "New Value": "strict", Source: "you" },
+      new Date().toISOString().replace(/\.\d{3}Z$/, "Z"));
+    const next = runOrchestrateNext(ORCHESTRATE, proj);
+    expect(next.status, next.stderr).toBe(0);
+    expect(next.directive?.change_notices).toBeUndefined();
+    expect(policyLines(readFileSync(state, "utf-8"))).toEqual(["- **Guard Policy**: strict (set by you)"]);
+    expect(auditBlockField(settledRows(proj)[0].block, "Kept By")).toBe("set last");
+    quietNexts(proj, state);
+  });
+
+  test("conflicting policy lines set in the same second in two shards: the record cannot tell, so the stricter is kept and said once", () => {
+    const { proj, state } = conflict("classic", "relaxed (set by you)", "strict (set by you)");
+    appendAuditEntry("GUARD_POLICY_SET", { "Old Value": "strict", "New Value": "relaxed", Source: "you" }, proj);
+    teammateRow(proj, "CHANGE_CONTROL_SET", { "Old Value": "relaxed", "New Value": "strict", Source: "you" },
+      rowsOf(proj, "GUARD_POLICY_SET").at(-1)!.timestamp);
+    const next = runOrchestrateNext(ORCHESTRATE, proj);
+    expect(next.status, next.stderr).toBe(0);
+    expect(next.directive?.change_notices).toEqual([
+      "This work had two settings for how closely AI-DLC checks changes, and they disagreed. The record does not say " +
+        "which was set last, so AI-DLC keeps the stricter one: it checks everything. You can change it any time.",
+    ]);
+    expect(policyLines(readFileSync(state, "utf-8"))).toEqual(["- **Guard Policy**: strict (set by you)"]);
+    expect(auditBlockField(settledRows(proj)[0].block, "Kept By")).toBe("stricter");
+    quietNexts(proj, state);
+  });
+
+  test("conflicting policy lines the record cannot tell apart: the scope's own value is kept and said once", () => {
+    const { proj, state } = conflict("classic", "off (from scope classic)", "strict (from scope classic)");
+    const next = runOrchestrateNext(ORCHESTRATE, proj);
+    expect(next.status, next.stderr).toBe(0);
+    expect(next.directive?.change_notices).toEqual([
+      "This work had two settings for how closely AI-DLC checks changes, and they disagreed. The record does not say " +
+        "which was set last, so AI-DLC keeps the one this work's scope starts with: it carries on when something you " +
+        "approved changes and also skips some of its own checks. You can change it any time.",
+    ]);
+    expect(policyLines(readFileSync(state, "utf-8"))).toEqual(["- **Guard Policy**: off (from scope classic)"]);
+    expect(auditBlockField(settledRows(proj)[0].block, "Kept By")).toBe("scope default");
+    quietNexts(proj, state);
+  });
+
+  test("conflicting policy lines with nothing to tell them apart: the stricter is kept and said once", () => {
+    // Both the person's, no row, and neither is classic's own off.
+    const { proj, state } = conflict("classic", "relaxed (set by you)", "strict (set by you)");
+    const next = runOrchestrateNext(ORCHESTRATE, proj);
+    expect(next.status, next.stderr).toBe(0);
+    expect(next.directive?.change_notices).toEqual([
+      "This work had two settings for how closely AI-DLC checks changes, and they disagreed. The record does not say " +
+        "which was set last, so AI-DLC keeps the stricter one: it checks everything. You can change it any time.",
+    ]);
+    expect(policyLines(readFileSync(state, "utf-8"))).toEqual(["- **Guard Policy**: strict (set by you)"]);
+    expect(auditBlockField(settledRows(proj)[0].block, "Kept By")).toBe("stricter");
+    quietNexts(proj, state);
+  });
+
+  test("conflicting policy lines under a team's locked strict: nothing is written and nothing is said", () => {
+    const { proj, state, text } = conflict("classic", "off (set by you)", "relaxed (from scope classic)");
+    declareMemoryMode(proj, "team", "strict");
+    const next = runOrchestrateNext(ORCHESTRATE, proj);
+    expect(next.status, next.stderr).toBe(0);
+    expect(next.directive?.change_notices).toBeUndefined();
+    expect(readFileSync(state, "utf-8")).toBe(text);
+    expect(guardPolicyRows(proj)).toHaveLength(0);
+    expect(resolveGuardPolicy(proj, text)).toMatchObject({ value: "strict", source: "team.md" });
+  });
+
+  test("conflicting policy lines: a read-only probe writes nothing", () => {
+    const { proj, state, text } = conflict("classic", "off (set by you)", "strict (from scope classic)");
+    const probe = runOrchestrateNext(ORCHESTRATE, proj, [], { env: { ...process.env, AIDLC_STOP_HOOK_PROBE: "1" } });
+    expect(probe.status, probe.stderr).toBe(0);
+    expect(readFileSync(state, "utf-8")).toBe(text);
+    expect(guardPolicyRows(proj)).toHaveLength(0);
+  });
+
+  test("conflicting policy lines in a CRLF state file settle the same way and keep its line endings", () => {
+    const { proj, state, text } = conflict("classic", "off (set by you)", "strict (from scope classic)");
+    writeFileSync(state, text.replace(/\r?\n/g, "\r\n"));
+    const next = runOrchestrateNext(ORCHESTRATE, proj);
+    expect(next.status, next.stderr).toBe(0);
+    expect(next.directive?.change_notices).toBeUndefined();
+    const settled = readFileSync(state, "utf-8");
+    expect(policyLines(settled)?.map((line) => line.trimEnd())).toEqual(["- **Guard Policy**: off (set by you)"]);
+    expect(/(^|[^\r])\n/.test(settled)).toBe(false);
+    expect(resolveGuardPolicy(proj, settled).value).toBe("off");
+  });
+
+  test("conflicting policy lines when the record cannot be written: unchanged, said as a statement, no question", () => {
+    const { proj, state, text } = conflict("classic", "off (set by you)", "strict (from scope classic)");
+    const next = runOrchestrateNext(ORCHESTRATE, proj, [], {
+      env: { ...process.env, AIDLC_TEST_CHANGE_CONTROL_LEDGER_FAULT: "t333" },
+    });
+    expect(next.status, next.stderr).toBe(0);
+    expect(next.directive?.change_notices).toEqual([
+      "This work has two settings for how closely AI-DLC checks changes, and they disagree, so AI-DLC checks " +
+        "everything for now.",
+    ]);
+    expect(readFileSync(state, "utf-8")).toBe(text);
+    expect(guardPolicyRows(proj)).toHaveLength(0);
+    const later = runOrchestrateNext(ORCHESTRATE, proj);
+    expect(later.status, later.stderr).toBe(0);
+    expect(policyLines(readFileSync(state, "utf-8"))).toEqual(["- **Guard Policy**: off (set by you)"]);
   });
 
   test("agreeing policy lines use Guard Policy silently and the next write removes the retired line", () => {
@@ -2903,6 +3124,7 @@ describe("t333 (10) retired policy confirmation", () => {
     for (const part of next.steering) expect(part.change_notices).toBeUndefined();
     expect(readFileSync(state, "utf-8")).toBe(agreed);
 
+    recordHumanPrompt(proj, "/aidlc --guard-policy strict");
     const changed = run(UTILITY, ["config-change", "--guard-policy", "strict"], proj, FENCE_ENV_CLEAR);
     expect(changed.status, changed.stderr).toBe(0);
     const confirmed = readFileSync(state, "utf-8");

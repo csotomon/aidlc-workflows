@@ -60,9 +60,11 @@ import {
   engineDirFor,
   enterHookWorkflow,
   promptMovesSelection,
+  recordHookDrop,
   takeSessionSelectionNotice,
 } from "../tools/aidlc-lib.ts";
 import { aidlcInvocation, knownActiveSpace } from "../tools/aidlc-runtime-paths.ts";
+import { TRUSTED_ROUTE_NAMESPACE } from "../tools/aidlc-command.ts";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -159,7 +161,7 @@ export async function run(
   function runCoreWithStderr(
     hookFile: string,
     stdinText: string,
-  ): { stdout: string; stderr: string; code: number } {
+  ): { stdout: string; stderr: string; code: number; signal: string | null } {
     const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
     const hook = hookFile.replace(/^aidlc-|\.ts$/g, "");
     const authorityToken = hook === "record-human-turn" ? randomUUID() : "";
@@ -188,6 +190,7 @@ export async function run(
       stdout: r.stdout?.toString() ?? "",
       stderr: r.stderr?.toString() ?? "",
       code: r.exitCode ?? 1,
+      signal: r.exitCode === null ? (r.signalCode ?? "a signal") : null,
     };
   }
 
@@ -2499,6 +2502,63 @@ export async function run(
     }
   }
 
+  // AI-DLC's own command, as its prose spells it (`aidlc engine ...`, or one of
+  // this project's tool scripts under bun), naming a command the core admits
+  // this delegate (delegateAdmittedVerbs), such as Reverse Engineering's scope
+  // fingerprint mint and check and its publish. It is fixed code that leaves
+  // the attribution records alone, so the interpreter and attribution-path
+  // denies stand aside for it; the core guards still run. One plain call only:
+  // nothing chained, redirected, expanded, globbed or set before it.
+  async function runsAdmittedAidlcCommand(command: string, agent: string): Promise<boolean> {
+    // A POSIX shell reads a line that ends in a backslash as going on (the
+    // stage writes its publish that way); PowerShell ends the command there.
+    const joined = process.platform === "win32" ? command : command.replace(/\\\r?\n/g, " ");
+    if (agent === AMBIGUOUS_REVIEWER || /[;&|<>(){}[\]`$%*?\r\n]/.test(joined)) return false;
+    // A call this cannot read keeps the denies.
+    try {
+      const parsed = shellWords(joined);
+      if (parsed.ambiguous) return false;
+      // The host's own shell reads the words: PowerShell keeps a backslash, a
+      // POSIX shell reads it as an escape.
+      const flavor: PathFlavor = process.platform === "win32" ? "win32" : "posix";
+      const words = parsed.words.map(({ variants }) =>
+        variants.find((variant) => variant.flavor === flavor)?.value ?? ""
+      );
+      const program = (words[0] ?? "").replace(/\.(?:exe|com|cmd|bat)$/i, "").toLowerCase();
+      let script = "aidlc.ts";
+      let rest = words.slice(1);
+      if (program === "bun") {
+        script = (flavor === "win32" ? win32 : posix).basename(words[1] ?? "");
+        if (!/^aidlc(?:-[a-z0-9-]+)?\.ts$/.test(script)) return false;
+        const own = canonicalPathVariants(join(HOOKS_DIR, "..", "tools", script), projectDir, flavor);
+        const named = canonicalPathVariants(words[1], effectiveCwd(), flavor);
+        if (
+          own.ambiguous || named.ambiguous ||
+          !named.paths.some((path) => own.paths.some((ownPath) => ownPath.value === path.value))
+        ) {
+          return false;
+        }
+        rest = words.slice(2);
+      } else if (program !== "aidlc") {
+        return false;
+      }
+      if (script === "aidlc.ts" && rest[0] !== TRUSTED_ROUTE_NAMESPACE) return false;
+      // Loaded only here: the guard is its own member, and one that cannot load
+      // leaves this call refused as before instead of breaking every call.
+      const guard: typeof import("./aidlc-state-transition-guard.ts") = await import(
+        join(HOOKS_DIR, "aidlc-state-transition-guard.ts")
+      );
+      const admitted = guard.delegateAdmittedVerbs(agent);
+      if (script !== "aidlc.ts") return (admitted[script] ?? []).includes(rest[0] ?? "");
+      const dispatcher: typeof import("../tools/aidlc.ts") = await import(
+        join(HOOKS_DIR, "..", "tools", "aidlc.ts")
+      );
+      return dispatcher.admittedEngineRoute(admitted, rest.slice(1));
+    } catch {
+      return false;
+    }
+  }
+
   async function touchesProtectedReviewerState(): Promise<boolean> {
     const toolInput = cursor.tool_input ?? {};
     const serialized = JSON.stringify(toolInput).replaceAll("\\", "/");
@@ -2674,17 +2734,27 @@ export async function run(
     );
   }
 
+  // Exit 2 is a guard's refusal. A guard that fails on its own (it throws, its
+  // file is missing, it is killed) refuses nothing, as in the core hook group;
+  // its error line goes where doctor reads hook drops, with a severity tag in
+  // it neutralized so only the hook that writes a drop decides doctor's verdict.
   function blockedByGuard(file: string, input: string): boolean {
     const r = runCoreWithStderr(file, input);
     if (r.code === 0) return false;
-    const reason =
-      r.code === 2
-        ? r.stderr.trim() || "blocked by AIDLC guard hook"
-        : `AIDLC guard ${file} failed with exit ${r.code}, so its safety checks could not complete and the ` +
-          "call was stopped. Retry it once; if it is stopped again, tell the person to run " +
-          `\`${aidlcInvocation()} config --harness cursor\` in a terminal, which puts AI-DLC's Cursor files ` +
-          "back, then try again.";
-    process.stdout.write(`${JSON.stringify({ permission: "deny", agent_message: reason })}\n`);
+    if (r.code !== 2) {
+      const hook = file.replace(/^aidlc-|\.ts$/g, "");
+      const lines = r.stderr.split(/\r?\n/).map((line) => line.trim()).filter((line) => line.length > 0);
+      const line = (lines.find((entry) => entry.startsWith("error:")) ??
+        lines.filter((entry) => !/^Bun v\d/.test(entry)).at(-1) ?? "no error output")
+        .replace(/\[(degraded|advisory)\]/gi, "($1)");
+      const how = r.signal === null ? `exited ${r.code}` : `was stopped by ${r.signal}`;
+      recordHookDrop(projectDir, hook, `${hook} ${how} under the Cursor adapter: ${line.slice(0, 240)}`);
+      return false;
+    }
+    process.stdout.write(`${JSON.stringify({
+      permission: "deny",
+      agent_message: r.stderr.trim() || "blocked by AIDLC guard hook",
+    })}\n`);
     return true;
   }
 
@@ -2879,8 +2949,12 @@ export async function run(
       }
       const agent = attributed();
       const command = cursor.tool_input?.command;
+      const ownCommand =
+        agent !== "" && toolName === "Bash" && typeof command === "string" &&
+        await runsAdmittedAidlcCommand(command, agent);
       if (
         agent &&
+        !ownCommand &&
         toolName === "Bash" &&
         typeof command === "string" &&
         await shellInvokesDynamicEvaluation(command, effectiveCwd()) &&
@@ -2896,7 +2970,7 @@ export async function run(
         })}\n`);
         return 0;
       }
-      if (agent && await touchesProtectedReviewerState() && !delegateChecksStandAside()) {
+      if (agent && !ownCommand && await touchesProtectedReviewerState() && !delegateChecksStandAside()) {
         process.stdout.write(`${JSON.stringify({
           permission: "deny",
           agent_message:

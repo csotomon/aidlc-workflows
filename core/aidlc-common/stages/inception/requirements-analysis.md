@@ -17,8 +17,10 @@ produces:
 consumes:
   - artifact: intent-statement
     required: false
+    cited: true
   - artifact: scope-document
     required: false
+    cited: true
   - artifact: business-overview
     required: false
     conditional_on: brownfield

@@ -70,7 +70,11 @@ generating instructions. Read all applicable stage-level and per-unit sources:
   plan runs CI Pipeline: `aidlc-state.md` lists `ci-pipeline` as an `EXECUTE`
   stage whose checkbox is not `[S]`. When the plan does not run it, record that
   target `N/A` with the reason "the plan runs no CI Pipeline": it is not
-  applicable, so it is never `Unverified` and never a failure.
+  applicable, so it is never `Unverified` and never a failure. While CI
+  Pipeline is still ahead (its checkbox is `[ ]`), the target is CI Pipeline's
+  to meet: record Owning Stage `ci-pipeline`, Verdict `N/A`, and the reason "CI
+  Pipeline, later in this plan, sets up CI to run these tests before merge".
+  It is never `Unverified` and never a failure here.
 
 For each target, record a stable target ID (derive one from the source path and
 section when the source has none), source path/section, expected value, the
@@ -124,8 +128,9 @@ Create `<record>/construction/build-and-test/build-and-test-summary.md`:
 - Each applicable target begins with Actual and Evidence `Pending`, and Verdict
   `Pending`. `N/A` is valid only when the source inventory found no applicable
   measurable target (then write one explanatory `N/A` row), or for a target the
-  plan makes inapplicable, as Step 1 says for the CI obligation of a plan that
-  runs no CI Pipeline. An applicable target may never use `N/A`.
+  plan makes inapplicable here, as Step 1 says for the CI obligation of a plan
+  that runs no CI Pipeline or has it still ahead. An applicable target may never
+  use `N/A`.
 - Readiness assessment (build-ready, test-ready, deployment-ready)
 - Known limitations or outstanding items
 
@@ -237,23 +242,14 @@ the Build and Test Summary with a successful readiness result.
 
 ### Step 10: Cross-Unit Final Coverage Gate
 
-This is a stage-level gate, not the Construction phase boundary. Enumerate:
-
-- every `FR` and `NFR` from
-  `<record>/inception/requirements-analysis/requirements.md`
-- every three-segment `AC` from
-  `<record>/inception/user-stories/stories.md` when that stage executed
-
-Read both the stage-level
-`<record>/construction/code-generation/traceability.json` file (when present,
-including Express) and every per-unit
-`<record>/construction/*/code-generation/traceability.json` file. Verify each
-enumerated ID is covered with status `OK` in at least one stage-level or Unit
-entry and that its target file exists. Write
-`<record>/construction/build-and-test/cross-unit-traceability.md` with a
-pass/fail verdict, per-ID coverage, owning stage/Unit, target file, and every
-uncovered element. Any uncovered ID is a build-and-test finding that must be
-surfaced at the approval gate.
+This is a stage-level gate, not the Construction phase boundary. Run
+`{{INVOKE}} engine sensor-traceability --stage build-and-test`: it prints every
+requirement and acceptance criterion this run traced, whether it is built or
+marked `N/A` with its reason, and the Units and files that build it. Write
+`<record>/construction/build-and-test/cross-unit-traceability.md` from that
+output with a pass/fail verdict, per-ID coverage, owning stage/Unit, target
+file, and every uncovered element. Any uncovered ID is a build-and-test finding
+that must be surfaced at the approval gate.
 
 ### Step 11: Completion Handoff
 

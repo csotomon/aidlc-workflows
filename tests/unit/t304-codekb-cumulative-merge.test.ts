@@ -32,6 +32,8 @@ import {
   resetAidlcEnv,
   seededStateFile,
   seedStateFile,
+  seedWorkspaceShell,
+  toPortablePath,
 } from "../harness/fixtures.ts";
 import {
   codekbScopeFingerprint,
@@ -160,6 +162,7 @@ function snapshot(project: string, paths: string[]): {
   store_generation: string;
   source_fingerprint: string;
   paths: string[];
+  head_commit: string;
 } {
   const result = runUtility(project, [
     "codekb-snapshot",
@@ -268,6 +271,14 @@ describe("t304 cumulative CodeKB stage contract", () => {
     );
     expect(facts).not.toContain("output of the mint command in stage Step 3");
   });
+
+  test("the Run Record's commit comes from the snapshot, through the scan's brief", () => {
+    const step2 = STAGE.slice(STAGE.indexOf("### Step 2:"), STAGE.indexOf("### Step 3:")).replace(/\s+/g, " ");
+    const step3 = STAGE.slice(STAGE.indexOf("### Step 3:"), STAGE.indexOf("### Step 4:")).replace(/\s+/g, " ");
+    expect(step2).toContain("and the snapshot's `head_commit` for the Run Record");
+    expect(step3).toContain("- Pass the snapshot's `head_commit` for the Run Record");
+    expect(ARTIFACTS).toContain('- Commit: [the commit the brief gives from the snapshot, or "unknown"]');
+  });
 });
 
 describe("t304 source and store generation interleavings", () => {
@@ -311,6 +322,41 @@ describe("t304 source and store generation interleavings", () => {
       "src/paymnts is not in the repository: run it again with --paths naming paths that exist.",
     );
     expect(snapshot(project, ["src/payments"]).paths).toEqual(["src/payments"]);
+  });
+
+  test("publish accepts a candidate whose paths differ from the snapshot only by a trailing slash (#2578)", () => {
+    for (const [snapshotPaths, candidatePaths] of [
+      [["src/a", "src/b"], ["src/a/", "src/b/"]],
+      [["src/a/", "src/b/"], ["src/a", "src/b"]],
+    ]) {
+      const project = freshProject();
+      for (const dir of ["a", "b"]) {
+        mkdirSync(join(project, "src", dir), { recursive: true });
+        writeFileSync(join(project, "src", dir, "index.ts"), `export const ${dir} = 1;\n`);
+      }
+      const baseline = snapshot(project, snapshotPaths);
+      const candidate = join(project, "candidate");
+      writeCandidate(candidate, "FIRST SCAN", "slash", candidatePaths, ["a", "b"], currentFingerprint(project, candidatePaths));
+      const published = publish(project, candidate, snapshotPaths, baseline);
+      expect(published.status, `${published.stdout}${published.stderr}`).toBe(0);
+    }
+  });
+
+  test("publish still refuses a candidate path outside the snapshot", () => {
+    const project = freshProject();
+    for (const dir of ["a", "b"]) {
+      mkdirSync(join(project, "src", dir), { recursive: true });
+      writeFileSync(join(project, "src", dir, "index.ts"), `export const ${dir} = 1;\n`);
+    }
+    const baseline = snapshot(project, ["src/a"]);
+    const candidate = join(project, "candidate");
+    writeCandidate(candidate, "WIDER", "slash", ["src/a/", "src/b/"], ["a", "b"], currentFingerprint(project, ["src/a/", "src/b/"]));
+    const refused = publish(project, candidate, ["src/a"], baseline);
+    expect(refused.status).not.toBe(0);
+    const said = `${refused.stdout}${refused.stderr}`;
+    expect(said).toContain("do not cover candidate analyzed path");
+    expect(said).toContain("src/b/");
+    expect(said).not.toContain("src/a/");
   });
 
   test.skipIf(process.platform === "win32")("outside git, a named pipe under the paths names leaving it out, and that is accepted", () => {
@@ -411,6 +457,46 @@ describe("t304 source and store generation interleavings", () => {
     expect(`${refused.stdout}\n${refused.stderr}`).toContain("symlink");
     expect(readFileSync(sentinel, "utf-8")).toBe("outside\n");
     expect(existsSync(externalTransaction)).toBe(true);
+  });
+
+  // The Run Record names this commit, so the scan agent never runs git for it.
+  test("a snapshot gives the commit the scan records, and unknown without one", () => {
+    const git = (dir: string, ...args: string[]) =>
+      spawnSync("git", ["-C", dir, "-c", "user.name=t304", "-c", "user.email=t304@example.invalid", ...args], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        encoding: "utf-8",
+      });
+    const withSource = (project: string) => {
+      mkdirSync(join(project, "src"), { recursive: true });
+      writeFileSync(join(project, "src", "index.ts"), "export const a = 1;\n");
+      return project;
+    };
+    const commit = (repo: string, path = "src") => {
+      expect(git(repo, "add", path).status).toBe(0);
+      expect(git(repo, "commit", "-q", "-m", "a").status).toBe(0);
+      return git(repo, "rev-parse", "HEAD").stdout.trim();
+    };
+
+    const plain = withSource(createTestProject());
+    tempDirs.push(plain);
+    expect(snapshot(plain, ["src"]).head_commit).toBe("unknown");
+
+    const project = withSource(freshProject());
+    expect(snapshot(project, ["src"]).head_commit).toBe("unknown");
+    const head = commit(project);
+    expect(snapshot(project, ["src"]).head_commit).toBe(head);
+    const text = runUtility(project, ["codekb-snapshot", "--paths", "src"]);
+    expect(text.status, text.stderr).toBe(0);
+    expect(text.stdout).toContain(`HEAD_COMMIT ${head}\n`);
+
+    // A project folder inside a larger repository records that repository's commit.
+    const outer = toPortablePath(mkdtempSync(join(tmpdir(), "aidlc-t304-outer-")));
+    externalDirs.push(outer);
+    expect(git(outer, "init", "-q").status).toBe(0);
+    const nested = withSource(join(outer, "app"));
+    seedWorkspaceShell(nested);
+    const outerHead = commit(outer, "app/src");
+    expect(snapshot(nested, ["src"]).head_commit).toBe(outerHead);
   });
 
   test("under Guard Policy off, code that moved while it was scanned is published with one line", () => {

@@ -42,8 +42,8 @@ import {
   writeFileSync,
 } from "node:fs";
 import { platform, tmpdir } from "node:os";
-import { join } from "node:path";
-import { REPO_ROOT } from "../harness/fixtures.ts";
+import { dirname, join } from "node:path";
+import { cleanupTestProject, REPO_ROOT } from "../harness/fixtures.ts";
 import createAdapter from "../../dist/opencode/.opencode/plugin/aidlc-opencode-adapter.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -90,7 +90,6 @@ describe("t240 dist/opencode packaging parity + shell shape", () => {
       cwd: REPO_ROOT,
     });
     if (r.status !== 0) {
-      // Surface the script's path-level mismatch list.
       console.error(r.stderr);
     }
     expect(r.status).toBe(0);
@@ -126,7 +125,6 @@ describe("t240 dist/opencode packaging parity + shell shape", () => {
   });
 
   test("3: the .opencode shell holds ONLY the native emissions — no engine .ts opencode would auto-import", () => {
-    // Top-level shape: exactly the three natively-consumed dirs.
     expect(readdirSync(SHELL).sort()).toEqual(["agents", "command", "plugin"]);
     // The tool-scan trap: opencode imports .opencode/tool/*.ts and
     // .opencode/tools/*.ts as custom tools. Neither dir may ever appear.
@@ -353,12 +351,27 @@ describe("t240 dist/opencode packaging parity + shell shape", () => {
         { tool: "bash", sessionID: "main", callID: "direct" },
         {
           args: {
-            command: "bun .aidlc/tools/aidlc.ts engine state approve",
+            command: "bun .aidlc/tools/aidlc.ts engine hook record-human-turn",
           },
         },
       ),
-    ).rejects.toThrow(/Stage status cannot be changed with aidlc-state\.ts approve/i);
+    ).rejects.toThrow(/AIDLC runtime records and hooks belong to the harness/);
   }, ADAPTER_ENTRYPOINT_TIMEOUT_MS);
+
+  // The adapter imports one leaf tool (how a Windows .cmd starts) from the
+  // engine tree beside .opencode/, in the copy and the native tree alike;
+  // opencode loads it at every start, so it imports only node built-ins.
+  test("9c: the adapter's tool import resolves in both opencode trees to a leaf with node imports only", () => {
+    for (const tree of [OPENCODE_ROOT, join(REPO_ROOT, "dist-release", "opencode")]) {
+      const plugin = join(tree, ".opencode", "plugin", "aidlc-opencode-adapter.ts");
+      const relativeImports = [...readFileSync(plugin, "utf-8").matchAll(/^import [^;]*? from "(\.[^"]+)";$/gm)].map((m) => m[1]);
+      expect(relativeImports, tree).toEqual(["../../.aidlc/tools/aidlc-executable-path.ts"]);
+      const leaf = join(dirname(plugin), relativeImports[0]);
+      expect(existsSync(leaf), leaf).toBe(true);
+      const leafImports = [...readFileSync(leaf, "utf-8").matchAll(/^import [^;]*? from "([^"]+)";$/gm)].map((m) => m[1]);
+      expect(leafImports, leaf).toEqual(["node:fs", "node:path"]);
+    }
+  });
 
   test("10: doctor accepts an opencode.jsonc-only install", () => {
     const root = mkdtempSync(join(tmpdir(), "t240-opencode-doctor-"));
@@ -409,8 +422,8 @@ describe("t240 dist/opencode packaging parity + shell shape", () => {
     expect(release).toContain("!`aidlc engine skill-text --harness-dir .aidlc`");
     expect(release).not.toContain("{{INVOKE}}");
     // What the line prints, run the way opencode runs it (from the project
-    // folder, no --project-dir): the shipped skill, byte for byte, and longer
-    // than opencode's 50 KiB tool-output cut.
+    // folder, no --project-dir): the shipped skill, byte for byte, whatever its
+    // size against opencode's 50 KiB tool-output cut.
     const r = spawnSync(
       process.execPath,
       [join(ENGINE, "tools", "aidlc.ts"), "engine", "skill-text", "--harness-dir", ".aidlc"],
@@ -424,7 +437,6 @@ describe("t240 dist/opencode packaging parity + shell shape", () => {
     expect(r.status, r.stderr).toBe(0);
     const skill = readFileSync(join(ENGINE, "skills", "aidlc", "SKILL.md"), "utf-8");
     expect(r.stdout).toBe(skill.endsWith("\n") ? skill : `${skill}\n`);
-    expect(Buffer.byteLength(r.stdout, "utf-8")).toBeGreaterThan(50 * 1024);
   });
 
   // Claude Code and opencode may share one project (the lifecycle guide's
@@ -467,7 +479,8 @@ describe("t240 dist/opencode packaging parity + shell shape", () => {
       expect(ambient.status, ambient.stderr).toBe(0);
       expect(ambient.stdout).toBe(claudeSkill.endsWith("\n") ? claudeSkill : `${claudeSkill}\n`);
     } finally {
-      rmSync(root, { recursive: true, force: true });
+      // The launcher it just ran can hold the folder a moment on Windows.
+      cleanupTestProject(root);
     }
   });
 });

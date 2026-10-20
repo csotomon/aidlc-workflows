@@ -88,6 +88,13 @@ export const VALID_PROTOCOL_MODULES = [
   "loopback",
   "wave",
   "collaborators",
+  // The review's per-Unit rules, and its repair loop, re-dispatch context and
+  // stale-receipt recovery, each named on the reviews that need them.
+  "reviewer-unit",
+  "reviewer-repair",
+  // The summary confirmation and the sensor rules, named while their ceremony is on.
+  "summary",
+  "sensors",
 ] as const;
 export type ProtocolModule = (typeof VALID_PROTOCOL_MODULES)[number];
 
@@ -263,10 +270,18 @@ export interface RunStageDirective {
   // the returned `done` as terminal.
   single?: boolean;
   // Exact persona + knowledge files the conductor must read for work it owns
-  // inline: lead + supports on inline stages, lead only on a mob (supports are
-  // dispatched), and empty on fully-dispatched subagent/pipeline topologies.
-  // Carrying paths makes persona loading observable and enforceable in traces.
+  // inline: the supports' personas on inline stages, then the knowledge of the
+  // lead and of every agent the chat works as (the lead alone on a mob, whose
+  // supports are dispatched), and empty on fully-dispatched subagent/pipeline
+  // topologies. The lead's own persona is listed only when it does not ride in
+  // lead_persona. Carrying paths makes loading observable in traces.
   inline_context_paths: string[];
+  // The lead's persona, the file the list would have named and its text, on a
+  // step whose body the chat works as the lead: the agent takes it on with
+  // nothing to read first, so no read order can put the work ahead of it.
+  // Absent on a dispatched stage, on a step whose body does not run, and when
+  // it would not fit beside the step (the file is then listed first instead).
+  lead_persona?: { path: string; text: string };
   // Non-fatal problems discovered while building the path-loaded persona /
   // knowledge roster. The conductor shows these actionable warnings and
   // continues with the readable context; rule-delivery failures are blocking
@@ -911,6 +926,7 @@ const RUN_STAGE_FIELDS = [
   "pipeline",
   "single",
   "inline_context_paths",
+  "lead_persona",
   "context_warnings",
   "kept_replies",
   "parked_reply",
@@ -1155,6 +1171,15 @@ export function gateOnlyNote(): string {
     "run the stage again or change what it produced.";
 }
 
+// The step whose note is gateOnlyNote, in the notes' own order: the agent shows
+// the gate and ends its turn, so the engine marks the turn as ended there.
+export function showsGateAgain(d: Record<string, unknown>): boolean {
+  return d.kind === "run-stage" &&
+    (d.construction_checkpoint as { command_authorized?: unknown } | undefined)?.command_authorized !== false &&
+    d.gate !== GATE_UNRESOLVED &&
+    d.gate_only === true;
+}
+
 // The protocol files a step runs by, named from its own stage file, so a chat
 // with no skill loaded reads them (seen live: a Unit's step looped on a review
 // and an autonomy question the agent never knew about).
@@ -1200,9 +1225,50 @@ export function autonomyChoiceNote(boltInvocation: string): string {
  * reviewer's file itself and recorded READY, so the person got a review their
  * reviewer never wrote.
  */
-export function reviewRequestNote(reviewer: string, reviewFile: string, recordVerdict: string): string {
-  return `Dispatch ${reviewer} as a subagent and have it write ${reviewFile}: that file is the reviewer's, so never ` +
+export function reviewRequestNote(
+  reviewer: string,
+  reviewFile: string,
+  recordVerdict: string,
+  dispatchAgent: string | null = null,
+): string {
+  // A reviewer copy (Kiro) is dispatched by its own name; the brief and
+  // the verdict keep the reviewer's.
+  const dispatch = dispatchAgent === null
+    ? `Dispatch ${reviewer} as a subagent`
+    : `Dispatch ${dispatchAgent} (${reviewer} with this review's read scope; if Kiro has no agent by that name, ` +
+      `dispatch ${reviewer} instead and tell the person in one line that this review runs without the reviewer ` +
+      `read-scope check) as a subagent, name ${reviewer} as the reviewer in the brief,`;
+  return `${dispatch} and have it write ${reviewFile}: that file is the reviewer's, so never ` +
     `write it yourself and never stand in for it. When its verdict is back, record it with \`${recordVerdict}\`.`;
+}
+
+// The step after a stage's verdict is recorded (#2400), as the logger decides
+// it: one branch, with its exact command. A verdict no further pass follows
+// leads into the skill's ordered completion sequence at its next step,
+// stage-completion verification, named here and owned there. What the person
+// wrote comes before it: their branch is `next` alone.
+export type ReviewVerdictStep =
+  | { kind: "person-wrote"; next: string }
+  | { kind: "next-pass"; request: string }
+  | { kind: "learnings" }
+  | { kind: "gate"; report: string; summary: boolean };
+const NO_FURTHER_PASS = "No further review pass follows: run stage-completion verification, then ";
+export function reviewVerdictNote(step: ReviewVerdictStep): string {
+  switch (step.kind) {
+    case "person-wrote":
+      return `The person wrote since the review was requested: run \`${step.next}\` and follow its step together ` +
+        "with what they said; if what they said answers the approval, record it with their words rather than " +
+        "asking again.";
+    case "next-pass":
+      return "Another review pass follows: fix what its findings name (a review that did not finish names nothing " +
+        `to fix), then request the next pass with \`${step.request}\` in this turn.`;
+    case "learnings":
+      return `${NO_FURTHER_PASS}say the completion summary, then run the learnings ritual and ask its question, ` +
+        "which ends the turn. The approval gate comes after their answer.";
+    case "gate":
+      return `${NO_FURTHER_PASS}${step.summary ? "say the completion summary, then " : ""}run ` +
+        `\`${step.report}\`, print the review brief and ask the approval question in this turn.`;
+  }
 }
 
 // How this stage's questions are answered (stage-protocol.md section 3, Step
@@ -1239,15 +1305,21 @@ export function answerModeNote(mode: StageAnswerMode, stage: string, logInvocati
 // What the agent reads before the stage's work: the persona and knowledge files
 // the engine already filtered for this topology (lead and supports inline, the
 // lead alone on a mob, none when every agent is dispatched), then the stage
-// file and the inputs that exist. The note points at the step's own lists by
-// meaning, not by field name and not by repeating them: a large step sits
-// close to the transport cap, and a repeated list is what would push it over.
-export function contextNote(paths: readonly string[], consumes: readonly string[]): string {
+// file and the inputs that exist. The lead's persona usually rides in the step
+// itself, so there is nothing to read before it. The note points at the step's
+// own lists by meaning, not by field name and not by repeating them: a large
+// step sits close to the transport cap, and a repeated list is what would push
+// it over.
+export function contextNote(paths: readonly string[], consumes: readonly string[], leadCarried = false): string {
   const inputs = consumes.length > 0 ? " and the inputs it names" : "";
+  const lead = leadCarried ? "Work this stage as the lead whose persona this step carries. " : "";
   if (paths.length === 0) {
-    return `Read the stage file this step names${inputs}; the agents you dispatch load their own persona and knowledge.`;
+    return leadCarried
+      ? `${lead}Read the stage file this step names${inputs}.`
+      : `Read the stage file this step names${inputs}; the agents you dispatch load their own persona and knowledge.`;
   }
-  return "Before anything else, read the persona and knowledge files this step lists, one at a time and in the order " +
+  const files = leadCarried ? "files" : "persona and knowledge files";
+  return `${lead}Before anything else, read the ${files} this step lists, one at a time and in the order ` +
     `listed, with your file tool, and wait for each result. Then read the stage file it names${inputs}.`;
 }
 
@@ -1300,7 +1372,7 @@ export function briefNote(ceremony: Record<string, unknown>, modules: readonly s
 export function ceremonyNote(state: "on" | "off"): string {
   return state === "on"
     ? "After this stage's questions are answered and before writing anything, confirm the summary of the answers " +
-      "with the person (stage-protocol.md, Consolidated summary before generation)."
+      "with the person (stage-protocol-summary.md)."
     : "Summary confirmation is off for this work: once the answers are written to the questions file, write the " +
       "stage's outputs; skip the stage file's Consolidated Summary step and record nothing for it.";
 }
@@ -1424,7 +1496,7 @@ export function knownDirectiveFieldNames(): string[] {
 // Whether a stage step runs its body here: a gate shown again, a settled swarm,
 // a Unit or batch checkpoint and a team gate are handled without it, and a wave
 // hands the body to its builders. Notes about the body ride only when it runs.
-function bodyRuns(d: Record<string, unknown>): boolean {
+export function bodyRuns(d: Record<string, unknown>): boolean {
   if (d.gate_only === true || d.swarm_settled === true) return false;
   if ("construction_checkpoint" in d || "swarm_checkpoint" in d || "unit_gate" in d || "wave" in d) return false;
   return (d.construction_policy as { completion_only?: boolean } | undefined)?.completion_only !== true;
@@ -1469,14 +1541,15 @@ export function withAgentNotes<T extends object>(
   }
   if (d.kind === "run-stage" && typeof d.stage_file === "string") {
     const modules = Array.isArray(d.protocol_modules)
-      ? d.protocol_modules.filter((module): module is string => typeof module === "string" && /^[a-z]+$/.test(module))
+      ? d.protocol_modules.filter((module): module is string =>
+        typeof module === "string" && (VALID_PROTOCOL_MODULES as readonly string[]).includes(module))
       : [];
     const note = protocolNote(d.stage_file, modules);
     if (note !== null) notes.protocol_note = note;
     if (bodyRuns(d)) {
       const paths = Array.isArray(d.inline_context_paths) ? d.inline_context_paths.filter((p): p is string => typeof p === "string") : [];
       const consumes = Array.isArray(d.consumes) ? d.consumes.filter((p): p is string => typeof p === "string") : [];
-      notes.context_note = contextNote(paths, consumes);
+      notes.context_note = contextNote(paths, consumes, isPlainObject(d.lead_persona));
       if (isPlainObject(d.ceremony) && (d.ceremony.summary_confirmation === "on" || d.ceremony.summary_confirmation === "off")) {
         notes.ceremony_note = ceremonyNote(d.ceremony.summary_confirmation);
       }
@@ -1507,7 +1580,7 @@ export function withAgentNotes<T extends object>(
       notes.gate_note = verificationCommandRecovery(typeof d.stage === "string" ? d.stage : undefined, logInvocation, stateInvocation);
     } else if (d.gate === GATE_UNRESOLVED) {
       notes.gate_note = unresolvedGateNote(invocation);
-    } else if (d.gate_only === true) {
+    } else if (showsGateAgain(d)) {
       notes.gate_note = gateOnlyNote();
     } else if (
       d.gate === false && typeof d.unit === "string" &&
@@ -1518,6 +1591,13 @@ export function withAgentNotes<T extends object>(
     ) {
       notes.gate_note = unitStepNote(invocation);
     }
+  }
+  // The answer mode reaches the agent as its note alone: handed the object the
+  // note was made from too, the agent read its fields aloud on Kiro CLI ("The
+  // answer mode needs to be asked (answer_mode.ask: true)").
+  if (d.kind === "run-stage" && "answer_mode" in d) {
+    const { answer_mode: _resolved, ...step } = d;
+    return { ...step, ...notes } as T;
   }
   return Object.keys(notes).length > 0 ? { ...directive, ...notes } : directive;
 }
@@ -1580,7 +1660,7 @@ export function validateDirective(obj: unknown): ValidationResult {
   checkAgentNote(o, "gate_note", true, kind, errors);
   checkAgentNote(o, "protocol_note", true, kind, errors);
   checkAgentNote(o, "construction_policy_note", true, kind, errors);
-  checkAgentNote(o, "answer_mode_note", "answer_mode" in o, kind, errors);
+  checkAgentNote(o, "answer_mode_note", "stage_file" in o, kind, errors);
   checkAgentNote(o, "context_note", "stage_file" in o, kind, errors);
   checkAgentNote(o, "brief_note", "stage_file" in o, kind, errors);
   checkAgentNote(o, "ceremony_note", "stage_file" in o, kind, errors);
@@ -1953,6 +2033,12 @@ function checkRunStageShared(
   checkEnum(o, "mode", VALID_MODES, kind, errors);
   checkOptionalPipeline(o, kind, errors);
   checkStringArray(o, "inline_context_paths", kind, errors);
+  if (o.lead_persona !== undefined) {
+    const persona = o.lead_persona;
+    if (!isPlainObject(persona) || typeof persona.path !== "string" || typeof persona.text !== "string") {
+      errors.push(`${kind}: lead_persona must be an object with string path and text`);
+    }
+  }
   checkOptionalStringArray(o, "context_warnings", kind, errors);
   checkOptionalKeptReplies(o, kind, errors);
   checkOptionalParkedReply(o, kind, errors);

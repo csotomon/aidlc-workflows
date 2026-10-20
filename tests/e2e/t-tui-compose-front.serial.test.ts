@@ -12,6 +12,8 @@
 // it drives the same-turn creation - one /aidlc invocation, keystrokes only.
 //
 // Disk assertions (the same P2 contract t192 pins):
+//   - nothing is created before the person answers: when the Approve option
+//     first paints, no work record exists (the run fails if it never paints),
 //   - no scope file is written: the scope library keeps its stock files and
 //     grid keys (a composed plan belongs to this piece of work),
 //   - the created aidlc-state.md runs a stock scope with a
@@ -126,7 +128,8 @@ describe("t-tui compose front journey (live claude TUI)", () => {
         // Answer every rendered gate with the leading (Recommended/Approve)
         // option; terminate the moment the created state carries ANY Scope field
         // (creation = the journey's last deterministic mutation). No per-gate
-        // timeout - the disk terminator is the pass condition.
+        // timeout - the disk terminator is the pass condition. While the
+        // Approve option waits for its answer, no work record may exist yet.
         const gateRc = await new Promise<number>((resolve) => {
           const child = spawn(
             DRIVE_BIN,
@@ -134,6 +137,8 @@ describe("t-tui compose front journey (live claude TUI)", () => {
               ...DRIVE_PREFIX, "answer-gate",
               "--session", session,
               "--project-dir", sandbox,
+              "--assert-file-absent-at-option", "Approve",
+              "--assert-file-absent", "aidlc/spaces/default/intents/*/aidlc-state.md",
               "--until-state-field", "Scope=\\S+",
               "--overall-timeout-ms", String(remainingWorkMs()),
             ],
@@ -144,7 +149,6 @@ describe("t-tui compose front journey (live claude TUI)", () => {
         });
         expect(gateRc).toBe(0);
 
-        // No scope file was written: the stock library only.
         const scopesDir = join(sandbox, ".claude", "scopes");
         const scopeFiles = readdirSync(scopesDir).filter(
           (f) => f.startsWith("aidlc-") && f.endsWith(".md"),
@@ -155,7 +159,6 @@ describe("t-tui compose front journey (live claude TUI)", () => {
         ) as Record<string, unknown>;
         expect(Object.keys(grid).every((k) => STOCK_SCOPES.has(k))).toBe(true);
 
-        // The created state runs a stock scope with the plan composed for it.
         const stateMd = readFileSync(stateFilePathFor(sandbox), "utf8");
         const scope = /^- \*\*Scope\*\*: (\S+)$/m.exec(stateMd)?.[1] ?? "";
         expect(STOCK_SCOPES.has(scope)).toBe(true);

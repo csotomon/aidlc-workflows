@@ -148,16 +148,17 @@ describe("bounded live file sharding", () => {
 
   test("the live matrix stays bounded as files accumulate", () => {
     expect(LIVE_SHARD_COUNTS).toEqual({ "claude-sdk": 2, "claude-tui": 3, codex: 1, copilot: 1, opencode: 1, "release-contract": 1 });
-    expect(LIVE_PLATFORM_SHARD_COUNTS).toEqual({ "claude-sdk": { linux: 4 } });
-    expect(kinds.flatMap(kind => liveMatrix(kind).include).filter(row => row.family !== "release-contract")).toHaveLength(26);
-    expect(selectedLiveFiles("claude-sdk", "linux", "1/4").length).toBeGreaterThan(1);
-    expect(selectedLiveFiles("codex", "linux", "1/1")).toHaveLength(6);
-    const file = selectedLiveFiles("claude-sdk", "linux", "2/4")[0];
-    expect(() => selectedLiveFiles("claude-sdk", "linux", "1/4", file)).toThrow("outside the selected shard");
+    expect(LIVE_PLATFORM_SHARD_COUNTS).toEqual({ "claude-sdk": { linux: 5 }, codex: { linux: 2, win32: 2 } });
+    expect(kinds.flatMap(kind => liveMatrix(kind).include).filter(row => row.family !== "release-contract")).toHaveLength(29);
+    expect(selectedLiveFiles("claude-sdk", "linux", "2/5").length).toBeGreaterThan(1);
+    expect(["1/2", "2/2"].flatMap((shard) => selectedLiveFiles("codex", "linux", shard))).toHaveLength(7);
+    expect(selectedLiveFiles("codex", "darwin", "1/1")).toHaveLength(6);
+    const file = selectedLiveFiles("claude-sdk", "linux", "3/5")[0];
+    expect(() => selectedLiveFiles("claude-sdk", "linux", "2/5", file)).toThrow("outside the selected shard");
   });
 
   test("malformed, out-of-range, unsafe, and stale shard totals are rejected", () => {
-    const total = LIVE_SHARD_COUNTS.codex!;
+    const total = liveShardCount("codex", "linux");
     for (const shard of [
       "", "1", "1/2/3", "1.0/2", "1e0/2", "-1/2", "+1/2", "0/2", "1/0",
       `01/${total}`, `1/0${total}`, ` 1/${total}`, `1/${total} `, `1/${total}\n`,
@@ -207,23 +208,28 @@ describe("bounded live file sharding", () => {
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // A file that opens only with a live switch of its own, one no live job sets
-  // (the input and answers corpus checks), would run with every case skipped
-  // and fail as "executed no test cases": no hosted family selects it.
+  // (the input corpus check), would run with every case skipped and fail as
+  // "executed no test cases": no hosted family selects it. The answers corpus
+  // check opens in the Claude SDK family's live job too, on Linux, on a shard
+  // of its own (its nightly run).
+  const ANSWERS_FILE = "tests/e2e/t-live-aidlc-answers-corpus.serial.test.ts";
   test("a file gated on a live switch no live job sets is selected nowhere", () => {
     const gates: readonly string[] = TEST_MATRIX_LIVE_GATES;
-    const onDemand = [...partition.values()].flat().filter((file) =>
+    const onDemand = [...partition.values()].flat().filter((file) => file !== ANSWERS_FILE &&
       (codeView(readFileSync(join(ROOT, file), "utf8")).match(/\bAIDLC_[A-Z_]+_LIVE\b/g) ?? [])
         .some((gate) => !gates.includes(gate)));
     expect(onDemand).toContain("tests/e2e/t-live-aidlc-input-corpus.serial.test.ts");
-    expect(onDemand).toContain("tests/e2e/t-live-aidlc-answers-corpus.serial.test.ts");
     for (const family of Object.keys(FAMILIES) as LiveFamily[]) {
       const spec = FAMILIES[family];
       if (spec.hosting !== "hosted") continue;
       for (const platform of spec.platforms) {
         const selected = selectedLiveFiles(family, platform);
         for (const file of onDemand) expect(selected, `${family}/${platform}`).not.toContain(file);
+        expect(selected.includes(ANSWERS_FILE), `${family}/${platform}`).toBe(family === "claude-sdk" && platform === "linux");
       }
     }
+    const shards = liveMatrix("linux", "claude-sdk").include.map((row) => selectedLiveFiles("claude-sdk", "linux", row.shard));
+    expect(shards.filter((files) => files.includes(ANSWERS_FILE))).toEqual([[ANSWERS_FILE]]);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   for (const tier of ["unit", "integration", "e2e"] as const) {
@@ -296,7 +302,7 @@ describe("bounded live file sharding", () => {
   });
 
   test("sandbox forwards optional shards as individual arguments with two workers", () => {
-    const total = LIVE_SHARD_COUNTS.codex!;
+    const total = liveShardCount("codex", "linux");
     const shard = `1/${total}`;
     const prefix = [process.execPath, "scripts/ci-live-filter.ts", "codex", "--platform", "linux"];
     expect(sandboxCommand("codex", "linux")).toEqual([...prefix, "--run", "--", "--debug", "-P", "2"]);

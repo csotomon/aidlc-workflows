@@ -53,7 +53,6 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, relative, sep, win32 } from "node:path";
-import { resolveAction } from "../../dist/cursor/.cursor/tools/aidlc.ts";
 import {
   auditBlockField,
   createIntent,
@@ -479,16 +478,16 @@ describe("t276 cursor adapter payload conversion", () => {
   test("3: guards convert a state-guard block to Cursor's permission-deny JSON", () => {
     const proj = installedProject();
     seedStateFile(proj, "state-construction.md");
-    // A direct lifecycle mutation through aidlc-state.ts is the state guard's
-    // canonical refusal; on Cursor it must arrive as deny JSON, exit 0.
+    // A tool call that invokes a hook is a refusal the state guard keeps; on
+    // Cursor it must arrive as deny JSON, exit 0.
     const stdin = payload("preToolUseShell", proj, {
-      tool_input: { command: "bun .cursor/tools/aidlc-state.ts approve", cwd: "", timeout: 30000 },
+      tool_input: { command: "bun .cursor/tools/aidlc.ts engine hook record-human-turn", cwd: "", timeout: 30000 },
     });
     const r = runAdapter(proj, "guards", stdin);
     expect(r.code).toBe(0);
     const out = JSON.parse(r.stdout) as { permission?: string; agent_message?: string };
     expect(out.permission).toBe("deny");
-    expect(out.agent_message ?? "").toContain("aidlc-orchestrate");
+    expect(out.agent_message ?? "").toContain("AIDLC runtime records and hooks belong to the harness");
   });
 
   test("4: guards allow an ordinary shell command with permission-allow JSON", () => {
@@ -1577,21 +1576,39 @@ describe("t276 cursor adapter payload conversion", () => {
     expect(JSON.parse(sibling.stdout).permission).toBe("deny");
   });
 
-  test("22: an unavailable child guard denies the operation", () => {
-    const proj = installedProject();
-    seedStateFile(proj, "state-construction.md");
-    rmSync(join(proj, ".cursor", "hooks", "aidlc-reviewer-scope.ts"));
-
-    const r = runAdapter(proj, "guards", payload("preToolUseShell", proj));
-    expect(r.code).toBe(0);
-    const out = JSON.parse(r.stdout) as { permission?: string; agent_message?: string };
-    expect(out.permission).toBe("deny");
-    expect(out.agent_message ?? "").toContain("aidlc-reviewer-scope.ts failed");
-    // It names the step that puts the files back, and that command is a real route.
-    expect(out.agent_message ?? "").toContain("config --harness cursor");
-    expect(out.agent_message ?? "").not.toContain("doctor");
-    const action = resolveAction(["config", "--harness", "cursor"]);
-    expect(action.type).not.toBe("error");
+  test("22: a guard that fails on its own refuses nothing, and doctor reads why", () => {
+    // As in the core hook group: a crashed member refuses nothing. Denying here
+    // stopped every call, reads included, under every Guard Policy, with no
+    // step that could fix a guard that throws on this project's state.
+    const crashes: Array<[string, string | null, string]> = [
+      ["throws", 'throw new Error("simulated guard crash [degraded]");\n', "exited 1"],
+      ["exits 1", "process.exit(1);\n", "exited 1"],
+      ["is missing", null, "exited 1"],
+    ];
+    // Windows has no POSIX signals: a killed process there reports an exit code.
+    if (process.platform !== "win32") {
+      crashes.push(["is killed", 'process.kill(process.pid, "SIGKILL");\n', "was stopped by SIGKILL"]);
+    }
+    for (const [how, body, said] of crashes) {
+      const proj = installedProject();
+      seedStateFile(proj, "state-construction.md");
+      const guard = join(proj, ".cursor", "hooks", "aidlc-state-transition-guard.ts");
+      if (body === null) rmSync(guard);
+      else writeFileSync(guard, body);
+      for (const input of [
+        payload("preToolUseShell", proj),
+        payload("preToolUseShell", proj, { tool_name: "Read", tool_input: { file_path: join(proj, "README.md") } }),
+      ]) {
+        expectAllowJson(runAdapter(proj, "guards", input), how);
+      }
+      const drops = join(hooksHealthDir(proj), "state-transition-guard.drops");
+      expect(existsSync(drops), how).toBe(true);
+      const lines = readFileSync(drops, "utf-8").trim().split("\n");
+      expect(lines, how).toHaveLength(2);
+      expect(lines[0], how).toContain(`state-transition-guard ${said} under the Cursor adapter: `);
+      // A tag in the guard's own words never decides doctor's verdict.
+      expect(lines[0], how).not.toContain("[degraded]");
+    }
   });
 
   test("22b: an unavailable shared freeze parser denies before the guard chain", () => {
@@ -4492,5 +4509,99 @@ if (import.meta.main) {
     expect(JSON.parse(runAdapter(proj, "guards", payload("preToolUseTask", proj, {
       tool_input: { description: "Developer probe", prompt: "Implement the unit.", subagent_type: "aidlc-developer-agent" },
     })).stdout).permission).toBe("allow");
+  });
+
+  test("39: under strict and relaxed a delegate runs the AI-DLC commands the core admits it, and nothing more", () => {
+    // Reverse Engineering's helper mints and checks its scope fingerprint with
+    // AI-DLC's own command, as its template (re-artifacts.md) spells it. The
+    // core admits it to every delegate (delegateAdmittedVerbs); the
+    // interpreter and attribution-path denies refused it under strict and
+    // relaxed, so the stage stopped there on Cursor.
+    const proj = installedProject();
+    seedStateFile(proj, "state-construction.md");
+    const statePath = join(seededRecordDir(proj), "aidlc-state.md");
+    const withPolicy = (line: string) => writeFileSync(
+      statePath,
+      readFileSync(statePath, "utf-8")
+        .replace(/^- \*\*(?:Guard Policy|Change Control)\*\*:.*\n/gm, "")
+        .replace(/^(- \*\*Scope\*\*:.*)$/m, `$1\n- **Guard Policy**: ${line}`),
+    );
+    setCurrentStage(proj, "reverse-engineering");
+    clearLedger(proj);
+    registerTaskParent(proj);
+    expectAllowJson(runAdapter(proj, "guards", payload("preToolUseTask", proj, {
+      tool_input: { description: "Reverse Engineering scan", prompt: "Scan and synthesize.", subagent_type: "aidlc-developer-agent" },
+    })));
+    const ledger = () => ledgerFilesFor(proj).sort().map((file) => `${file}\n${readFileSync(file, "utf-8")}`);
+    const ledgerBefore = ledger();
+    expect(ledgerBefore.length).toBe(1);
+    const delegateShell = (command: string) => JSON.parse(runAdapter(proj, "guards", payload("preToolUseShell", proj, {
+      conversation_id: "developer-reverse-engineering",
+      session_id: "developer-reverse-engineering",
+      tool_input: { command },
+    })).stdout) as { permission?: string; agent_message?: string };
+    const staged = join(seededRecordDir(proj), ".aidlc-engine", "codekb-stage-proj", "reverse-engineering-timestamp.md");
+    const mint = "bun .cursor/tools/aidlc.ts engine workspace codekb-scope-diff --mint --paths ./";
+    const health = hooksHealthDir(proj);
+    for (const policy of ["strict (set by you)", "relaxed (set by you)"]) {
+      withPolicy(policy);
+      for (const command of [
+        mint,
+        "bun .cursor/tools/aidlc.ts engine workspace codekb-scope-diff --repo proj --mint --paths src/,lib/",
+        `bun .cursor/tools/aidlc.ts engine workspace codekb-scope-diff --repo proj --check "${staged}"`,
+        "aidlc engine workspace codekb-scope-diff --repo proj --mint --paths ./",
+        "aidlc.exe engine workspace codekb-scope-diff --mint --paths ./",
+        // The stage's publish line names the tool script itself.
+        `bun .cursor/tools/aidlc-utility.ts codekb-publish --repo proj --staged "${dirname(staged)}/" --paths ./ ` +
+          "--expect-store none --expect-source 0123abcd --json",
+      ]) {
+        rmSync(join(health, "review-freeze.last"), { force: true });
+        const out = delegateShell(command);
+        expect(out.permission, `${policy}: ${command}: ${out.agent_message ?? ""}`).toBe("allow");
+        // The core guards still ran on it.
+        expect(existsSync(join(health, "review-freeze.last")), command).toBe(true);
+      }
+      // The Windows spelling of the dispatcher path: the script itself in
+      // PowerShell, a different file name where a POSIX shell reads the
+      // backslashes as escapes.
+      const windows = delegateShell("bun .cursor\\tools\\aidlc.ts engine workspace codekb-scope-diff --mint --paths ./");
+      if (process.platform === "win32") expect(windows.permission, windows.agent_message).toBe("allow");
+      else expect(windows.agent_message ?? "").toContain("general-purpose interpreters");
+      // The publish as the stage writes it, over continued lines: one command
+      // to a POSIX shell; PowerShell ends the command at the first line.
+      const continued = delegateShell([
+        "bun .cursor/tools/aidlc-utility.ts codekb-publish \\",
+        "  --repo proj \\",
+        `  --staged "${dirname(staged)}/" \\`,
+        "  --paths ./ \\",
+        "  --expect-store none \\",
+        "  --expect-source 0123abcd \\",
+        "  --json",
+      ].join("\n"));
+      if (process.platform === "win32") expect(continued.agent_message ?? "").toContain("general-purpose interpreters");
+      else expect(continued.permission, continued.agent_message).toBe("allow");
+      for (const command of [
+        "bun -e 'x'",
+        `${mint}\nbun -e 'x'`,
+        `${mint} \\\n> aidlc/.aidlc-cursor-subagents/x.json`,
+        "bun --preload ./x.ts .cursor/tools/aidlc.ts engine workspace codekb-scope-diff --mint --paths ./",
+        `${mint} > aidlc/.aidlc-cursor-subagents/x.json`,
+        `rm -rf aidlc/.aidlc-cursor-subagents && ${mint}`,
+        `FORCE=1 ${mint}`,
+        "bun scratch/aidlc.ts engine workspace codekb-scope-diff --mint --paths ./",
+        "bun .cursor/tools/aidlc.ts engine knowledge sync",
+        "aidlc engine orchestrate report --stage reverse-engineering --result awaiting-approval",
+        "bun .cursor/tools/aidlc-utility.ts upgrade",
+        "bun .cursor/tools/aidlc-log.ts review --stage reverse-engineering --verdict pass",
+        "bun scratch/aidlc-utility.ts codekb-publish --repo proj",
+      ]) {
+        const out = delegateShell(command);
+        expect(out.permission, `${policy}: ${command}`).toBe("deny");
+        expect(out.agent_message ?? "", command).toContain("general-purpose interpreters");
+      }
+      // Under these policies a build or a test is still the parent's.
+      expect(delegateShell("bun test").agent_message ?? "").toContain("have the parent conversation run executable probes");
+    }
+    expect(ledger()).toEqual(ledgerBefore);
   });
 });

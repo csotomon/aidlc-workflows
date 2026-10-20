@@ -45,12 +45,13 @@ import {
   TestBudgetExhaustedError,
 } from "./harness/test-budget.ts";
 import { buildMeta, renderMeta } from "./lib/bun-junit-to-meta.ts";
-import { CASE_TIMEOUT_RETRY_MAX_MS, ISOLATED_RETRY_MAX_MS, onlyCaseTimeouts, ORDINARY_RETRY_MAX_MS, preserveFirstAttempt, retryEligible, retryPassed } from "./lib/file-retry.ts";
+import { CASE_TIMEOUT_RETRY_MAX_MS, flakyLiveLine, ISOLATED_RETRY_MAX_MS, MODEL_API_REASON, modelApiFailed, modelApiLine, onlyModelApiFailures, onlyCaseTimeouts, ORDINARY_RETRY_MAX_MS, personTurnFailed, personTurnLine, preserveFirstAttempt, retryEligible, retryPassed } from "./lib/file-retry.ts";
 import {
   type OrderWeights,
   orderLongestFirst,
   parseOrderWeights,
   selectShard,
+  shardConfigForPlatform,
   type ShardConfig,
 } from "./lib/test-sharding.ts";
 import type { E2eWorker } from "./lib/e2e-workers.ts";
@@ -125,6 +126,10 @@ interface FileExecution {
   junitPath?: string;
   /** Every failed case failed by running past its case timeout. */
   caseTimeoutsOnly?: boolean;
+  /** A case failed a person-turn check, so the file is never retried. */
+  personTurnFailure?: boolean;
+  /** A case failed because the model service did; that failure is infrastructure, not a test result. */
+  modelApiFailure?: boolean;
 }
 
 function usage(): string {
@@ -133,7 +138,7 @@ function usage(): string {
 
 LEVEL FLAGS (combinable, each selects exactly its level):
   --smoke         Structural validation (files exist, permissions, settings)
-  --unit          Single-component isolation (hooks, frontmatter, knowledge)
+  --unit          Unit directory, including process and workflow contracts
   --integration   Cross-component contracts and live stage/CLI utilities
   --e2e           Full lifecycle, worktree, and rendered terminal journeys
 
@@ -166,8 +171,8 @@ OUTPUT MODIFIERS (combinable with any tier/profile):
   --parallel N    Run up to N test files concurrently within a tier (alias: -P N).
                   Default: 1 (serial). Smoke and unit tiers always run serially.
                   Recommended range: 1-8. See docs/reference/09-testing.md.
-  --shard N/M     Run one deterministic, duration-balanced unit-test shard.
-                  Requires --unit with no other level or profile flags.
+  --shard N/M     Run one duration-balanced unit or integration shard.
+                  Requires --unit or --integration with no other level/profile.
   --file-timeout N  Independent per-file work ceiling in seconds for every tier.
                   Default: 7200 outside isolated e2e; caps its existing deadline.
   --run-timeout N   Shared work ceiling in seconds, including setup and all files.
@@ -225,10 +230,10 @@ function parseArgs(argv: string[]): ParsedArgs {
 }
 
 const args = parseArgs(process.argv.slice(2));
-// The scope runs and the guard matrix take minutes per file, so a run with no
-// --filter leaves them out, except the full --release/--all acceptance; CI
-// runs them as jobs of their own with a filter.
-const SELECTED_ONLY = /^t-(scope-run|guard-matrix)-/;
+// The scope runs, the scope-host runs and the guard matrix take minutes per
+// file, so a run with no --filter leaves them out, except the full
+// --release/--all acceptance; CI runs them as jobs of their own with a filter.
+const SELECTED_ONLY = /^t-(scope-run|scope-host|guard-matrix)-/;
 let selectedOnlyNoted = false;
 
 // --exclude drops the files it matches from every tier, as if they were not
@@ -1139,7 +1144,7 @@ async function runBunTestFile(
     // Persist only coverage controls, never the full environment or credentials.
     const coverageKeys = [
       ...LIVE_MODEL_GATES, "AIDLC_RELEASE_CONTRACT_LIVE", "AIDLC_NO_LLM",
-      "AIDLC_KIRO_IDE_CASE", "AIDLC_REQUIRE_COMPILED_COVERAGE",
+      "AIDLC_KIRO_IDE_CASE", "AIDLC_KIRO_RELEASE_TREE", "AIDLC_REQUIRE_COMPILED_COVERAGE",
       "AIDLC_TEST_PACKAGE_READY", "AIDLC_TUI_BACKEND",
     ];
     writeFileSync(join(logDir, `${name}.execution.json`), `${JSON.stringify({
@@ -1189,6 +1194,8 @@ async function runBunTestFile(
       ? "Explicitly selected file executed no test cases (all skipped or empty). For production guard journeys, rerun with --production-guards; for live gates, enable the documented live variable and install/authenticate its CLI."
       : "No test cases executed (all skipped or empty)";
   }
+  const modelApiFailure = meta.status === "FAIL" && modelApiFailed(xml, run.output);
+  if (modelApiFailure && onlyModelApiFailures(xml, run.output)) meta.reason = MODEL_API_REASON;
   // Preserve a duration even if a future Bun omits root time.
   if (meta.duration === "0") meta.duration = String(Math.max(0, (Date.now() - start) / 1000));
   writeMeta(name, meta);
@@ -1222,6 +1229,8 @@ async function runBunTestFile(
     evidenceError: evidence.complete ? undefined : evidence.error,
     junitPath: junitXml,
     ...(status === "FAIL" && onlyCaseTimeouts(xml) ? { caseTimeoutsOnly: true } : {}),
+    ...(status === "FAIL" && personTurnFailed(xml, run.output) ? { personTurnFailure: true } : {}),
+    ...(modelApiFailure ? { modelApiFailure: true } : {}),
     // Diagnostic evidence, never grounds for changing an assertion or retrying.
     throttlingSignals: (run.output.match(
       /ThrottlingException|TooManyRequestsException|(?:HTTP|status(?:Code)?)\s*[:=]?\s*429\b|rate[_ ]limit[_ ]exceeded/gi,
@@ -1260,7 +1269,7 @@ function levelFiles(level: Level, excludes: string[] = []): string[] {
   const files = existsSync(dir)
     ? readdirSync(dir)
         .filter((f) => f.endsWith(".test.ts"))
-        .filter((f) => !excludeSet.has(f))
+        .filter((f) => (level === "integration" && args.shard !== null) || !excludeSet.has(f))
         .filter((f) => level !== "integration" || args.filter || args.fullProfile || !SELECTED_ONLY.test(f))
         .sort()
         .map((f) => join(dir, f))
@@ -1270,7 +1279,7 @@ function levelFiles(level: Level, excludes: string[] = []): string[] {
     selectedOnlyNoted = true;
     // stderr, so a machine-read stdout (a plan, a file list) stays clean.
     process.stderr.write("Scope runs and the guard matrix are left out of a run with no --filter (minutes per file); " +
-      "select them with --filter '^t-(scope-run|guard-matrix)-'.\n");
+      "select them with --filter '^t-(scope-run|scope-host|guard-matrix)-'.\n");
   }
   // Fold plugin content tests into the integration tier. Exclusion is keyed by
   // the plugin-dir-qualified name (`plugin-<plugin>-<stem>`), NOT the bare
@@ -1280,15 +1289,41 @@ function levelFiles(level: Level, excludes: string[] = []): string[] {
     files.push(...pluginTestFiles().filter((f) => {
       const m = f.replace(/\\/g, "/").match(/\/plugins\/([^/]+)\/tests\//);
       const qualified = m ? `plugin-${m[1]}-${basename(f).replace(/\.test\.ts$/, "")}` : basename(f);
-      return !excludeSet.has(qualified);
+      return args.shard !== null || !excludeSet.has(qualified);
     }));
   }
   if (level === "unit" && args.shard) {
-    const config = JSON.parse(readFileSync(UNIT_SHARD_CONFIG, "utf8")) as ShardConfig;
+    const config = shardConfigForPlatform(
+      JSON.parse(readFileSync(UNIT_SHARD_CONFIG, "utf8")) as ShardConfig, process.platform,
+    );
     const names = files.map((file) => basename(file));
     try {
       const selected = new Set(selectShard(names, args.shard, config));
       return files.filter((file) => selected.has(basename(file)) && kept(file));
+    } catch (error) {
+      process.stderr.write(
+        `ERROR: ${error instanceof Error ? error.message : String(error)}\n`,
+      );
+      process.exit(2);
+    }
+  }
+  if (level === "integration" && args.shard) {
+    // Filter first so the two guard jobs partition the guard inventory, not
+    // unrelated integration tests. Exclusions still apply after assignment.
+    const filter = args.filter ? new RegExp(args.filter) : null;
+    const candidates = files.filter((file) => matchesE2eFilter(file, filter));
+    if (candidates.length === 0) return [];
+    const order = integrationOrderWeights() ?? { defaultSeconds: 1, weights: {} };
+    const names = candidates.map(legacyResultName);
+    const config: ShardConfig = {
+      defaultSeconds: order.defaultSeconds,
+      weights: Object.fromEntries(names.filter((name) => name in order.weights).map((name) => [name, order.weights[name]])),
+      affinityGroups: [],
+    };
+    try {
+      const selected = new Set(selectShard(names, args.shard, config));
+      return candidates.filter((file) => selected.has(legacyResultName(file)) && kept(file) &&
+        !excludeSet.has(basename(file)) && !excludeSet.has(legacyResultName(file)));
     } catch (error) {
       process.stderr.write(
         `ERROR: ${error instanceof Error ? error.message : String(error)}\n`,
@@ -1312,6 +1347,11 @@ interface OrdinaryRetry {
 }
 const ordinaryRetries: OrdinaryRetry[] = [];
 
+/** Said in place of a retry when a file failed a person-turn check. */
+function noRetryForPersonTurn(file: string): string {
+  return `=== NO RETRY ${basename(file)} (it found AI-DLC acting for the person; a pass on a second attempt would hide that) ===\n`;
+}
+
 /**
  * Ordinary smoke/unit/integration files get one fresh second run (the merge
  * queue passes --file-retries 1) when the first attempt failed assertions
@@ -1320,12 +1360,13 @@ const ordinaryRetries: OrdinaryRetry[] = [];
  */
 async function runFileWithRetry(file: string, parallelMode: boolean): Promise<FileExecution | undefined> {
   const first = await runBunTestFile(file, parallelMode);
-  if (!first || !args.fileRetries || !retryEligible(first, ORDINARY_RETRY_MAX_MS, remainingRunMs())) return first;
-  const name = resultName(file);
   const say = async (line: string): Promise<void> => {
     if (parallelMode) await withStdoutLock(() => process.stdout.write(line));
     else process.stdout.write(line);
   };
+  if (first?.personTurnFailure && args.fileRetries) await say(noRetryForPersonTurn(file));
+  if (!first || !args.fileRetries || !retryEligible(first, ORDINARY_RETRY_MAX_MS, remainingRunMs())) return first;
+  const name = resultName(file);
   // Without verbose logs there is no evidence to keep; with them, a retry that
   // would overwrite the first attempt's evidence never starts.
   const kept = args.verbose ? preserveFirstAttempt(logDir, name) : { ok: true, log: null };
@@ -1714,13 +1755,19 @@ async function runIsolatedE2e(): Promise<void> {
     await runE2eQueue(runnable, limits, async (task, worker) => {
       try {
         const first = await execute(task.file, worker);
+        if (first.modelApiFailure) process.stdout.write(`${modelApiLine(task.file)}\n`);
         // Retry only a short assertion failure after confirmed retirement. A
-        // timeout, missing evidence or cleanup failure never earns another run.
+        // timeout, missing evidence, cleanup failure or person-turn failure
+        // never earns another run.
+        if (args.fileRetries && first.personTurnFailure) {
+          process.stdout.write(`${noRetryForPersonTurn(task.file)}${personTurnLine(task.file)}\n`);
+        }
         if (args.fileRetries && retryEligible(first, ISOLATED_RETRY_MAX_MS, remainingRunMs())) {
           const second = await execute(task.file, worker, 2);
+          if (second.modelApiFailure) process.stdout.write(`${modelApiLine(task.file)}\n`);
           if (second.status === "PASS") {
             records.get(task.file)!.passedOnRetry = true;
-            process.stdout.write(`::warning title=Flaky live test::${basename(task.file)} passed on its second attempt; both attempts are retained.\n`);
+            process.stdout.write(`${flakyLiveLine(task.file)}\n`);
           }
         }
       } catch (error) {
@@ -1994,7 +2041,7 @@ async function main(): Promise<number> {
     return failedFiles;
   }
 
-  if (args.runUnit) await runTier("unit", "Unit Tests (single-component isolation)");
+  if (args.runUnit) await runTier("unit", "Unit Tests (unit, process, and workflow contracts)");
 
   let preflightRan = false;
   if (needsLlm && !args.filter && args.noLlm) {

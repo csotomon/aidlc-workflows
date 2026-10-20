@@ -70,9 +70,10 @@ The human can also open `<record>/verification-command.txt`. The canonical
 command is a nonblank single line of at most 1024 characters. Control characters
 and display-spoofing characters (Unicode format characters, including zero-width
 and bidi controls, line/paragraph separators, and no-break space U+00A0) are refused.
-The human's **Approve** / **Request Changes** reply in that session binds
-the answer to the pending command. Only **Approve** authorizes the receipt;
-an unrelated reply, **Request Changes**, or a reply from another session does not.
+The human's **Approve** / **Request Changes** reply binds the answer to the
+pending command, in the chat that asked or in a new one while it is the newest
+question asked. Only **Approve** authorizes the receipt; an unrelated reply,
+**Request Changes**, or a reply to another question does not.
 Never write `--details "Approve"` unless the human chose it; only then run
 `state set-construction-verification-command --command-file verification-command.txt` to write the matching Runtime
 State field. A human may defer when no runnable
@@ -430,7 +431,7 @@ feasibility input.
 | rules.md        | Decision rules, validation logic, constraints, policies, conditional behavior |
 | entities.md       | Entities, relationships, data structures, attributes, lifecycle states   |
 | frontend-components.md   | (CONDITIONAL) Component hierarchy, props/state, interaction flows, form validation, API integration |
-| traceability.json        | Every acceptance criterion of each story mapped to the Unit (without stories.md, the Unit's FR rows in the story map; without a story map, every FR), each `OK` to `BRx.y` rules in rules.md, `N/A` or `Deferred` with its reason, or `GAP` |
+| traceability.json        | Every acceptance criterion of each story mapped to the Unit (without stories.md, the Unit's FR rows in the story map; without a story map, every FR; a requirement with sub-requirements through its `FR{n}.{m}` IDs), each `OK` to `BRx.y` rules in rules.md, `N/A` or `Deferred` with its reason, or `GAP` |
 
 Which files a Unit gets follows its kind: a `ui` Unit gets no entities.md or
 rules.md, only a `ui` Unit gets frontend-components.md, and a `packaging`
@@ -544,7 +545,7 @@ providing testability and measurability input.
 | reliability-requirements.md  | Availability targets (SLA/SLO), fault tolerance, backup/recovery           |
 | observability-requirements.md | Monitoring, logging, tracing, alerting, dashboards, SLI/SLO definitions    |
 | tech-stack-decisions.md      | Technology selections with rationale for each choice                       |
-| traceability.json            | Every inception `NFR{n}` that applies to the Unit mapped to its `NFRx.y` IDs |
+| traceability.json            | Every inception `NFR{n}` (when User Stories did not run and the story map gives the Unit NFR rows, those) mapped to its `NFRx.y` IDs, or `N/A` with the reason it does not apply |
 
 Which files a Unit gets follows its kind: scalability, reliability and
 observability requirements are for `service` Units, and performance for
@@ -999,7 +1000,13 @@ This stage has a **two-part structure**: planning followed by generation.
    is one of the choices, the same way it records an exact pick typed in chat,
    naming the file in one line for the conductor. When the person says it in
    their own words instead ("I put my answer in the file"), the conductor reads
-   the line and records the choice they made. The
+   the line and records the choice they made. When the person's message in
+   this chat that the question opened for already asked for a change ("go back
+   to code generation: also accept -S", on finished work too) and no decision
+   has used it, the conductor records it as that question's Request Changes,
+   with their words (the message record is the proof, as `--message` reads
+   it); an approval still needs a reply after the question shows, and the
+   revised plan's question needs its own. The
    next `next` returns the run-stage with `plan_approval.status: "approved"`
    (build), `revise` (with the person's words), `repair` (a Testing Contract an
    edit broke), or `plan` (finish the files). In edit mode the person changes the
@@ -1014,12 +1021,20 @@ This stage has a **two-part structure**: planning followed by generation.
    thereby approved. Testing Posture, scope, strategy, or project type changes
    follow that same rule. Other code moving after approval never asks again on
    any Guard Policy: the build continues with one `change_notices` line naming
-   the files. A different intent or target, a new attempt, or missing actual
+   the files. A swarm under `strict` is the exception for the person's own
+   files: prepare refuses until the plan is approved again, and the source
+   landing refuses the same change until it is undone or Guard Policy is
+   `relaxed`. A different intent or target, a new attempt, or missing actual
    initial approval still requires its own approval. After a rejected gate (the
    Code Generation completion gate, a Unit checkpoint, or a swarm batch
    checkpoint), while the plan is still the one approved before, `next` first
    returns `revise` with the person's words from that gate, so the question
-   that follows shows the revised plan. Re-running `next`, or a
+   that follows shows the revised plan. Reopening the step through
+   `/aidlc --stage code-generation` (`Reopen: jump`) starts a fresh attempt
+   and asks about the plan as it stands, without requiring an arbitrary edit.
+   Redo (`Reopen: redo`) starts the step again, including its plan, before
+   asking for approval. `Reopen: change` and a gate's Request Changes still
+   return `revise` with the person's feedback. Re-running `next`, or a
    reissued directive for the same target and attempt, never reopens it, and
    neither does whatever the engine said in between: a chat that compacted, a
    piece of work parked and resumed, or a guard-recovery question. `next` reads
@@ -1087,7 +1102,7 @@ This stage has a **two-part structure**: planning followed by generation.
      hashes. Contextual dependencies do not receive additional target markers.
    - Design artifacts for the CURRENT UNIT ONLY (not all units)
    - A 1-2 line summary of each inception-phase artifact with its file path
-     (requirements summary, stories summary, app design summary) -- the
+     (requirements summary, stories summary, domain design summary) -- the
      subagent can Read specific files if it needs full content
    - The current plan and unit-test-instructions.md, which that
      output already carries using the approval-content projection: the plan
@@ -1282,7 +1297,10 @@ with the aidlc-devsecops-agent providing security testing expertise.
   tests in CI before merge." line, or a memory note's "CI execution before
   merge") is a target only when the plan runs CI Pipeline (`ci-pipeline` listed
   as `EXECUTE` and not `[S]` in `aidlc-state.md`); otherwise it is recorded
-  `N/A` with that reason and is never a failure
+  `N/A` with that reason and is never a failure. While CI Pipeline is still
+  ahead (`[ ]`), the target is CI Pipeline's to meet: recorded `N/A` with Owning
+  Stage `ci-pipeline` and the reason that CI Pipeline, later in the plan, sets up
+  CI to run these tests before merge, never a failure
 
 ### Steps
 
@@ -1326,8 +1344,8 @@ with the aidlc-devsecops-agent providing security testing expertise.
      Evidence, Owning Stage, and Verdict
    - Applicable targets begin `Pending`; `N/A` is valid only when the
      source-complete inventory found no applicable measurable target, or for a
-     target the plan makes inapplicable (the CI obligation of a plan that runs
-     no CI Pipeline)
+     target the plan makes inapplicable here (the CI obligation of a plan that
+     runs no CI Pipeline or has it still ahead)
    - Readiness assessment (build-ready, test-ready, deployment-ready)
    - Known limitations or outstanding items
 
@@ -1447,11 +1465,21 @@ with the aidlc-devsecops-agent providing security testing expertise.
     pass and every applicable target to be `Met`, or the single explanatory
     `N/A` row when no target applies.
 
-10. **Cross-Unit Final Coverage Gate** -- Enumerate every `FR` and `NFR` in
-    `requirements.md` and every `AC` in `stories.md` (when User Stories ran),
-    read the stage-level and every per-unit Code Generation
-    `traceability.json`, and check each ID is covered `OK` with an existing
-    target file. Write `cross-unit-traceability.md` with the verdict, per-ID
+10. **Cross-Unit Final Coverage Gate** -- Run
+    `aidlc engine sensor-traceability --stage build-and-test`. It reports every
+    `FR` and `NFR` in `requirements.md` (a requirement with sub-requirements
+    through its `FR{n}.{m}` IDs) and every `AC` in `stories.md` (when User
+    Stories ran), each built when a stage-level or per-unit Code Generation
+    `traceability.json` covers it `OK` with an existing target file. A
+    requirement with sub-requirements is built when each Unit has built its own
+    (the `NFR1.x` its NFR Requirements wrote; a row for `NFR1` alone does not
+    cover them); otherwise by its own row or, when User Stories ran, through
+    every acceptance criterion of the stories User Stories traced it to. One
+    that nothing builds is settled when the latest stage that traced it (User
+    Stories, NFR Requirements, then Code Generation) marked it `N/A` with its
+    reason in every table there that lists it; an `N/A` with no reason is not
+    settled. Write
+    `cross-unit-traceability.md` from that output with the verdict, per-ID
     coverage and every uncovered ID; an uncovered ID is a finding shown at the
     approval gate.
 

@@ -50,6 +50,7 @@ import {
   readProtectedQuestion,
   readWorkspaceSourceSnapshot,
   recordedSourceListingUnderCurrentBoundary,
+  rejectionAtRunFloor,
   removePlanApprovalRuntimeRecord,
   renderChangedPaths,
   sourceChangedOutsideAidlc,
@@ -59,6 +60,8 @@ import {
   steeringTokenKeyPathFor,
   toPosix,
   harnessDir,
+  PERSON_WORDS_FILL,
+  PERSON_WORDS_SLOT,
   UNBINDABLE_FINGERPRINT,
   visibleMarkdownLines,
   withActiveDirectiveLock,
@@ -720,6 +723,11 @@ export function isPlanApprovalBeat(directive: Directive): directive is RunStageD
  * longer counts. While the plan is still exactly the one approved before, the
  * person's rejection is the change to make: the plan is revised first, and the
  * engine asks about the revised plan, never about the one they just sent back.
+ *
+ * A stage jump (`Reopen: jump`) keeps the plan available for approval as it
+ * stands. Its reopen notice is not a change request, and an unchanged plan
+ * would otherwise be sent back on every round. Redo (`Reopen: redo`) instead
+ * starts planning again before the new plan comes back for approval.
  */
 function rejectionRevision(projectDir: string, unit: string | null, intentId: string): { feedback?: string } | null {
   // Read from the audit trail, not the active directive: `next` routes before
@@ -740,6 +748,10 @@ function rejectionRevision(projectDir: string, unit: string | null, intentId: st
   }
   const floor = /^GATE_REJECTED:(.+)#\d+$/.exec(runFloor);
   if (floor === null) return null;
+  const rejection = rejectionAtRunFloor(
+    readAuditShardEvents(projectDir), STAGE, unit ?? undefined, runFloor,
+  );
+  if (rejection !== undefined && auditBlockField(rejection.block, "Reopen") === "jump") return null;
   const dir = codeGenerationRecordDir(projectDir, unit);
   const plan = readText(join(dir, PLAN_FILE));
   const instructions = readText(join(dir, INSTRUCTIONS_FILE));
@@ -750,9 +762,6 @@ function rejectionRevision(projectDir: string, unit: string | null, intentId: st
   const approvedBefore = stalePlanApprovalReceiptsForTarget(projectDir, intentId, targetId, runFloor).some((receipt) => receipt.fingerprint ===
     approvalFingerprint(plan, instructions, read.contract.contract_sha256, receipt));
   if (!approvedBefore) return null;
-  const rejection = readAuditShardEvents(projectDir).find((row) =>
-    row.event === "GATE_REJECTED" && row.timestamp === floor[1] &&
-    [null, unit].includes(auditBlockField(row.block, "Unit")));
   const feedback = rejection
     ? (auditBlockField(rejection.block, "Feedback") ?? auditBlockField(rejection.block, "Reason"))?.trim()
     : undefined;
@@ -1619,6 +1628,11 @@ export interface PlanApprovalAnswer {
   feedback?: string;
   /** The person's reply was the option itself, so their words say nothing about what to change. */
   exactPick?: true;
+  /**
+   * Request Changes only: this chat's message the question opened for, proved by the answer command as
+   * this chat's own and unspent. Its words answer the question while no reply came after it.
+   */
+  opening?: { words: string; at: string };
 }
 
 const ANSWER_LABELS: Record<PlanApprovalAnswerChoice, string> = {
@@ -1881,7 +1895,19 @@ export function recordPlanApprovalAnswer(
       throw new Error("No Plan Approval question is open. Run next.");
     }
     const { record } = open;
-    const replies = record.replies ?? [];
+    // The message the question opened for already asked for a change ("go
+    // back to code generation: also accept -S"): with nothing answered on the
+    // question, no reply since it was shown, and no plan question answered
+    // since the message, it is the person's Request Changes for this question
+    // alone. An approval needs a reply after the question.
+    const asked = answer.choice === "request-changes" ? answer.opening : undefined;
+    const opening = asked && record.mode === "ask" && !record.replies?.length && !record.results?.length &&
+        record.repliesFrom && !personRepliedAfter(projectDir, record.repliesFrom) &&
+        !readAuditShardEvents(projectDir).some((row) => row.event === "QUESTION_ANSWERED" &&
+          auditBlockField(row.block, "Checkpoint") === "plan-approval" && row.timestamp >= asked.at)
+      ? { session: session || "unidentified-session", text: asked.words.slice(0, ASK_REPLY_MAX_CHARS) }
+      : null;
+    const replies = opening === null ? record.replies ?? [] : [opening];
     const answeredBefore = record.mode === "ask" &&
       record.targets.every((target) => record.results?.some((result) => result.unit === target.unit));
     // Replies kept after every plan was answered are for a correction.
@@ -1945,12 +1971,12 @@ export function recordPlanApprovalAnswer(
     }
     // Words kept since the question can be a question or a command to AIDLC
     // ("skip plan approval?"), which answers nothing: a choice needs a reply.
-    if (record.repliesFrom && !personRepliedAfter(projectDir, record.repliesFrom)) {
+    if (opening === null && record.repliesFrom && !personRepliedAfter(projectDir, record.repliesFrom)) {
       throw new Error(
         "The person has not answered the plan question since it was shown: their message since then was a " +
           "question or a command to AIDLC, not an answer. Answer them and end the turn. If they want plan approval " +
-          `off for this work, run \`${aidlcDispatcherInvocation("config set guard.plan-approval off")}\` and say ` +
-          "so in one line. Then record the choice they make.",
+          `off for this work, run \`${aidlcDispatcherInvocation("config set guard.plan-approval off")} --person-words ` +
+          `'${PERSON_WORDS_SLOT}'\`${PERSON_WORDS_FILL}, and say so in one line. Then record the choice they make.`,
       );
     }
     // A reply that is exactly Request Changes is the person's pick for these

@@ -1,8 +1,7 @@
 // SubagentStop hook: Emit SUBAGENT_COMPLETED when a subagent finishes.
-// Replaces the previous free-form `## Subagent Completed` markdown write with
-// a canonical audit event.
 //
-// Receives JSON on stdin with subagent info. No-op unless a workflow is running.
+// Receives JSON on stdin with subagent info. Audits only while a workflow is
+// running.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { appendAuditEntry } from "../tools/aidlc-audit.ts";
@@ -16,6 +15,7 @@ import {
   writeHookStatusFile,
   isClaudeCodeHookInput,
   isoTimestamp,
+  isScopedReviewCopy,
   openReviewRequests,
   readAuditShardEvents,
   recordDir,
@@ -25,6 +25,7 @@ import {
   resolveWorkflowSelection,
   REVIEW_FILE_DIGEST_FIELD,
   reviewFileDigestOnDisk,
+  scopedReviewCopyName,
   stateFilePathForSelection,
   validSessionId,
 } from "../tools/aidlc-lib.ts";
@@ -79,7 +80,6 @@ export async function run(input: string): Promise<number> {
   const intent = selection.intent ?? undefined;
   const space = intent ? selection.space : undefined;
 
-  // Write health heartbeat
   const healthDir = hooksHealthDir(projectDir, intent, space);
   writeHookStatusFile(healthDir, "log-subagent.last", isoTimestamp());
 
@@ -93,28 +93,55 @@ export async function run(input: string): Promise<number> {
     );
   }
 
-  const agentType =
+  let agentType =
     typeof parsed.agent_type === "string" && parsed.agent_type.trim()
       ? parsed.agent_type
       : "unknown";
   const agentId: string = parsed.agent_id ?? "";
   const agentMessage: string = (parsed.last_assistant_message ?? "").slice(0, 200);
+  // A reviewer copy (Kiro, aidlc-kiro-review-copy.ts) is its request's
+  // reviewer under another name: the row names the reviewer, so the review's
+  // evidence is found as the reviewer's, and keeps the copy's name beside it.
+  // Only a copy whose request is still open is read this way.
+  let dispatchAgent: string | null = null;
+  let openRequests: ReturnType<typeof openReviewRequests> | null = null;
+  if (isScopedReviewCopy(agentType)) {
+    try {
+      openRequests = openReviewRequests(readAuditShardEvents(projectDir, intent, space));
+      const request = openRequests.find((open) => scopedReviewCopyName(open.requestId) === agentType);
+      if (request) {
+        dispatchAgent = agentType;
+        agentType = request.reviewer;
+      } else {
+        recordHookDrop(
+          projectDir,
+          "log-subagent",
+          `${agentType} finished with no open review request of its own; recorded under its own name`,
+          intent,
+          space,
+        );
+      }
+    } catch (e) {
+      recordHookDrop(projectDir, "log-subagent", `reviewer copy not resolved: ${errorMessage(e)}`, intent, space);
+    }
+  }
 
   const fields: Record<string, string> = {
     "Agent Type": agentType,
   };
+  if (dispatchAgent !== null) fields["Dispatch Agent"] = dispatchAgent;
   if (agentId) fields["Agent ID"] = agentId;
   if (agentMessage) fields.Message = agentMessage;
   // What a reviewer left in the review file of every request still open for
   // it, at the moment it finished. The review is the reviewer's: the verdict
-  // compares the bytes it records with this digest and refuses a file that
-  // changed since (aidlc-log.ts review --verdict), and the review-freeze hook
-  // refuses the write that would change it. Evidence only: a ledger or record
-  // that cannot be read leaves the row as it was.
+  // compares the bytes it records with this digest and marks a file that
+  // changed since (aidlc-log.ts review --verdict) as edited after the reviewer.
+  // Evidence only: a ledger or record that cannot be read leaves the row as
+  // it was.
   try {
     const record = recordDir(projectDir, intent, space);
     if (record !== null) {
-      const digests = openReviewRequests(readAuditShardEvents(projectDir, intent, space))
+      const digests = (openRequests ?? openReviewRequests(readAuditShardEvents(projectDir, intent, space)))
         .filter((request) => request.reviewer === agentType)
         .map((request) => ({
           reviewFile: request.reviewFile,

@@ -69,7 +69,7 @@ outputs: application code + code-generation-plan.md, code-generation-questions.m
 - Brownfield: modify files in-place. NEVER create duplicates like ClassName_modified.java
 - Add data-testid attributes to interactive UI elements for test automation
 - Work in this order: plan (Step 2), Step 3 (the person's Plan Approval; with plan approval off, only its one-line notice), generation (Step 4), the Step 5 files, then the review (when `directive.protocol_modules` lists `reviewer`) and the completion handoff (Step 6). The review checks the finished work: never dispatch the reviewer before the Step 5 files exist. When the directive already carries `plan_approval.status: "approved"` (a resumed or continued build), the plan and test instructions on disk are the approved ones: skip Steps 2 and 3 and build them as they are. Never rewrite an approved plan or its test instructions; change them only when the person asks
-- For a Unit (`directive.unit` present), write `source-manifest.json` in Step 5, before the review, listing every application-source path this unit created, modified, or deleted, including shell-, scaffolding-, and generator-written files. Zero-Unit work writes no `source-manifest.json`
+- For a Unit (`directive.unit` present), write `source-manifest.json` in Step 5, before the review, listing every application-source path this unit created, modified, or deleted in this stage, including shell-, scaffolding-, and generator-written files; a unit reopened by a rejection keeps the paths its earlier attempts listed. Zero-Unit work writes no `source-manifest.json`
 - Measurable quality targets from NFR Requirements, NFR Design, and the Testing
   Contract coverage floor are inputs, not suggestions. NEVER relax, lower, or
   disable a defined target, including threshold settings in test or build
@@ -300,12 +300,12 @@ After approval:
 or the machine switch `AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1` can turn the plan
 stop off for this piece of work; the engine then routes straight to the build
 with the notice above. When the person asks for it, in their own words or with
-`/aidlc --plan-approval off`, run `{{INVOKE}} engine config set guard.plan-approval off`
+`/aidlc --plan-approval off`, run `{{INVOKE}} engine config set guard.plan-approval off --person-words '<their words>'`
 and say in one line that it is off. When they only ask about it ("skip plan
 approval?"), answer in one line, offer to turn it off for this piece of work, and
 show the plan question again; their yes is the ask. Never suggest turning it off
 otherwise.
-Turning it back on (`config set plan-approval on`) is fine whenever they ask.
+Turning it back on (`config set plan-approval on --person-words '<their words>'`) is fine whenever they ask.
 - A new stage attempt (a jump, a rejected gate, a workflow restart) needs its own
   approval: `next` asks again, or, while plan approval is off, builds the plan
   for that attempt with the same one-line notice. After a rejected gate, while the plan is still
@@ -402,7 +402,7 @@ Include in the delegation prompt:
   different, or stale hash. Do not write either marker yourself and do not repeat either marker
   for contextual dependencies.
 - Design artifacts for the CURRENT UNIT ONLY (not all units)
-- A 1-2 line summary of each inception-phase artifact with its file path (requirements summary, stories summary, app design summary) — the subagent can Read specific files if it needs full content
+- A 1-2 line summary of each inception-phase artifact with its file path (requirements summary, stories summary, domain design summary) — the subagent can Read specific files if it needs full content
 - The current plan and unit-test-instructions.md are already in that output:
   the plan with a terminal `## Review` appendix removed (when a review recorded under the
   earlier protocol left one), task markers reset to `[ ]`, and spacing
@@ -476,12 +476,25 @@ with this strict schema:
 
 List every application-source path this unit created, modified, or deleted,
 including files written by shell commands, scaffolding, or generators. Use a
-trailing `/` directory claim for generated trees. In the main workspace,
+trailing `/` directory claim for generated trees. The engine measures changed
+source from where this attempt's source baseline was taken. A rejection at the
+gate (Request Changes) keeps that baseline, so when the unit is reopened that
+way, keep every path an earlier attempt listed and add the paths this attempt
+writes; a manifest that lists only the corrective change leaves the unit's
+earlier files outside every unit. A jump back into the stage, such as a Build
+and Test loop-back, takes a new baseline, so list what the unit changes from
+there. In the main workspace,
 multi-repo entries name their recorded `repo`; inside the worktree hosting the Bolt, paths are
 relative to its single selected repo and MUST omit `repo`. The engine refuses
 to record the unit review without this manifest. Under Guard Policy strict,
 unclaimed changed paths block stage completion; under relaxed or off they are
 kept, and the person is told once which files changed outside the units.
+
+When you keep the code in a checkout the review does not otherwise see (a
+worktree in the harness folder, or one outside the project), record it before
+the review with `{{INVOKE}} engine intent add-checkout <its path>`; a Unit names
+a checkout outside the project in its manifest by the name that command prints
+(`<label>@checkout/<path>`).
 
 A zero-Unit directive (`directive.unit` absent) writes no
 `source-manifest.json` and creates no Unit directory for one: the engine reads
@@ -493,7 +506,9 @@ source instead. Its Step 5 files are
 Create
 `<code-generation-record>/traceability.json`.
 Enumerate every assigned AC, detailed `NFRx.y`, and `BRx.y` (or direct `FR` /
-`NFR` IDs when incremental scope skipped the design chain). Every `OK` target
+`NFR` IDs when incremental scope skipped the design chain); a requirement with
+sub-requirements is traced through its `FR{n}.{m}` IDs and needs no row of its
+own. Every `OK` target
 must be one existing workspace-relative implementation or test file. When the
 person asks to leave planned work out of this build (for example "skip the
 remaining stories"), do it: list each item they left out as `Deferred` (not

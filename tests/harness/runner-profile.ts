@@ -238,9 +238,9 @@ export function parseRunnerArgs(
   if (!levelSelected) {
     out.runSmoke = out.runUnit = out.runIntegration = true;
   }
-  if (out.shard && (!out.runUnit || out.runSmoke || out.runIntegration || out.runE2e)) {
+  if (out.shard && (out.runSmoke || out.runE2e || out.runUnit === out.runIntegration)) {
     throw new RunnerArgsError(
-      "ERROR: --shard requires --unit with no other level or profile flags",
+      "ERROR: --shard requires --unit or --integration with no other level or profile flags",
     );
   }
   if (out.isolatedFiles && (out.runSmoke || out.runUnit || (!out.runIntegration && !out.runE2e))) {
@@ -284,7 +284,6 @@ export function runnerFailureExitCode(failedFiles: number): number {
     : 1;
 }
 
-// The fixture profile preserves the runner's historical synthetic-fixture defaults.
 const FIXTURE_GUARD_ENV = {
   AIDLC_SKIP_ARTIFACT_GUARD: "1",
   AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1",

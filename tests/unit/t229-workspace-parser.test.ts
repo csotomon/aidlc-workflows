@@ -270,6 +270,30 @@ describe("parseWorkspaceCommand", () => {
     });
   });
 
+  test("intent add-checkout / remove-checkout take a path and forward verbatim", () => {
+    expect(parseWorkspaceCommand(["intent", "add-checkout", ".claude/worktrees/app"])).toEqual({
+      kind: "add-checkout",
+      noun: "intent",
+      name: ".claude/worktrees/app",
+      rest: [],
+    });
+    expect(
+      workspaceCommandUtilityArgv({ kind: "add-checkout", noun: "intent", name: "../app feature", rest: [] }),
+    ).toEqual(["intent", "add-checkout", "../app feature"]);
+    expect(parseWorkspaceCommand(["intent", "remove-checkout", "../app"])).toEqual({
+      kind: "remove-checkout",
+      noun: "intent",
+      name: "../app",
+      rest: [],
+    });
+    expect(parseWorkspaceCommand(["intent", "add-checkout"])).toMatchObject({
+      kind: "error",
+      code: "missing-name",
+      verb: "add-checkout",
+      message: "Usage: aidlc intent add-checkout <path>",
+    });
+  });
+
   test("intent archive / unarchive parse as lifecycle commands that forward verbatim (issue #980)", () => {
     expect(parseWorkspaceCommand(["intent", "archive", "260903-old-spike"])).toEqual({
       kind: "archive",
@@ -277,7 +301,6 @@ describe("parseWorkspaceCommand", () => {
       name: "260903-old-spike",
       rest: [],
     });
-    // Trailing flags ride along untouched, so `--reason` reaches the utility.
     const withReason = parseWorkspaceCommand([
       "intent", "archive", "260903-old-spike", "--reason", "superseded by the v2 design",
     ]);
@@ -351,7 +374,6 @@ describe("parseWorkspaceCommand", () => {
     expect(workspaceCommandUtilityArgv(parseWorkspaceCommand(["intent", "list", "--json", "--all"]))).toEqual([
       "intent", "--json", "--all",
     ]);
-    // The two-field shape every existing consumer matches is untouched.
     expect(parseWorkspaceCommand(["intent", "list"])).toEqual({ kind: "list", noun: "intent", json: false });
     expect(parseWorkspaceCommand(["intent", "--json"])).toEqual({ kind: "list", noun: "intent", json: true });
     expect(parseWorkspaceCommand(["space", "list", "--all"])).toEqual({ kind: "list", noun: "space", json: false });
@@ -375,6 +397,8 @@ describe("parseWorkspaceCommand", () => {
       "unarchive",
       "add-repo",
       "remove-repo",
+      "add-checkout",
+      "remove-checkout",
     ]);
     for (const name of RESERVED_RECORD_NAME_LIST) {
       expect(RESERVED_RECORD_NAMES.has(name)).toBe(true);
@@ -564,7 +588,8 @@ describe("utility handlers and reservation chokepoints", () => {
   // the engine hands the agent the noun's verbs, the records there and the words
   // whole, to read what the person meant (a mistyped verb or name, or something
   // the noun cannot do) and run that command, or ask them once.
-  const INTENT_VERB_LIST = "list, switch <name>, create, archive <name>, unarchive <name>, add-repo <name>, remove-repo <name>";
+  const INTENT_VERB_LIST =
+    "list, switch <name>, create, archive <name>, unarchive <name>, add-repo <name>, remove-repo <name>, add-checkout <path>, remove-checkout <path>";
   const SPACE_VERB_LIST = "list, switch <name>, create <name>";
   function activeIntentCursor(projectDir: string): string {
     const path = join(projectDir, "aidlc", "spaces", "default", "intents", "active-intent");
@@ -610,7 +635,6 @@ describe("utility handlers and reservation chokepoints", () => {
       }
       expect(classifyTerminalCommand(["intent", "auth"], projectDir)).toEqual({ subcommand: "intent", arg: "auth", source: "workspace-verb" });
       expect(classifyTerminalCommand(["intent", "switch", "auth"], projectDir)).toEqual({ subcommand: "intent", args: ["switch", "auth"], source: "workspace-verb" });
-      // Nothing was selected by any of it.
       expect(activeIntentCursor(projectDir)).toBe(cursor);
     } finally {
       cleanup(projectDir);
@@ -628,7 +652,6 @@ describe("utility handlers and reservation chokepoints", () => {
         ({ uuid: `00000000-0000-7000-8000-${String(i + 1).padStart(12, "0")}`, slug, dirName: `2607${String(i + 1).padStart(2, "0")}-${slug}`, status: "in-flight" })), null, 2)}\n`, "utf-8");
       const d = directive(projectDir, ["intent", "wrok-23"]);
       expectUnknownWordStep(d, "intent", "intent wrok-23");
-      // Newest first, twenty of them, the rest counted.
       expect(d.message).toContain(`The intents here are: ${[...slugs].reverse().slice(0, 20).join(", ")} (and 3 more; `);
       expect(d.message).toContain("intent list --all` shows them all).");
       expect(d.message).not.toContain("work-01,");
@@ -662,7 +685,6 @@ describe("utility handlers and reservation chokepoints", () => {
       const d = directive(projectDir, ["space", "show"]);
       expect(d.kind, JSON.stringify(d)).toBe("print");
       expect(d.message).toContain("aidlc.ts engine space show");
-      // With no records at all, the step says so instead of listing.
       const empty = scratchProject();
       try {
         expect(directive(empty, ["intent", "show"]).message).toContain("No intent exists here yet.");
@@ -706,7 +728,6 @@ describe("utility handlers and reservation chokepoints", () => {
       expect(classifyTerminalCommand(["intent", "auth"], projectDir)).toEqual({ subcommand: "intent", arg: "auth", source: "workspace-verb" });
       expect(classifyTerminalCommand(["intent", "auth", "fix", "it"], projectDir)).toBeNull();
       expect(classifyTerminalCommand(["intent", "ghost"], projectDir)).toBeNull();
-      // A shared slug is named as such, with the record dirs to switch by.
       const shared = directive(projectDir, ["intent", "auth"]).message;
       expect(shared).toContain("`intent auth` names 2 intents: 260711-auth, 260712-auth, so nothing ran and nothing changed.");
       expect(shared).toContain("engine intent switch <record dir>` for the one the person meant");
@@ -718,7 +739,6 @@ describe("utility handlers and reservation chokepoints", () => {
       expect(sharedWithWords).toContain('The person typed: "intent auth fix it". After the switch, act on the rest of what they typed for the record they picked, or ask them once in plain words if you cannot tell what they meant.');
       // A row with no record dir is no record: the ordinary unknown-word step.
       expect(directive(projectDir, ["intent", "ghost"]).message).toContain('no intent is named "ghost"');
-      // The names list says each slug once; the full record dir still selects.
       expect(directive(projectDir, ["intent", "auht"]).message).toContain("The intents here are: ghost, auth.");
       const byDir = directive(projectDir, ["intent", "260712-auth"]);
       expect(byDir.message).toContain("aidlc.ts engine intent 260712-auth`");
@@ -746,7 +766,6 @@ describe("utility handlers and reservation chokepoints", () => {
         { uuid: "00000000-0000-7000-8000-000000000021", slug: "auth", dirName: "260711-auth", status: "in-flight" },
         { uuid: "00000000-0000-7000-8000-000000000022", slug: "auth-fix", dirName: "260712-auth-fix", status: "in-flight" },
       ], null, 2)}\n`, "utf-8");
-      // The slug, and the record dir, alone: the switch step, never the routing question.
       for (const name of ["auth", "260711-auth"]) {
         const d = directive(projectDir, [name]);
         expect(d.kind, name).toBe("print");
@@ -758,7 +777,6 @@ describe("utility handlers and reservation chokepoints", () => {
       for (const word of ["auht", "bugfix"]) {
         expect(runNext(projectDir, [word]).stdout, word).not.toContain("engine intent");
       }
-      // The seam leaves a bare name to the engine, as before.
       expect(classifyTerminalCommand(["auth"], projectDir)).toBeNull();
       // The switch says the way back when the chat was on another record; a self-switch does not.
       const sw = runDispatcher(REPO_ROOT, ["engine", "intent", "auth", "--project-dir", projectDir]);
@@ -799,7 +817,7 @@ describe("utility handlers and reservation chokepoints", () => {
   });
 
   // `/aidlc intent show` selects the record named show, as any other name does;
-  // the words rename, show and birth are no longer held back for verbs to come.
+  // the words rename, show and birth are not held back for verbs to come.
   test("engine and dispatcher switch to a record named show without the switch verb", () => {
     const projectDir = scratchProject();
     try {
@@ -822,7 +840,6 @@ describe("utility handlers and reservation chokepoints", () => {
       const extra = runDispatcher(REPO_ROOT, ["engine", "intent", "show", "extra", "--project-dir", projectDir]);
       expect(extra.status).not.toBe(0);
       expect(`${extra.stdout}${extra.stderr}`).toContain("Usage: aidlc intent switch <name>");
-      // Creation is unchanged: a record may be named show.
       const made = scratchProject();
       try {
         expect(() => createIntent(made, "show", "default", "feature")).not.toThrow();

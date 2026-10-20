@@ -157,7 +157,11 @@ decide, and the way back, in plain words and in their tool's own terms. How the
 engine got there (its steps and fields, hooks, receipts, protocol labels,
 internal tags) stays off the screen unless they ask, or run a check or report
 on purpose (doctor, status, the audit record), where they get the whole
-picture. A command or path they need in order to act (an undo, a file to edit)
+picture. A line has to change what the person does or judges: a change in
+AI-DLC itself (an update, a stage it now does differently) reaches them only
+when it changes what their work needs, and otherwise stays in the record that
+status, doctor and the audit show on purpose.
+A command or path they need in order to act (an undo, a file to edit)
 is their work and is said; the agent's account of their code (files read, tests
 run, what it found) is their work too. A frame the host tool draws itself
 (Claude Code's "Stop hook error") is the host's; the words inside it are
@@ -232,7 +236,7 @@ trees. The core uses the same building blocks in every harness:
 - **Sensors** (`sensors/`): Deterministic verification manifests (advisory): `aidlc-claim-sources.md`, `aidlc-required-sections.md`, `aidlc-upstream-coverage.md`, `aidlc-traceability.md`, `aidlc-linter.md`, `aidlc-type-check.md`
 - **Knowledge** (`knowledge/`): Methodology reference. Per-agent under `aidlc-<agent>-agent/`; cross-agent material in `aidlc-shared/`
 - **Tools** (`tools/`): TypeScript CLI tools, all prefixed `aidlc-*.ts` and run via bun
-- **Hooks** (`hooks/`): 17 framework hooks, all prefixed `aidlc-*.ts`, covering audit emission, sensor dispatch, stage-graph rebuild, session lifecycle, state validation, subagent tracking, statusline rendering, human-turn recording, exact stage-rule delivery, forwarding-loop enforcement, reviewer read-scope enforcement, review-receipt write-freeze enforcement, code-generation plan-approval enforcement, direct state-transition enforcement, and token-usage folding (the Claude-only usage-ledger producer)
+- **Hooks** (`hooks/`): 17 framework hooks, all prefixed `aidlc-*.ts`, covering audit emission, sensor dispatch, stage-graph rebuild, session lifecycle, state validation, subagent tracking, statusline rendering, human-turn recording, exact stage-rule delivery, forwarding-loop enforcement, reviewer read-scope enforcement, review-receipt write-freeze enforcement, code-generation plan-approval enforcement, runtime-record protection and helper lifecycle enforcement, and token-usage folding (the Claude-only usage-ledger producer)
 
 ## Working on This Project
 
@@ -242,6 +246,16 @@ trees. The core uses the same building blocks in every harness:
 - User-facing onboarding uses two skeletons: `core/templates/onboarding.md` is marker-free neutral guidance; `core/templates/onboarding-harness.md` carries each harness's `onboarding.fills.ts`. Edit the neutral template for shared project guidance and the harness skeleton/fills for native setup. Kiro, Kiro IDE, Codex, Cursor, and opencode share byte-identical root `AGENTS.md` content and ship native onboarding inside their harness directories; Claude concatenates both parts in `.claude/CLAUDE.md`, and Copilot in its exclusive root `AGENTS.md`.
 - "harness" has three senses in this repo: `harness/` (top-level, the per-CLI distribution surfaces of this effort), `docs/harness-engineering/` (the Harness Engineer Guide), and `tests/harness/` (test-suite helper library), which are unrelated.
 - See `docs/guide/` (User Guide), `docs/harness-engineering/` (Harness Engineer Guide), and `docs/reference/` (Developer Reference) for full documentation
+
+## Comments
+
+Agents read this code more than people do, and they can read the code itself. A comment earns its place when it says what the code cannot.
+
+- **Keep:** why the code is this way, the path that was tried and rejected, a constraint that lives somewhere else, a platform quirk, who owns a rule, a test file's header saying what it checks, and a short label that maps a long block.
+- **Cut:** a comment that restates the next lines; history git already keeps (where code was ported from, review rounds, "used to", "now", dates), unless the history is the reason; commented-out code; a TODO with no owner; an empty banner.
+- **Point by name, never by line.** Name the function, test, section or file you mean; a line number goes wrong as soon as someone edits above it. `tests/unit/t-comment-pointer-lint.test.ts` fails on a pointer such as `aidlc-lib.ts:4144`, `lib:357-361` or `(:869)` in any comment under `core/`, `harness/`, `scripts/`, `plugins/` and `tests/`.
+- **A wrong comment is worse than none.** When you change code, fix or cut the comment that describes it.
+- **Leave machine-read comments as they are:** `covers:` headers and the claim tokens on their lines, `@ts-expect-error`, `biome-ignore`, and markers a tool reads, such as `/* @aidlc-shipped-entrypoints@ */`. Some tools read plain words too: the merge queue's macOS run picks the unit test files whose source names macOS or darwin (`scripts/ci-macos-unit-selection.ts`), so keep that word in a test that needs the macOS run.
 
 ## Test Suite
 
@@ -257,14 +271,14 @@ IMPORTANT: When adding, removing, or renaming files, directories, commands, or f
 
 ## Release Metadata Policy
 
-IMPORTANT: Feature, fix, documentation, refactor, and test PRs do NOT bump `core/tools/aidlc-version.ts`, change the README version badge, or add a release entry to `CHANGELOG.md`. Those coordinated updates belong to the release-preparation PR, which summarizes the user-visible changes merged since the previous release. Every PR must preserve existing changelog entries.
+IMPORTANT: Feature, fix, documentation, refactor, and test PRs do NOT bump `core/tools/aidlc-version.ts`, change the README version badge, or add a release entry to `CHANGELOG.md`. Those coordinated updates belong to preview promotion and its metadata synchronization PR, which summarize the user-visible changes in the selected preview since the previous stable release. Every PR must preserve existing changelog entries.
 
-The release-preparation PR updates `core/tools/aidlc-version.ts` (the authored source; the per-harness `dist/<harness>/.../tools/aidlc-version.ts` copies are regenerated by `bun scripts/package.ts`), the README badge, and a matching `## [X.Y.Z] - YYYY-MM-DD` heading in `CHANGELOG.md` in the same commit. The pin in `tests/unit/t68-version-changelog-sync.test.ts` enforces that these three release surfaces agree and that changelog headings remain unique.
+Preview promotion updates `core/tools/aidlc-version.ts` (the authored source; the per-harness `dist/<harness>/.../tools/aidlc-version.ts` copies are regenerated by `bun scripts/package.ts`), the README badge, and a matching `## [X.Y.Z] - YYYY-MM-DD` heading in `CHANGELOG.md` in one commit on the selected preview source; a metadata-only PR records the same release on current `main`. The pin in `tests/unit/t68-version-changelog-sync.test.ts` enforces that these three release surfaces agree and that changelog headings remain unique.
 
-Each release entry follows the shape: `## [N.N.N] - YYYY-MM-DD` heading, a `Compatibility:` line, one-paragraph summary that includes any upgrade instruction, then a flat bullet list focused on what users actually invoke (commands, flags, errors they see, breaking changes for CI/scripts).
+Each release entry follows the shape: `## [N.N.N] - YYYY-MM-DD` heading, a `Compatibility:` line, a one-paragraph summary, for `breaking for scripts` one plain paragraph saying who is affected, one paragraph per extra upgrade step starting with its bold label (`**Plugins:** ...`; `refresh plus a step` has at least one), then the bullets under `### <group>` headings, focused on what users actually invoke (commands, flags, errors they see). A `breaking for scripts` entry ends with a `### Script compatibility` group that holds exactly its `Breaking for scripts:` bullets. The entry does not repeat what the stable page says itself (the `aidlc update` and `aidlc config` commands, fresh install, the copy channel): `scripts/release-promotion.ts` owns those words. The page renders every line of the entry where its author put it. The one shape it refuses, before any version is reserved, is a `Breaking for scripts:` bullet outside `### Script compatibility` or a plain bullet inside it; `release-promotion.ts page` shows the page before the promotion. The shape applies to entries after 2.11.1; `t68` accepts its `###` groups and never requires them, and every entry up to and including 2.11.1 stays as it shipped.
 
 The `Compatibility:` line sits right under the heading and tells a team running many projects what the upgrade asks of each one, in one of three fixed values: `Compatibility: refresh only` (run `aidlc update`, then `aidlc config` in each project; nothing else), `Compatibility: refresh plus a step` (the same, plus one named step the entry says), or `Compatibility: breaking for scripts` (something a script or CI relies on changed; the entry's `Breaking for scripts:` bullets say what). `t68` checks every entry newer than 2.11.0: the line is there with one of the three values, and an entry with a bullet starting `Breaking for scripts:` says `breaking for scripts`. Entries up to and including 2.11.0 stay as they shipped.
 
-That entry is the body of the stable GitHub Release: the release job writes it to a file and passes it with `--notes-file`, so what the entry says is what people read on the release page. GitHub's generated notes are not used, because their list names every contributing account by handle.
+The release renders the whole stable GitHub Release page from the promotion record, in the shape of the 2.11.1 page: Summary, Upgrade, Fresh install, Highlights (the entry's groups, the `Breaking for scripts:` prefix dropped under Script compatibility), Contributors and New Contributors when the promotion carries a contributor list, the selected preview/source reference, which links the preview's page, and the Full Changelog link from the previous stable release; nobody edits a published page. The contributor list is made on the maintainer's machine by `release-promotion.ts contributors`, which runs the local private-names scan and prints nothing without it; a promotion without that list publishes a page with no contributor sections. Any recorded preview validation warnings and the failure report stay on that preview page, never on the stable page; the promotion record (`.github/release-promotion.json`) keeps the warning lines, and the promotion run's summary shows them to the person promoting. The release job passes the page with `--notes-file`. GitHub's generated notes are not used, because their list names every contributing account by handle, with no private-names scan.
 
-If concurrent release-preparation branches choose the same version, the later one must rebase and select the next intended release version before merging. CHANGELOG version link references were removed in v0.6.9 because a distributed file should not embed a repository host; `t68` guards that none reappear.
+Concurrent promotions cannot overwrite a reserved version tag. A retry must select the same preview, notes and contributor list; another release decision uses a new version. CHANGELOG version link references were removed in v0.6.9 because a distributed file should not embed a repository host; `t68` guards that none reappear.

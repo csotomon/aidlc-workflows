@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import { aidlcToolInvocation } from "./aidlc-runtime-paths.ts";
-import { APPROVAL_GATE_CHOICES, exactOptionPick } from "./aidlc-reply-reader.ts";
+import { APPROVAL_GATE_CHOICES, protectedQuestionPick } from "./aidlc-reply-reader.ts";
 import {
   activeIntentUuid,
   attemptEventDefinitelyBefore,
@@ -106,8 +106,6 @@ import {
 
 export type ConstructionCheckpointKind = "unit" | "skeleton";
 
-// The walking skeleton's first Unit stops at the skeleton checkpoint; every
-// other Unit, and every Unit without the skeleton, at its own Unit checkpoint.
 export function constructionCheckpointKind(
   stateContent: string,
   unit: string,
@@ -393,7 +391,6 @@ function proofFileAbsent(root: string, path: string): boolean {
   }
 }
 
-// What a committed verification row records of its proof.
 type CommittedCheckpointProof = Pick<ConstructionCheckpointProof, "id" | "kind" | "unit" | "fingerprint" |
   "command_sha256" | "verified" | "evidence_unchanged" | "exit_code" | "signal" | "error" | "finished_at">;
 
@@ -432,7 +429,6 @@ interface Snapshot {
   waivedStages: string[];
 }
 
-/** One stage's evidence as an approval of the Unit saw it. */
 interface ApprovedStageEvidence {
   artifact: string;
   source: string | null;
@@ -631,8 +627,6 @@ function notFinishedReviews(row: AuditShardEvent | null): Map<string, string> {
   return stages;
 }
 
-// The reviews of these stages as the person reads them: "Code Generation
-// review", or "Functional Design and Code Generation reviews".
 function reviewsNamed(slugs: readonly string[]): string {
   const names = slugs.map((slug) => findStageBySlug(slug)?.name ?? slug);
   const named = names.length < 2 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
@@ -733,7 +727,7 @@ function snapshot(
   const notFinishedBefore = notFinishedReviews(verification);
   const notFinished: string[] = [];
   // Stages whose review ended in the NOT-READY fallback no reviewer gave:
-  // ready as before, and asked about and approved as not finished.
+  // ready, and asked about and approved as not finished.
   const endedUnfinished: string[] = [];
   // Stages whose fresh review was edited after the reviewer finished, whose
   // fresh review records the verdict its dispatch dictated, and whose verdict
@@ -1502,13 +1496,13 @@ export function askConstructionCheckpoint(
     appendAuditEntryUnlocked("DECISION_RECORDED", {
       Checkpoint: "Construction Unit Approval", Unit: unit, Kind: kind,
       Stage: current.result.stages.at(-1)!, Fingerprint: current.result.fingerprint,
-      Session: session, Options: "Approve,Request Changes",
+      Session: session, Options: APPROVAL_GATE_CHOICES.join(","),
       // What the person is shown, so a change before their answer is said
       // once instead of asking again (relaxed and off).
       "Asked Evidence": current.approvedEvidence, "Run floors": JSON.stringify(current.result.run_floors),
     }, projectDir);
     const question = mintProtectedQuestion(projectDir, {
-      kind: "checkpoint-approval", session, target: approvalTarget(current),
+      kind: "checkpoint-approval", session, target: approvalTarget(current), choices: APPROVAL_GATE_CHOICES,
     });
     const leftOut = leftOutLine(current.result.stages
       .filter((slug) => findStageBySlug(slug)?.workspace_requires === true)
@@ -1522,11 +1516,11 @@ export function askConstructionCheckpoint(
     };
     if (earlier === null) return result;
     const words = earlier.join("\n").slice(-PROTECTED_RESPONSE_WORDS_MAX_CHARS);
-    const pick = exactOptionPick(earlier.at(-1), APPROVAL_GATE_CHOICES);
+    const pick = protectedQuestionPick(question, earlier.at(-1));
     markProtectedQuestionReplied(projectDir, question);
     writeProtectedResponse(projectDir, {
       version: 1, session, challengeId: question.challengeId,
-      ...(pick === 0 ? { choice: "Approve" as const } : pick === 1 ? { choice: "Request Changes" as const } : {}),
+      ...(pick === null ? {} : { choice: pick }),
       responseSha256: createHash("sha256").update(words, "utf-8").digest("hex"),
       words,
     });

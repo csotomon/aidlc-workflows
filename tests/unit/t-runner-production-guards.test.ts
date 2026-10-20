@@ -24,6 +24,7 @@ import {
   runnerFileTimeoutSeconds,
   testGuardEnvironment,
 } from "../harness/runner-profile.ts";
+import { MODEL_API_REASON, modelApiLine, personTurnLine } from "../lib/file-retry.ts";
 import { assertRunnerFixtureImports } from "../lib/runner-fixture-imports.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -57,9 +58,13 @@ function withProcessEnv(env: NodeJS.ProcessEnv, fn: () => void): void {
 
 describe("runner guard profile options", () => {
   test("production guard CI checkout does not persist credentials before uploading logs", () => {
-    const ci = readFileSync(join(REPO_ROOT, ".github", "workflows", "ci.yml"), "utf8");
-    const guardJob = ci.slice(ci.indexOf("  test_guards:"), ci.indexOf("  test:", ci.indexOf("  test_guards:")));
-    expect(guardJob).toMatch(/uses: actions\/checkout@[^\n]+\n\s+with:\n\s+persist-credentials: false/);
+    const ci = Bun.YAML.parse(readFileSync(join(REPO_ROOT, ".github", "workflows", "ci.yml"), "utf8")) as {
+      jobs: Record<string, { steps?: Array<{ run?: string; uses?: string; with?: Record<string, unknown> }> }>;
+    };
+    const guardJob = Object.values(ci.jobs).find((job) =>
+      job.steps?.some((step) => step.run?.includes("--production-guards")));
+    const checkout = guardJob?.steps?.find((step) => step.uses?.startsWith("actions/checkout@"));
+    expect(checkout?.with?.["persist-credentials"]).toBe(false);
   });
 
   test("fixture remains the default regardless of an inherited profile marker", () => {
@@ -418,6 +423,38 @@ describe("explicit runner coverage uses real JUnit execution evidence", () => {
     expect(existsSync(join(fixture.root, "executed.txt"))).toBe(false);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  test("filtered integration shards execute every selected file once and preserve failures", () => {
+    const fixture = runnerFixture({
+      "integration/t-guard-matrix-a.test.ts": PASSING_CASE,
+      "integration/t-guard-matrix-b.test.ts": PASSING_CASE,
+      "integration/t-guard-matrix-c.test.ts": 'import { test, expect } from "bun:test"; test("failure remains blocking", () => expect(1).toBe(2));',
+      "integration/t-guard-matrix-d.test.ts": PASSING_CASE,
+      "integration/t-unrelated.test.ts": 'throw new Error("unrelated file must not run");',
+      "integration-weights.json": JSON.stringify({
+        defaultSeconds: 1, weights: {
+          "t-guard-matrix-a": 8, "t-guard-matrix-b": 7,
+          "t-guard-matrix-c": 2, "t-guard-matrix-d": 1, "t-unrelated": 100,
+        },
+      }),
+    });
+    const runs = ["1/2", "2/2"].map((shard) => fixture.run([
+      "--integration", "--no-llm", "--shard", shard, "--filter", "^t-guard-matrix-",
+    ]));
+    expect(runs.map((run) => run.status)).toEqual([0, 1]);
+    expect(runs[0].summary).toContain("Executed test cases: 2");
+    expect(runs[1].summary).toContain("Executed test cases: 2");
+    for (const name of ["a", "b", "c", "d"]) {
+      expect(runs.filter((run) => run.out.includes(`=== DONE t-guard-matrix-${name}.test.ts`))).toHaveLength(1);
+    }
+    for (const run of runs) expect(run.out).not.toContain("t-unrelated");
+    const excluded = fixture.run([
+      "--integration", "--no-llm", "--shard", "2/2", "--filter", "^t-guard-matrix-", "--exclude", "^t-guard-matrix-c",
+    ]);
+    expect(excluded.status).toBe(0);
+    expect(excluded.summary).toContain("Executed test cases: 1");
+    expect(excluded.out).toContain("=== DONE t-guard-matrix-b.test.ts (PASS)");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("--exclude leaves a weighted file out of its unit shard and the rest of the shard runs", () => {
     const fixture = runnerFixture({
       "unit/t-weighted.test.ts": PASSING_CASE,
@@ -436,6 +473,7 @@ describe("explicit runner coverage uses real JUnit execution evidence", () => {
   test("a run with no --filter leaves the scope runs and the guard matrix out; a filter or --all selects them", () => {
     const fixture = runnerFixture({
       "integration/t-scope-run-fixture.test.ts": PASSING_CASE,
+      "integration/t-scope-host-fixture.test.ts": PASSING_CASE,
       "integration/t-guard-matrix-fixture.test.ts": PASSING_CASE,
       "integration/t-plain.test.ts": PASSING_CASE,
     });
@@ -443,11 +481,13 @@ describe("explicit runner coverage uses real JUnit execution evidence", () => {
     expect(plain.status).toBe(0);
     expect(plain.out).toContain("=== DONE t-plain.test.ts (PASS) ===");
     expect(plain.out).not.toContain("t-scope-run-fixture.test.ts");
+    expect(plain.out).not.toContain("t-scope-host-fixture.test.ts");
     expect(plain.out).not.toContain("t-guard-matrix-fixture.test.ts");
-    expect(plain.out).toContain("select them with --filter '^t-(scope-run|guard-matrix)-'");
-    const selected = fixture.run(["--integration", "--no-llm", "--filter", "^t-(scope-run|guard-matrix)-"]);
+    expect(plain.out).toContain("select them with --filter '^t-(scope-run|scope-host|guard-matrix)-'");
+    const selected = fixture.run(["--integration", "--no-llm", "--filter", "^t-(scope-run|scope-host|guard-matrix)-"]);
     expect(selected.status).toBe(0);
     expect(selected.out).toContain("=== DONE t-scope-run-fixture.test.ts (PASS) ===");
+    expect(selected.out).toContain("=== DONE t-scope-host-fixture.test.ts (PASS) ===");
     expect(selected.out).toContain("=== DONE t-guard-matrix-fixture.test.ts (PASS) ===");
     expect(selected.out).not.toContain("t-plain.test.ts");
     // The full acceptance profile keeps them.
@@ -734,6 +774,61 @@ describe("bounded file workers through the public runner", () => {
     }
   });
 
+  // The live families run this path (--isolated-files --file-retries 1). A pass
+  // on the retry used to turn a run that saw AI-DLC act for the person green.
+  test("a person-turn failure gets one attempt, stays red, and says so", () => {
+    const fixture = isolatedRunnerFixture({ "integration/t-person-turn.test.ts": RETRY_CASES.personTurnOnce });
+    const observer = join(fixture.root, "observer");
+    const result = fixture.run(["--integration", "--isolated-files", "--file-retries", "1", "-P", "1"], {
+      AIDLC_TUI_BACKEND: "bun", AIDLC_RETRY_OBSERVER: observer,
+    });
+    expect(result.status, result.out + result.failures).not.toBe(0);
+    expect(readFileSync(join(observer, "runs"), "utf8").trim().split("\n")).toEqual(["t-person-turn.test.ts"]);
+    expect(result.out).toContain(personTurnLine("tests/integration/t-person-turn.test.ts"));
+    expect(result.out).not.toContain("Flaky live test");
+    const report = JSON.parse(readFileSync(join(result.stamp, "e2e-results.json"), "utf8"));
+    expect(report.files[0]).toMatchObject({ state: "FAIL", personTurnFailure: true });
+    expect(report.files[0].attempts).toHaveLength(1);
+    expect(report.files[0].passedOnRetry).toBeUndefined();
+  });
+
+  // The model service failing under a drive is infrastructure: the file is
+  // still a failure and keeps its one retry; only what the run says changes.
+  test("a model service failure says so on every attempt, and keeps its retry", () => {
+    const fixture = isolatedRunnerFixture({
+      "integration/t-service-once.test.ts": RETRY_CASES.modelApiOnce,
+      "integration/t-service-down.test.ts": RETRY_CASES.modelApiAlways,
+    });
+    const observer = join(fixture.root, "observer");
+    const result = fixture.run(["--integration", "--isolated-files", "--file-retries", "1", "-P", "1"], {
+      AIDLC_TUI_BACKEND: "bun", AIDLC_RETRY_OBSERVER: observer,
+    });
+    expect(result.status, result.out + result.failures).not.toBe(0);
+    expect(readFileSync(join(observer, "runs"), "utf8").trim().split("\n").sort())
+      .toEqual(["t-service-down.test.ts", "t-service-down.test.ts", "t-service-once.test.ts", "t-service-once.test.ts"]);
+    expect(result.out).toContain(modelApiLine("tests/integration/t-service-once.test.ts"));
+    expect(result.out).toContain("Flaky live test::t-service-once.test.ts");
+    expect(result.failures).toContain(`FAIL: t-service-down (${MODEL_API_REASON})`);
+    const report = JSON.parse(readFileSync(join(result.stamp, "e2e-results.json"), "utf8"));
+    const record = (name: string) => report.files.find((file: { file: string }) => file.file.endsWith(name));
+    expect(record("t-service-once.test.ts")).toMatchObject({ state: "PASS", passedOnRetry: true, modelApiFailure: true });
+    expect(record("t-service-down.test.ts")).toMatchObject({ state: "FAIL", modelApiFailure: true });
+    expect(record("t-service-down.test.ts").attempts).toHaveLength(2);
+  });
+
+  // A real assertion beside a service failure is still a result about AI-DLC:
+  // the file keeps its ordinary reason, and the warning says the service failed under it.
+  test("a file with a real failure beside a model service failure keeps its ordinary reason", () => {
+    const fixture = isolatedRunnerFixture({ "integration/t-mixed.test.ts": RETRY_CASES.modelApiBesideAssertion });
+    const result = fixture.run(["--integration", "--isolated-files", "-P", "1"], {
+      AIDLC_TUI_BACKEND: "bun", AIDLC_RETRY_OBSERVER: join(fixture.root, "observer"),
+    });
+    expect(result.status, result.out + result.failures).not.toBe(0);
+    expect(result.out).toContain(modelApiLine("tests/integration/t-mixed.test.ts"));
+    expect(result.failures).toContain("FAIL: t-mixed (2 failed assertions)");
+    expect(result.failures).not.toContain(MODEL_API_REASON);
+  });
+
   test("cleanup uncertainty stops reuse and leaves the remaining file incomplete", () => {
     const fixture = isolatedRunnerFixture({
       "integration/t-a-dirty.test.ts": `import { test } from "bun:test";
@@ -818,6 +913,38 @@ test("fails on its first attempt only", () => {
 });`,
   steady: `${RETRY_PRELUDE}
 test("passes", () => expect(1).toBe(1));`,
+  // The drives' own error (tests/harness/person-turns.ts) by its name: bun's
+  // JUnit writes the name as the failure type, which is all the runner reads.
+  personTurnOnce: `${RETRY_PRELUDE}
+class PersonTurnError extends Error { override name = "PersonTurnError"; }
+test("records a decision the person never made, on its first attempt only", () => {
+  const marker = join(observer, name + ".failed-once");
+  if (!existsSync(marker)) {
+    writeFileSync(marker, "1");
+    throw new PersonTurnError("The SDK drive recorded 1 decision(s) as the person's that no turn from them backs");
+  }
+});`,
+  // The SDK drive's error for the model service's own failure, by its name.
+  modelApiOnce: `${RETRY_PRELUDE}
+class ModelApiError extends Error { override name = "ModelApiError"; }
+test("the model service fails on its first attempt only", () => {
+  const marker = join(observer, name + ".failed-once");
+  if (!existsSync(marker)) {
+    writeFileSync(marker, "1");
+    throw new ModelApiError("Claude Code returned an error result: API Error: Connection error.");
+  }
+});`,
+  modelApiBesideAssertion: `${RETRY_PRELUDE}
+class ModelApiError extends Error { override name = "ModelApiError"; }
+test("the model service fails", () => {
+  throw new ModelApiError("Claude Code returned an error result: API Error: 503 Service Unavailable");
+});
+test("a real assertion fails", () => expect("what AI-DLC did").toBe("what the person asked for"));`,
+  modelApiAlways: `${RETRY_PRELUDE}
+class ModelApiError extends Error { override name = "ModelApiError"; }
+test("the model service fails", () => {
+  throw new ModelApiError("Claude Code returned an error result: API Error: 503 Service Unavailable");
+});`,
   timesOutOnce: `${RETRY_PRELUDE}
 test("runs past its case timeout on its first attempt only", async () => {
   const marker = join(observer, name + ".timed-out-once");
@@ -938,6 +1065,17 @@ describe("merge-queue retry of ordinary tiers through the public runner", () => 
     expect(result.failures).toContain(`FAIL: ${name}`);
     const [retry] = JSON.parse(readFileSync(join(result.stamp, "retries.json"), "utf8")).retries;
     expect(retry).toMatchObject({ passedOnRetry: false, secondAttempt: { status: secondStatus } });
+  });
+
+  test("a person-turn failure is never retried, though its second attempt would pass", () => {
+    const { fixture, observer, runs } = retryFixture({ "integration/t-person-turn.test.ts": RETRY_CASES.personTurnOnce });
+    const result = fixture.run(["--integration", "--no-llm", "--file-retries", "1"], { AIDLC_RETRY_OBSERVER: observer });
+    expect(result.status, result.out + result.failures).toBe(1);
+    expect(runs()).toEqual(["t-person-turn"]);
+    expect(result.out).not.toContain("=== RETRY");
+    expect(result.out).toContain("=== NO RETRY t-person-turn.test.ts (it found AI-DLC acting for the person; a pass on a second attempt would hide that) ===");
+    expect(result.summary).toMatch(/^ {2}t-person-turn +FAIL /m);
+    expect(JSON.parse(readFileSync(join(result.stamp, "retries.json"), "utf8")).retries).toEqual([]);
   });
 
   test("a timeout, a crash and a file that executed no cases are never retried", () => {

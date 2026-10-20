@@ -237,7 +237,7 @@ describe("documentation parity derives current behavior from authored implementa
   });
 
   test("event count and user-guide taxonomy match VALID_EVENT_TYPES", () => {
-    expect(eventTypes.length).toBe(118);
+    expect(eventTypes.length).toBe(121);
 
     const guide = read("docs", "guide", "10-state-and-audit.md");
     const guideTaxonomy = sliceBetween(
@@ -345,11 +345,12 @@ describe("documentation parity derives current behavior from authored implementa
 
   test("Kiro IDE documentation names only IDE-native enforcement and configuration surfaces", () => {
     const skill = read("harness", "kiro-ide", "skills", "aidlc", "SKILL.md");
+    // The dispatch-record rule is per Unit, in the per-Unit review module.
     const reviewerProtocol = read(
       "core",
       "aidlc-common",
       "protocols",
-      "stage-protocol-reviewer.md",
+      "stage-protocol-reviewer-unit.md",
     );
     const questionRendering = read(
       "harness",

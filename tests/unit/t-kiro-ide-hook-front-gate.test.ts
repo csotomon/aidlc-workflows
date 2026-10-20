@@ -132,7 +132,7 @@ function shellHook(dir: string, target: string, env: Record<string, string> = {}
   const ran = join(dir, `hook-ran-${calls}`);
   const payload = JSON.stringify({
     session_id: "sess_front_gate",
-    hook_event_name: target === "enforce-approval-gate" || target === "guard-tool-call" ? "PreToolUse" : "PostToolUse",
+    hook_event_name: target === "guard-tool-call" ? "PreToolUse" : "PostToolUse",
     cwd: dir,
     tool_name: "execute_bash",
     tool_input: {},
@@ -190,13 +190,6 @@ describe("a shell command that changed nothing the hook reads skips the engine",
   test.each([...GATED])("%s with no AI-DLC work in the folder does not load the engine", (hook) => {
     const dir = project(false);
     expectSkipped(shellHook(dir, hook));
-  });
-
-  test("the guards always load the engine", () => {
-    const dir = project();
-    settled(dir, "rebuild-stage-graph");
-    settled(dir, "sync-workflow-state");
-    expect(shellHook(dir, "enforce-approval-gate").ran).toBe(true);
   });
 
   // Kiro IDE runs both as one after-shell card (#2022): it skips the engine

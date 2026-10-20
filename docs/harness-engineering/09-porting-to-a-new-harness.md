@@ -67,6 +67,13 @@ Create `harness/<name>/manifest.ts` exporting a `HarnessManifest`
 - `name` / `harnessDir` — the dir the token substitutes to (e.g. `.foo`).
 - `productName` / `configNextStep` — user-facing projection metadata consumed by
   lifecycle and `aidlc config`; keep host commands exact.
+- `choiceName` / `choiceNote` (optional) — what the harness menus of `aidlc
+  config` show instead of `productName`, and beside it: for a harness that
+  shares its product with another, such as Kiro CLI (V2) and Kiro. Plain ASCII
+  text only: an ASCII letter or digit first, then letters, digits, spaces and
+  `.,()+-`; a name of 1 to 15 characters and a note of 1 to 60. The packager
+  refuses a manifest whose text is not, and `aidlc config` does not offer such a
+  projection.
 - `firstRunSteps` / `editorTerminalApp` / `hookActivation` (optional) - only for
   a host whose first run needs steps the other harnesses do not. `firstRunSteps`
   replaces the two next-step lines that end `aidlc config`. `editorTerminalApp`
@@ -227,7 +234,9 @@ Create `harness/<name>/manifest.ts` exporting a `HarnessManifest`
 - `emit` — the optional plugin (Step 3), `null` for harnesses that need none.
 - `plugin` (optional) — the host plugin manifest directory and delivery kind.
   Omitting it derives `<harnessDir>-plugin` plus store delivery; set `kind:
-  "kiro"` only for a folder-drop host.
+  "kiro"` only for a folder-drop host. Set `marketplaceDir` when the host reads a
+  plugin catalogue from somewhere other than the manifest directory (Codex:
+  `.agents/plugins`).
 
 Claude's manifest is the minimal reference (no rename, no emit); Kiro's adds a
 rename + `harnessFiles` (agent JSONs and adapter) plus split root/native onboarding;
@@ -263,7 +272,8 @@ answer with exit 2 + a reason on stderr (the tool call must be refused when
 the adapter relays that exit code). If the new harness cannot hard-block a
 tool call from its pre-tool seam, leave the reviewer-scope and review-freeze
 registrations out and document the gap rather than wiring dead hooks - the
-prose bounds in stage-protocol-reviewer.md §12a still govern there. When the harness's
+prose bounds still govern there (the read scope in stage-protocol-reviewer-unit.md,
+the review freeze in stage-protocol-reviewer.md §12a). When the harness's
 payloads carry no subagent identity, scope reviewer-scope registration to the
 reviewer agents themselves where the harness supports per-agent hooks (the
 Kiro CLI pattern: the adapter then asserts `scoped_registration` instead of

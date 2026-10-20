@@ -13,6 +13,7 @@ import {
   chmodSync,
   cpSync,
   existsSync,
+  linkSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -452,6 +453,20 @@ describe("t230 dispatcher route parity", () => {
       fixture: true,
     },
     {
+      name: "intent add-checkout maps through workspace parser with its path",
+      routerArgs: ["engine", "intent", "add-checkout", "no-such-checkout"],
+      tool: "aidlc-utility.ts",
+      toolArgs: ["intent", "add-checkout", "no-such-checkout"],
+      fixture: true,
+    },
+    {
+      name: "intent remove-checkout maps through workspace parser with its path",
+      routerArgs: ["engine", "intent", "remove-checkout", "no-such-checkout"],
+      tool: "aidlc-utility.ts",
+      toolArgs: ["intent", "remove-checkout", "no-such-checkout"],
+      fixture: true,
+    },
+    {
       name: "intent remove-repo maps through workspace parser with its name",
       routerArgs: ["engine", "intent", "remove-repo", "no-such-repo"],
       tool: "aidlc-utility.ts",
@@ -768,8 +783,9 @@ describe("t230 dispatcher route parity", () => {
     expect(changed.exitCode, changed.stderr.toString()).toBe(0);
     const selectedState = readFileSync(join(selectedRecord, "aidlc-state.md"), "utf-8");
     for (const [field, value] of [
+      // Nobody asked for any of them, so each is the command's.
       ["Depth", "Minimal"], ["Test Strategy", "Comprehensive"], ["Review Override", "advisory"],
-      ["Guard Policy", "relaxed (set by you)"], ["Guards Off", "state-transition (set by you)"],
+      ["Guard Policy", "relaxed (set by a command)"], ["Guards Off", "state-transition (set by a command)"],
       ["Sensors", "off (set by a command)"],
       ["Learnings", "off (set by a command)"], ["Summary Confirmation", "off (set by a command)"],
     ]) expect(selectedState).toContain(`- **${field}**: ${value}\n`);
@@ -1235,6 +1251,39 @@ describe("t230 dispatcher route parity", () => {
       "requires an installed project harness or recognized project directory",
     );
     expect(result.exitCode, result.stderr.toString()).toBe(0);
+  });
+
+  // Config there would set up a new project in that folder, so the refusal
+  // names the two steps that reach the person's project. Our own options are
+  // read before the person's words, so the flag goes right after the tool, on
+  // the copy channel and natively (Bun under the name aidlc stands in).
+  test("a project-required command from a folder that is not a project names the step that works", () => {
+    const project = makeProject();
+    const outside = mkdtempSync(join(tmpdir(), "aidlc-t230-outside-"));
+    tempProjects.add(outside);
+    const launcherDir = mkdtempSync(join(tmpdir(), "aidlc-t230-launcher-"));
+    tempProjects.add(launcherDir);
+    const launcher = join(launcherDir, process.platform === "win32" ? "aidlc.exe" : "aidlc");
+    try {
+      linkSync(BUN, launcher);
+    } catch {
+      cpSync(BUN, launcher);
+    }
+    const env = { AIDLC_DISPATCH_TOOLS_DIR: DIST_TOOLS_DIR };
+    for (const [tool, after] of [[BUN, "aidlc.ts"], [launcher, "aidlc"]]) {
+      for (const command of [["engine", "plugin", "list"], ["next", "add", "a", "login", "page"]]) {
+        const label = `${after} ${command.join(" ")}`;
+        const refused = run([tool, DISPATCHER, ...command], outside, env);
+        expect(refused.exitCode, label).toBe(1);
+        expect(refused.stderr.toString(), label).toContain(
+          "requires an installed project harness or recognized project directory; " +
+            `run it from the project folder, or add --project-dir <path> right after ${after}\n`,
+        );
+        expect(refused.stderr.toString(), label).not.toContain("aidlc config");
+        const named = run([tool, DISPATCHER, "--project-dir", project, ...command], outside, env);
+        expect(named.exitCode, `${label}: ${named.stderr}`).toBe(0);
+      }
+    }
   });
 });
 
@@ -2473,7 +2522,7 @@ describe("t230 native review-brief dispatch", () => {
         if (command === "review") {
           expect(output).toContain("**Stage:** Requirements Analysis");
           expect(output).toContain("**Review outcome:** Concerns remain for your decision.");
-          expect(output).toContain("**Why now:** First review completed.");
+          expect(output).not.toContain("Why now");
           expect(output).toContain("**Approve**");
           expect(output).toContain("**Request Changes**");
         }
@@ -3254,7 +3303,7 @@ describe("t230 dispatcher help and errors", () => {
     });
     expect(text).toContain("aidlc system <noun> <verb> [args]");
     expect(text).toContain(
-      "Operations on this user's aidlc installation; never a system-wide or root install:",
+      "Operations on this user's aidlc installation; never system-wide (root only with --allow-root):",
     );
     expect(text).toContain("  rollback: [<version>|--version <version>|--list]");
     expect(text).toContain("  completions: <bash|zsh|fish|powershell>");
@@ -3527,12 +3576,12 @@ describe("t230 dispatcher hook routing", () => {
       session_id: "t230-guard-deny",
       cwd: projectDir,
       tool_name: "Bash",
-      tool_input: { command: "bun .claude/tools/aidlc-state.ts approve intent-capture" },
+      tool_input: { command: "bun .claude/tools/aidlc.ts engine hook record-human-turn" },
     });
     const claude = viaDispatcher(["engine", "hook", "state-transition-guard"], projectDir, { AIDLC_HARNESS_NAME: "claude" }, input);
     expect(claude.exitCode, claude.stderr.toString("utf-8")).toBe(2);
     const reason = claude.stderr.toString("utf-8").trim();
-    expect(reason).toContain("Stage status cannot be changed");
+    expect(reason).toContain("AIDLC runtime records and hooks belong to the harness");
     expect(JSON.parse(claude.stdout.toString("utf-8"))).toEqual({
       hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: reason },
     });
@@ -3541,7 +3590,7 @@ describe("t230 dispatcher hook routing", () => {
     const kiro = viaDispatcher(["engine", "hook", "state-transition-guard"], projectDir, { AIDLC_HARNESS_NAME: "kiro" }, input);
     expect(kiro.exitCode).toBe(2);
     expect(kiro.stdout.toString("utf-8")).toBe("");
-    expect(kiro.stderr.toString("utf-8")).toContain("Stage status cannot be changed");
+    expect(kiro.stderr.toString("utf-8")).toContain("AIDLC runtime records and hooks belong to the harness");
   });
 
   test("statusline dispatches to run(input) and renders a line", () => {

@@ -17,7 +17,7 @@ import {
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
   artifactFilename, auditBlockField, authorizedVerificationCommand, currentSwarmSourceMergeChain, findStageBySlug,
-  gitCommitSourceListing, latestMainWorkflowStageRunFloorForProject, latestPersonTurn, personsGateWords,
+  gitCommitSourceListing, latestMainWorkflowStageRunFloorForProject, latestPersonTurn, listIntents, personsGateWords,
   personsLatestGatePick, readActiveDirectiveMarker, readAuditShardEvents, readProtectedResponse, readUnitSourceManifest,
   reviewArtifactFingerprint, serializeSourceListing, sourceListingSha256, stateDigest, unitSourceFingerprint,
   workspaceSourceFingerprint, workspaceSourceListing, writeActiveDirectiveMarker, writeBaselineSourceSnapshot,
@@ -78,6 +78,25 @@ export const ANSWERS = corpus as AnswersItem[];
 export const QUESTIONS = [...new Set(ANSWERS.map((item) => item.question))];
 /** Questions with no fixture: their items are reported as skipped with this reason. */
 export const NO_FIXTURE: Partial<Record<Question, string>> = {};
+/** Questions the agent asks in chat whose live drive takes only the replies typed with `/aidlc`, as the whole exchange.
+ * The verification command: a fresh chat's bare `/aidlc` does not show it again; it comes back at its own checkpoint
+ * step, which the fixture does not reach (openQuestionAgainDirective in aidlc-orchestrate.ts shows only a question with
+ * no step of its own). A stage question and learnings: a bare `/aidlc` does show them again, but the drive cannot judge
+ * the agent's words after a chat reply yet (it stops one tool call after the answer is recorded, and counts the stage's
+ * next question as a second one). */
+export const ASKED_IN_CHAT: ReadonlySet<Question> = new Set(["verification-command", "stage-question", "learnings"]);
+/** Questions a live drive cannot set up. Guard recovery's fixture writes the ask marker by hand, and the engine asks it
+ * from the guard's own refusal record. The unit check reads its replies. */
+export const NOT_LIVE: ReadonlySet<Question> = new Set(["guard-recovery"]);
+/** Whether a live drive can meet this reply the way a person would. */
+export const liveReply = (item: AnswersItem): boolean =>
+  !NOT_LIVE.has(item.question) && (!ASKED_IN_CHAT.has(item.question) || item.via === "aidlc");
+/** The open work carried on after the person's reply: a row other than a turn of theirs from `from` on (the audit's
+ * length when the reply was sent; the chat's own opening rows, such as SESSION_STARTED, come before it), and no new
+ * record. A routing reply folded into the open work ends there. */
+export function workCarriedOn(proj: string, records: number, from: number): boolean {
+  return listIntents(proj).length === records && readAuditShardEvents(proj).slice(from).some((e) => e.event !== "HUMAN_TURN");
+}
 
 const coreTool = (name: string) => readFileSync(join(AIDLC_SRC, "tools", name), "utf-8");
 /** Whether the change an `after` item waits for is in this source. */
@@ -212,7 +231,7 @@ async function git(proj: string, args: string[]): Promise<string> {
   if (result.status !== 0) throw new Error(`git ${args.join(" ")} failed: ${result.stderr}`);
   return result.stdout.trim();
 }
-/** A feature at Code Generation run as a swarm (stage-major, two Units in batch 1, gamma in batch 2), with the source
+/** A feature at Code Generation run as a swarm (stage-major, with the supplied Unit batches), with the source
  * committed and baselined, as t343 and t340 build it. */
 async function swarmFixture(proj: string, units: string[][]): Promise<void> {
   writeFileSync(seededStateFile(proj), `# AI-DLC State Tracking
@@ -345,7 +364,7 @@ export async function buildQuestion(proj: string, question: Question): Promise<v
       return;
     }
     case "stage-gate-sensor-failure":
-      // The report refused on a blocking sensor, so the gate is NOT open (stage-protocol.md:385): the stage still runs
+      // The report refused on a blocking sensor, so the gate is NOT open (stage-protocol.md, Part 0: Enter the approval gate): the stage still runs
       // and the agent asks the two-option question.
       workOpen(proj);
       writeStageFiles(proj, false);
@@ -363,13 +382,17 @@ export async function buildQuestion(proj: string, question: Question): Promise<v
       await tool(proj, BOLT, [...verify, "--action", "ask", "--session", SESSION]);
       return;
     }
+    // Both asked inside the current stage, after its start, as a run asks them.
     case "verification-command":
       constructionFixture(proj);
-      await tool(proj, LOG, ["decision", "--stage", "code-generation", "--checkpoint", "verification-command", "--command", "npm test", "--session", SESSION,
+      appendAuditEntry("STAGE_STARTED", { Stage: "functional-design" }, proj);
+      writeFileSync(join(seededRecordDir(proj), "verification-command.txt"), "npm test", "utf-8");
+      await tool(proj, LOG, ["decision", "--stage", "functional-design", "--checkpoint", "verification-command", "--command-file", "verification-command.txt", "--session", SESSION,
         "--decision", "Use this command to verify each completed Unit?", "--options", "Approve,Request Changes"]);
       return;
     case "construction-policy":
       constructionFixture(proj);
+      appendAuditEntry("STAGE_STARTED", { Stage: "functional-design" }, proj);
       await tool(proj, LOG, ["decision", "--stage", "functional-design", "--checkpoint", "construction-policy", "--field", "Construction Execution", "--value", "swarm",
         "--session", SESSION, "--decision", "Switch Construction to build the Units in parallel (swarm)?", "--options", "Approve,Request Changes"]);
       return;
@@ -396,7 +419,6 @@ export async function buildQuestion(proj: string, question: Question): Promise<v
       const line = question === "plan-offer" ? "/aidlc fix the login: it rejects a correct password" : "/aidlc fix the login timeout";
       await say(proj, line, "claude");
       const read = await next(proj, line.replace(/^\/aidlc\s*/, "").split(" "));
-      // The agent's step after the plan proposal print: a fix line gets the bugfix plan proposed.
       const proposal = proposalFollowUp(read.directive, "bugfix");
       const offer = proposal === null ? read : await next(proj, proposal);
       if (offer.directive?.ask_type !== "scope-confirm") throw new Error(`the plan offer did not open: ${offer.out}`);
@@ -693,7 +715,7 @@ export async function recordByAgent(proj: string, item: AnswersItem, choice: str
       return { event: approved ? "GATE_APPROVED" : "GATE_REJECTED", exec: result };
     }
     case "verification-command":
-      return emitted(await log(["--stage", "code-generation", "--checkpoint", "verification-command", "--command", "npm test", "--session", SESSION, "--details", choice]), "QUESTION_ANSWERED");
+      return emitted(await log(["--stage", "functional-design", "--checkpoint", "verification-command", "--command", "npm test", "--session", SESSION, "--details", choice]), "QUESTION_ANSWERED");
     case "construction-policy":
       return emitted(await log(["--stage", "functional-design", "--checkpoint", "construction-policy", "--field", "Construction Execution", "--value", "swarm", "--session", SESSION, "--details", choice]), "QUESTION_ANSWERED");
     case "summary-confirmation": {

@@ -118,6 +118,23 @@ tool's recovery message. If source cannot be reconciled with the approved
 starting point, explain the refusal and preserve the remaining work while the
 human resolves it; never infer approval of a different source tree.
 
+### A Unit that voids its one recovery receipt
+
+If an autonomous Unit invalidates its one recovery receipt, halt before
+`finalize`: do not put the Unit in `--claimed`, do not merge it, and present a
+human Retry/Abort decision through the halt-and-ask seam. On Retry, return to
+the main workspace, abort and park/discard the old Bolt, then rerun the current
+`aidlc-swarm.ts prepare` step for that Unit with the original batch/base/repo
+arguments. The fresh worktree and `BOLT_STARTED` boundary reset review
+accounting without claiming convergence. Never synthesize `GATE_REJECTED`.
+The discard parks tracked files and non-ignored untracked files (or the
+remaining branch tip when the checkout is gone) plus reviewed source refs
+before removing the live checkout and branch. When present, the returned
+`restore_operation` recovers the parked work in a separate checkout without
+reinstating the old review authority. If only review evidence remained, there
+are no saved working files to restore, so neither `restore_operation` nor
+`restore_hint` is returned.
+
 ### Retry after a native worker discard
 
 When the reviewer-exhaustion procedure calls for Retry, use the native
@@ -279,9 +296,25 @@ finishes the staged landing and records the fix under `Landed changes`. If you
 cannot fix it, stop, leave the checkout as git left it, and say what `staged`
 lists.
 
-A normal non-zero result before `[merge-succeeded:<sha>]` preserves the
-worktree: resolve the conflict or target checkout problem and retry the same
-merge, without rerunning `finalize`. If the message carries
+A landing that clashes with a Unit landed before it returns `status:
+"conflict"` with the files git could not merge (`conflict_files`) and a `next`
+step, and leaves the landing staged in the main checkout. Combine both sides in
+each of them so each Unit keeps what its approved plan asked for, never dropping
+one Unit's side; while the batch is out they are the main checkout's only files
+you can write. Then `git add` them (`git rm` one that stays deleted) and run the
+same merge again: it finishes the landing and returns one
+notice naming the files combined; say it once. If the two plans want different
+things there, stop and say which files clash and that `git reset --merge` in
+that checkout drops the landing; run it only when the person asks. A landing
+git did not start because files it changes hold changes not committed in the
+main checkout (an AI-DLC update to `.gitignore` the person has not committed,
+say) names them and the step: say it in one line, commit those changes only on
+the person's word, then run the same merge again.
+
+Any other non-zero result before `[merge-succeeded:<sha>]` preserves the
+worktree and names its own step: follow it and run the same merge again,
+without rerunning `finalize`; when it names none, stop and say it in one line,
+with the checkout as it is. If the message carries
 `[merge-succeeded:<sha>]` and `SWARM_SOURCE_MERGED` exists, the reviewed source
 is already authoritative and only cleanup failed; rerun the same merge, which
 performs cleanup-only reconciliation without reapplying source or duplicating

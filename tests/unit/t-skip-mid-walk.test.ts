@@ -162,14 +162,12 @@ function walk(units: string[], designed: boolean | number = true): string {
   return proj;
 }
 
-// The commands the step names that change the work.
 function named(step: Step): string[] {
   return [...String(step.message).matchAll(/`([^`]*(?:engine recompose|aidlc-orchestrate\.ts report)[^`]*)`/g)]
     .map((match) => match[1])
     .filter((command) => !command.includes("--add"));
 }
 
-// Runs a command the step names, as the agent types it.
 function runNamed(proj: string, command: string): { status: number; out: string } {
   const words = command.split(" ");
   const at = words.findIndex((word) => word.endsWith("aidlc.ts") || word.endsWith("aidlc-orchestrate.ts"));
@@ -218,6 +216,19 @@ describe("a skip the person asks for while Construction walks Unit by Unit is ca
     mkdirSync(dirname(questions), { recursive: true });
     writeFileSync(questions, "# Functional Design Questions\n\n## Question 1\nWhat does it greet?\n\n[Answer]:\n");
     expect(JSON.stringify(next(proj).kept_replies ?? null)).not.toContain("skip code generation");
+  });
+
+  // A setting asked for in plain words beside the skip names their words, so
+  // it lands as theirs (t-set-by-you-needs-their-reply).
+  test("a setting asked for beside the skip names their words", () => {
+    const proj = walk(["alpha", "beta"]);
+    says(proj, "skip code generation for this unit, and turn the sensors off");
+    const step = next(proj, ["--skip", "code-generation", "--sensors", "off"]);
+    expect(step.kind, JSON.stringify(step)).toBe("print");
+    expect(step.message).toContain(
+      "config set sensors off --person-words '<their words>'`, with <their words> the person's reply that asked for it, " +
+        "word for word, and print its output verbatim.",
+    );
   });
 
   test("this Unit only when the Unit's code files are already written: still skipped as the person asked", () => {
@@ -295,8 +306,6 @@ describe("a skip the person asks for while Construction walks Unit by Unit is ca
     expect(readFileSync(stateFile(proj), "utf-8")).toBe(before);
   });
 
-  // The agent's own skip report of a step that must run stays refused, and
-  // the refusal names the step that carries out a skip the person asked for.
   test("the agent's own skip of the Unit's Code Generation is refused, naming next --skip", () => {
     const proj = walk(["alpha", "beta"]);
     const before = readFileSync(stateFile(proj), "utf-8");

@@ -1,16 +1,16 @@
-// Test-duration weights for CI scheduling. Weights only balance unit shards and
-// order integration files; they never select, skip, or fail a test.
+// Test-duration weights for CI scheduling. Weights balance unit/integration
+// shards and order integration files; they never remove a test from the suite.
 //
 //   refresh <evidence-dir>       rewrite the checked-in weights from downloaded
-//                                deterministic CI evidence (each file at its
-//                                slowest OS)
+//                                deterministic CI evidence (per OS, with a
+//                                slowest-OS fallback for unmeasured files)
 //   report <tier> <stamp-file>   warn about files that outgrew their weight;
 //                                always exits 0, because a stale weight only
 //                                makes CI slower
 import { appendFileSync, existsSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import {
-  type OrderWeights, readSummaryRows, type ShardConfig, validateShardConfig,
+  type OrderWeights, readSummaryRows, shardConfigForPlatform, type ShardConfig, validateShardConfig,
 } from "../tests/lib/test-sharding.ts";
 
 const REPO_ROOT = join(import.meta.dir, "..");
@@ -23,12 +23,12 @@ export const REFRESH_HINT =
   "gh run download <green merge-group run id> -p 'ci-deterministic-*' -D <dir>, then bun scripts/ci-test-weights.ts refresh <dir>";
 
 export type WeightTier = "unit" | "integration";
-const ARTIFACT = /^(?:ci|full-suite)-deterministic-(unit-\d+|integration)-(Linux|macOS|Windows)$/;
+// The guard matrix jobs run integration files too, so their evidence weighs them.
+const ARTIFACT = /^(?:ci|full-suite)-deterministic-(unit-\d+|integration|guard-matrix(?:-\d+)?)-(Linux|macOS|Windows)$/;
 
 /** tier -> name -> OS -> passing durations in seconds */
 export type Samples = Record<WeightTier, Map<string, Map<string, number[]>>>;
 
-/** The summary a deterministic job wrote, located through its recorded stamp. */
 export function summaryFromStamp(stampFile: string, logsRoot: string): string | undefined {
   if (!existsSync(stampFile)) return undefined;
   const stamp = readFileSync(stampFile, "utf8").trim();
@@ -46,13 +46,12 @@ function artifactDirs(root: string, depth = 2): Array<{ dir: string; tier: Weigh
     const dir = join(root, name);
     if (!statSync(dir).isDirectory()) continue;
     const match = ARTIFACT.exec(name);
-    if (match) found.push({ dir, tier: match[1] === "integration" ? "integration" : "unit", os: match[2] });
+    if (match) found.push({ dir, tier: match[1].startsWith("unit-") ? "unit" : "integration", os: match[2] });
     else if (depth > 0) found.push(...artifactDirs(dir, depth - 1));
   }
   return found;
 }
 
-/** Passing per-file durations from every deterministic artifact under root. */
 export function collectSamples(root: string): Samples {
   const samples: Samples = { unit: new Map(), integration: new Map() };
   for (const { dir, tier, os } of artifactDirs(root)) {
@@ -77,7 +76,6 @@ function median(values: number[]): number {
   return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
 }
 
-/** Each file's median on each OS, then its slowest OS, to a tenth of a second. */
 export function slowestOsWeights(samples: Map<string, Map<string, number[]>>): Record<string, number> {
   const weights: Record<string, number> = {};
   for (const [name, byOs] of samples) {
@@ -85,6 +83,19 @@ export function slowestOsWeights(samples: Map<string, Map<string, number[]>>): R
     weights[name] = Math.max(0.1, Math.round(slowest * 10) / 10);
   }
   return weights;
+}
+
+export function platformUnitWeights(samples: Map<string, Map<string, number[]>>): Record<string, Record<string, number>> {
+  const result: Record<string, Record<string, number>> = {};
+  for (const [os, platform] of Object.entries({ Linux: "linux", macOS: "darwin", Windows: "win32" })) {
+    const weights: Record<string, number> = {};
+    for (const [name, byOs] of samples) {
+      const values = byOs.get(os);
+      if (values?.length) weights[`${name}.test.ts`] = Math.max(0.1, Math.round(median(values) * 10) / 10);
+    }
+    if (Object.keys(weights).length) result[platform] = weights;
+  }
+  return result;
 }
 
 /** Result-row names of the current integration tier, as summaries print them. */
@@ -140,7 +151,15 @@ export function refreshWeights(evidenceRoot: string, repoRoot = REPO_ROOT): { un
     weights: merged(unitFiles, measuredUnit, unit.weights),
     affinityGroups: unit.affinityGroups,
   };
+  const measuredPlatforms = platformUnitWeights(samples.unit);
+  nextUnit.platformWeights = Object.fromEntries(
+    [...new Set([...Object.keys(unit.platformWeights ?? {}), ...Object.keys(measuredPlatforms)])].sort()
+      .map((platform) => [platform, merged(unitFiles, measuredPlatforms[platform] ?? {}, unit.platformWeights?.[platform] ?? {})]),
+  );
   validateShardConfig(unitFiles, nextUnit);
+  for (const weights of Object.values(nextUnit.platformWeights)) {
+    validateShardConfig(unitFiles, { ...nextUnit, weights });
+  }
 
   const integrationPath = join(repoRoot, INTEGRATION_WEIGHTS);
   const previous = existsSync(integrationPath)
@@ -162,7 +181,6 @@ export interface Drift {
   weight: number;
 }
 
-/** Files that ran DRIFT_SECONDS and DRIFT_RATIO past their weight, largest gap first. */
 export function weightDrift(summaryText: string, tier: WeightTier, config: OrderWeights): Drift[] {
   const key = (name: string): string => tier === "unit" ? `${name}.test.ts` : name;
   return readSummaryRows(summaryText)
@@ -175,7 +193,7 @@ export function weightDrift(summaryText: string, tier: WeightTier, config: Order
     .sort((a, b) => (b.seconds - b.weight) - (a.seconds - a.weight) || a.name.localeCompare(b.name));
 }
 
-// Workflow-command property and data escaping, so a name cannot end the command.
+// Workflow-command data escaping, so a name cannot end the command.
 const escapeData = (text: string): string => text.replaceAll("%", "%25").replaceAll("\r", "%0D").replaceAll("\n", "%0A");
 
 /** Warning annotations and a step-summary table; never throws. */
@@ -184,7 +202,8 @@ export function reportDrift(tier: WeightTier, stampFile: string, env = process.e
   try {
     const summary = summaryFromStamp(stampFile, join(repoRoot, "tests", "logs"));
     if (!summary) return [`Test weights: no ${tier} summary to check.`];
-    const config = JSON.parse(readFileSync(join(repoRoot, tier === "unit" ? UNIT_WEIGHTS : INTEGRATION_WEIGHTS), "utf8")) as OrderWeights;
+    const raw = JSON.parse(readFileSync(join(repoRoot, tier === "unit" ? UNIT_WEIGHTS : INTEGRATION_WEIGHTS), "utf8"));
+    const config: OrderWeights = tier === "unit" ? shardConfigForPlatform(raw as ShardConfig, process.platform) : raw;
     const drift = weightDrift(readFileSync(summary, "utf8"), tier, config);
     const os = env.RUNNER_OS ?? process.platform;
     if (drift.length === 0) return [`Test weights: every ${tier} file ran within its weight on ${os}.`];

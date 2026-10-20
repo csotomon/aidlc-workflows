@@ -4,9 +4,10 @@
 // covers: file:hooks/aidlc-continue-workflow.ts, file:hooks/aidlc-session-start.ts, file:hooks/aidlc-write-audit-log.ts, file:hooks/aidlc-log-subagent.ts, file:hooks/aidlc-session-end.ts, file:hooks/aidlc-deliver-stage-rules.ts, file:hooks/aidlc-plan-approval-guard.ts, file:hooks/aidlc-review-freeze.ts, function:ACTIVE_DIRECTIVE_MESSAGE_MAX_BYTES, function:invalidateActiveDirectiveContext, function:recordCopilotHumanSequence, function:claimCopilotCommand, function:settleCopilotCommand, function:copilotStopEvidence, function:consumeCopilotConversation, function:settleCopilotIntentBoundary, function:updateCopilotStopCount, audit:SUBAGENT_PROMPT_UNMATCHED, function:appendSubagentPromptUnmatched, audit:COORDINATION_STOOD_ASIDE, function:appendCoordinationStoodAside, function:clearSessionIntentSwitch, function:recordIntentKey, function:parseRecordIntentKey, function:RECORD_INTENT_PREFIX
 //
 // WHAT. Each case pipes a fixture from tests/fixtures/copilot-hook-payloads/
-// (field-verbatim captures off Copilot CLI 1.0.74, sanitized for publication) into
-// the generated Copilot adapter inside a scratch project carrying an active
-// workflow state, then asserts the observable core-hook effect:
+// (field-verbatim captures off Copilot CLI 1.0.74, plus a task launch off 1.0.74
+// and 1.0.96, sanitized for publication) into the generated Copilot adapter
+// inside a scratch project carrying an active workflow state, then asserts the
+// observable core-hook effect:
 //   continue-workflow → block fields at top level for CLI and under
 //                    hookSpecificOutput for VS Code; silent with no state.
 //   session-start  → additionalContext at top level for CLI and under
@@ -328,7 +329,7 @@ function runAdapter(
   target: string,
   payload: unknown,
   envOverrides: NodeJS.ProcessEnv = {},
-): { stdout: string; stderr: string; code: number } {
+): { stdout: string; stderr: string; code: number; pid: number } {
   if (target === "record-human-turn" && payload !== null && typeof payload === "object") {
     const record = payload as { session_id?: unknown; sessionId?: unknown };
     const session = record.session_id ?? record.sessionId;
@@ -352,7 +353,7 @@ function runAdapter(
       timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     },
   );
-  return { stdout: r.stdout ?? "", stderr: r.stderr ?? "", code: r.status ?? -1 };
+  return { stdout: r.stdout ?? "", stderr: r.stderr ?? "", code: r.status ?? -1, pid: r.pid ?? -1 };
 }
 
 async function runAdapterAsync(projectDir: string, target: string, payload: unknown) {
@@ -801,12 +802,12 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
 
   test("4: guard-tool-call block converts to the permissionDecision deny JSON", () => {
     const dir = scratchProject(true);
-    // A direct lifecycle call on aidlc-state.ts is exactly what the
-    // state-transition guard refuses (exit 2 + reason on stderr in core).
+    // A tool call that invokes a hook is what the state-transition guard's
+    // runtime-integrity check refuses (exit 2 + reason on stderr in core).
     const payload = withCwd(
       {
         ...FIXTURES.preToolUse_bash,
-        tool_input: { command: "bun .aidlc/tools/aidlc-state.ts approve" },
+        tool_input: { command: "bun .aidlc/tools/aidlc.ts engine hook record-human-turn" },
       },
       dir,
     );
@@ -1147,14 +1148,14 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
 
   test("14: documented VS Code tool names normalize to the core contract", () => {
     const dir = scratchProject(true);
-    // VS Code's documented shell tool name with a blocked lifecycle command:
+    // VS Code's documented shell tool name with a refused command:
     // the alias table must canonicalize runTerminalCommand -> Bash.
     const r = runAdapter(dir, "guard-tool-call", {
       hook_event_name: "PreToolUse",
       session_id: "11111111-2222-4333-8444-555555555555",
       cwd: dir,
       toolName: "runTerminalCommand",
-      toolInput: { command: "bun .aidlc/tools/aidlc-state.ts approve" },
+      toolInput: { command: "bun .aidlc/tools/aidlc.ts engine hook record-human-turn" },
     });
     expect(r.code).toBe(0);
     const parsed = JSON.parse(r.stdout) as {
@@ -3119,6 +3120,97 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     }
   });
 
+  // The claim's hints are the flags the engine's own reading takes: a `--resume`
+  // among the person's words behind `--` asks for nothing.
+  test("23c-words: a --resume among the person's words leaves the waiting Resume question as it is", () => {
+    const dir = orchestrationProject();
+    const session = "words-resume-waiting";
+    driveToRunStage(dir, session);
+    rewriteMarker(dir, (value) => {
+      value.kind = "ask";
+      value.delivery = "issued";
+      value.needs_rehydrate = false;
+      delete value.continue_token;
+      delete value.continue_token_sha256;
+      value.resume = {
+        status: "waiting",
+        issuing_stage: "requirements-analysis",
+        issuing_state_sha256: value.state_sha256,
+        issuing_session: session,
+        issuing_intent_uuid: value.intent_uuid,
+      };
+    });
+    const spec = commandSpec(dir, "direct", ["next", "--", "fix", "the", "--resume", "bug"]);
+    runAdapter(dir, "guard-tool-call", commandPayload(dir, session, spec.text, "words-resume"));
+    expect(marker(dir).resume).toMatchObject({ status: "waiting" });
+  });
+
+  // The attempt id rides right after the verb, where the engine reads it: behind
+  // the person's words it would be two of their words and the attempt is lost.
+  test("23c-attempt: the attempt id goes in front of the person's words, marked or not, and the attempt is claimed", () => {
+    for (const words of [["--", "fix", "the", "bug"], ["fix", "the", "bug"]]) {
+      const dir = orchestrationProject();
+      const session = `words-attempt-${words.length}`;
+      const attempt = `words-attempt-${words.length}`;
+      const spec = commandSpec(dir, "direct", ["next", ...words]);
+      const pre = runAdapter(dir, "guard-tool-call", commandPayload(dir, session, spec.text, attempt));
+      const rewritten = rewrittenCommand(pre);
+      expect(rewritten, spec.text).toBe(
+        `bun .aidlc/tools/aidlc-orchestrate.ts "next" --aidlc-attempt-id ${attempt} ${words.map((word) => JSON.stringify(word)).join(" ")}`,
+      );
+      const executed = runShell(dir, rewritten);
+      expect(executed.status, executed.stderr).toBe(0);
+      expect(executed.stdout, rewritten).not.toContain("stale or superseded");
+      runAdapter(dir, "post-tool", commandPayload(dir, session, rewritten, attempt, true, executed.stdout));
+      expect(marker(dir), rewritten).toMatchObject({ active_attempt: { id: attempt } });
+    }
+  });
+
+  // The person's words behind `--` may name the engine's own option; the claim
+  // reads it as theirs, as the engine does, and still gives the command its id.
+  test("23c-option-word: an attempt option among the words behind -- is theirs, not one the agent already set", () => {
+    const dir = orchestrationProject();
+    const spec = commandSpec(dir, "direct", ["next", "--", "add", "an", "--aidlc-attempt-id", "option"]);
+    const pre = runAdapter(dir, "guard-tool-call", commandPayload(dir, "words-option", spec.text, "words-option"));
+    expect(rewrittenCommand(pre), pre.stdout).toBe(
+      'bun .aidlc/tools/aidlc-orchestrate.ts "next" --aidlc-attempt-id words-option "--" "add" "an" "--aidlc-attempt-id" "option"',
+    );
+  });
+
+  // A folder named in front of the verb is the launcher's, and the attempt id
+  // still goes right after the verb.
+  test("23c-lead: with the folder named in front of next, the attempt id goes right after next", () => {
+    const dir = orchestrationProject();
+    const text = `bun .aidlc/tools/aidlc-orchestrate.ts --project-dir ${JSON.stringify(dir)} next fix the bug`;
+    const pre = runAdapter(dir, "guard-tool-call", commandPayload(dir, "lead-folder", text, "lead-folder"));
+    expect(rewrittenCommand(pre), pre.stdout).toBe(
+      `bun .aidlc/tools/aidlc-orchestrate.ts --project-dir ${JSON.stringify(dir)} next --aidlc-attempt-id lead-folder fix the bug`,
+    );
+  });
+
+  // The claim reads the launcher's folder where the dispatcher reads it, so a
+  // folder the dispatcher would run the work in is checked, whatever comes before it.
+  test("23c-dispatcher-folder: a folder the dispatcher takes after a flag and a word is still checked", () => {
+    const dir = orchestrationProject();
+    const other = scratchProject(true);
+    const pre = runAdapter(dir, "guard-tool-call", commandPayload(dir, "dispatcher-folder", `aidlc next --new-intent notes --project-dir ${JSON.stringify(other)}`, "dispatcher-folder"));
+    expect(pre.stdout).toContain("targets a different physical project");
+    // Its own flag in front of the words: the dispatcher takes every folder on the line.
+    const global = runAdapter(dir, "guard-tool-call", commandPayload(dir, "dispatcher-folder-global", `aidlc next --json fix bug --project-dir ${JSON.stringify(other)}`, "dispatcher-folder-global"));
+    expect(global.stdout).toContain("targets a different physical project");
+  });
+
+  // A folder left off the end is the agent's slip only where the engine would
+  // read the option; among the person's words the token is theirs.
+  test("23c-folder-word: `--project-dir` at the end of the person's words is not a missing folder", () => {
+    const dir = orchestrationProject();
+    const slip = "`--project-dir` needs this project's folder after it";
+    const words = runAdapter(dir, "guard-tool-call", commandPayload(dir, "folder-word", "aidlc next add a flag named --project-dir", "folder-word"));
+    expect(words.stdout).not.toContain(slip);
+    const missing = runAdapter(dir, "guard-tool-call", commandPayload(dir, "folder-slip", "aidlc next --project-dir", "folder-slip"));
+    expect(missing.stdout).toContain(slip);
+  });
+
   // A `next` that reaches the engine outside the chat's own answer (a
   // terminal, a delegate) while the resume question waits is not published.
   // Retrying repeats that, so it names the answer, and the answer goes through.
@@ -3207,6 +3299,34 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     rmSync(join(seededRecordDir(activeRecovery), ".aidlc-engine/active-directive.json"));
     expect(runAdapter(activeRecovery, "continue-workflow", { ...FIXTURES.stop, cwd: activeRecovery, session_id: "active-recovery", stop_hook_active: true }).stdout).toBe("");
     expect(marker(activeRecovery).stop_count).toBe(2);
+  });
+
+  // #2400: a turn whose only engine calls are `aidlc log` recording the
+  // stage's work advances no Copilot sequence; the engine mark the logger
+  // leaves is what says the turn was not chat, so the Stop is nudged.
+  test("24a: a recorded stage answer is engagement, so the Stop after it is not conversational", () => {
+    const dir = orchestrationProject();
+    const session = "stage-work-log-owner";
+    const { directive } = driveToRunStage(dir, session);
+    const stage = String(directive.stage);
+    const log = (args: string[]) => {
+      const command = `bun .aidlc/tools/aidlc.ts engine log ${args.map((arg) => JSON.stringify(arg)).join(" ")}`;
+      expect(runAdapter(dir, "guard-tool-call", commandPayload(dir, session, command, `log-${args[0]}`)).code).toBe(0);
+      const executed = runShell(dir, command);
+      runAdapter(dir, "post-tool", commandPayload(dir, session, command, `log-${args[0]}`, true, executed.stdout));
+      return executed;
+    };
+    const asked = log(["decision", "--stage", stage, "--decision", "Which team owns it?", "--options", "Team A,Team B"]);
+    expect(asked.status, asked.stderr).toBe(0);
+    expect(runAdapter(dir, "record-human-turn", { ...FIXTURES.userPromptSubmit, cwd: dir, session_id: session, prompt: "Team A" }).code).toBe(0);
+    const engineSequence = marker(dir).engine_sequence;
+    Bun.sleepSync(20);
+    const answered = log(["answer", "--stage", stage, "--details", "Team A"]);
+    expect(answered.status, answered.stderr).toBe(0);
+    expect(answered.stdout).toContain('"emitted":"QUESTION_ANSWERED"');
+    expect(marker(dir).engine_sequence).toBe(engineSequence);
+    const stopped = runAdapter(dir, "continue-workflow", { ...FIXTURES.stop, cwd: dir, session_id: session });
+    expect((JSON.parse(stopped.stdout || "{}") as { decision?: string }).decision).toBe("block");
   });
 
   test("24b: a no-tool human prompt is consume-once conversational without prior valid v2 coordination", () => {
@@ -4225,6 +4345,53 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(humanTurnCount(dir)).toBe(1);
   });
 
+  // The Copilot CLI hands a task launch's brief to the hooks as the first prompt
+  // of the subagent's own session: under its own id on 1.0.95 and later, under
+  // the task call's id on 1.0.74 (live-captured, both in the fixture). Nothing
+  // else in the payload marks it. The launch's record is spent there, and the
+  // person's chat keeps every line they type.
+  test("35g: a brief the Copilot CLI delivers under the subagent's own session is not the person's turn", () => {
+    const dir = rulesProject();
+    appendInteractionEvent(dir, "STAGE_STARTED", "requirements-analysis");
+    const chat = String(FIXTURES.preToolUse_task.session_id);
+    const agent = "aidlc-architecture-reviewer-agent";
+    const messageTexts = (): string[] => {
+      const messages = join(dir, "aidlc", ".aidlc-sessions", "messages");
+      return existsSync(messages)
+        ? readdirSync(messages).map((name) => String((JSON.parse(readFileSync(join(messages, name), "utf-8")) as { text?: unknown }).text))
+        : [];
+    };
+    for (const arrival of [FIXTURES.userPromptSubmit_subagentBrief, FIXTURES.userPromptSubmit_subagentBrief_1_0_74]) {
+      const pre = runAdapter(dir, "guard-tool-call", withCwd({
+        ...FIXTURES.preToolUse_task,
+        tool_input: { ...(FIXTURES.preToolUse_task.tool_input as Record<string, unknown>), agent_type: agent, prompt: SUBAGENT_BRIEFING },
+      }, dir));
+      expect(pre.code, pre.stderr).toBe(0);
+      const delivered = String(hostRewrite(pre.stdout)?.prompt ?? "");
+      expect(delivered).toContain("AIDLC_DISPATCH_RULES_BEGIN");
+      const start = runAdapter(dir, "subagent-start", withCwd({ ...FIXTURES.subagentStart_task, agentName: agent }, dir));
+      expect(start.code, start.stderr).toBe(0);
+      const brief = runAdapter(dir, "record-human-turn", withCwd({ ...arrival, prompt: delivered }, dir));
+      expect(brief.code, brief.stderr).toBe(0);
+      expect(humanTurnCount(dir), String(arrival.session_id)).toBe(0);
+      runAdapter(dir, "log-subagent", withCwd({ ...FIXTURES.subagentStop_task, agent_type: agent, agent_name: agent }, dir));
+    }
+    expect(messageTexts()).toEqual([]);
+    expect(keptWords(dir)).toBe("");
+    expect(humanSequence(dir)).toBeUndefined();
+    expect(JSON.parse(readFileSync(briefingsPath(dir), "utf-8"))).toHaveLength(0);
+    expect(auditRows(dir, "SUBAGENT_PROMPT_UNMATCHED")).toHaveLength(0);
+
+    // The person's own line in the chat counts, and so do the brief's words
+    // when they type them after the subagent started.
+    settleSubagentStarts(dir);
+    expect(typedPrompt(dir, chat, "Approve").code).toBe(0);
+    expect(humanTurnCount(dir)).toBe(1);
+    expect(typedPrompt(dir, chat, SUBAGENT_BRIEFING).code).toBe(0);
+    expect(humanTurnCount(dir)).toBe(2);
+    expect(messageTexts().sort()).toEqual(["Approve", SUBAGENT_BRIEFING].sort());
+  });
+
   // #1411: VS Code asks "Run command? Allow / Skip" before every shell call no
   // hook allowed, so each AI-DLC step waited on a click. In VS Code, AI-DLC's
   // own simple commands carry the allow; on the Copilot CLI they get no
@@ -4388,14 +4555,12 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       expect(pre.stdout, command).not.toContain('"permissionDecision":"allow"');
     }
 
-    // Denies are unchanged and never carry an allow: compounds and redirects, a
-    // direct lifecycle verb, and the host-only routes and hook files the
-    // state-transition guard refuses (a model cannot mint a human turn).
+    // Denies are unchanged and never carry an allow: compounds and redirects,
+    // and the host-only routes and hook files the state-transition guard
+    // refuses (a model cannot mint a human turn).
     for (const command of [
       "bun .aidlc/tools/aidlc.ts doctor > doctor.txt",
       "bun .aidlc/tools/aidlc-orchestrate.ts next && echo done",
-      "bun .aidlc/tools/aidlc-state.ts approve requirements-analysis",
-      "bun .aidlc/tools/aidlc.ts engine state approve requirements-analysis",
       "bun .aidlc/tools/aidlc.ts engine hook record-human-turn",
       "bun .aidlc/tools/aidlc.ts engine adapter copilot record-human-turn",
       "bun .aidlc/hooks/aidlc-record-human-turn.ts",
@@ -4406,6 +4571,60 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       const out = JSON.parse(pre.stdout) as { hookSpecificOutput?: Record<string, unknown> };
       expect(out.hookSpecificOutput?.permissionDecision, command).toBe("deny");
       expect(out.hookSpecificOutput?.updatedInput, command).toBeUndefined();
+    }
+  });
+
+  // The Allow prompt and the state tool read one check (decideFence), so they
+  // agree: in VS Code a direct stage-status command runs click-free exactly
+  // when the state tool refuses it, and keeps the prompt exactly when it would
+  // run, whatever the Guard Policy or the person's own switch.
+  test("36b: a direct state command keeps the Allow prompt exactly when the state tool would run it", () => {
+    // [policy, how the state file says it, whether the state tool refuses]
+    const policies: Array<[string, (state: string) => string, boolean]> = [
+      ["strict", (state) => state, true],
+      ["relaxed", (state) => state.replace(/^- \*\*Change Control\*\*:.*$/m, "- **Guard Policy**: relaxed (set by you)"), true],
+      ["off", (state) => state.replace(/^- \*\*Change Control\*\*:.*$/m, "- **Guard Policy**: off (set by you)"), false],
+      ["own switch", (state) => state.replace(
+        "## Scope Configuration\n",
+        "## Scope Configuration\n- **Guards Off**: state-transition (set by you)\n",
+      ), false],
+    ];
+    for (const [label, setPolicy, refusedByStateTool] of policies) {
+      const dir = orchestrationProject();
+      const statePath = seededStateFile(dir);
+      writeFileSync(statePath, setPolicy(readFileSync(statePath, "utf-8")));
+      for (const command of [
+        "bun .aidlc/tools/aidlc-state.ts approve requirements-analysis",
+        "bun .aidlc/tools/aidlc.ts engine state approve requirements-analysis",
+      ]) {
+        const pre = runAdapter(dir, "guard-tool-call", {
+          hook_event_name: "PreToolUse",
+          session_id: "direct-state",
+          tool_use_id: `direct-state-${label}`,
+          cwd: dir,
+          tool_name: "run_in_terminal",
+          tool_input: { command, explanation: "AI-DLC step", goal: "AI-DLC step", mode: "sync" },
+        });
+        expect(pre.code, `${label}: ${command}`).toBe(0);
+        if (refusedByStateTool) {
+          const out = JSON.parse(pre.stdout) as { hookSpecificOutput?: { permissionDecision?: string } };
+          expect(out.hookSpecificOutput?.permissionDecision, `${label}: ${command}`).toBe("allow");
+        } else {
+          expect(pre.stdout, `${label}: ${command}`).toBe("");
+        }
+      }
+      const env: NodeJS.ProcessEnv = { ...process.env, AIDLC_PROJECT_DIR: undefined, CLAUDE_PROJECT_DIR: undefined };
+      delete env.AIDLC_STATE_TRANSITION_OWNER;
+      delete env.AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS;
+      const ran = spawnSync("bun", [join(dir, ".aidlc", "tools", "aidlc-state.ts"), "approve", "requirements-analysis"], {
+        cwd: dir,
+        encoding: "utf-8",
+        env,
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      });
+      const words = `${ran.stdout}${ran.stderr}`;
+      expect(words.includes("Stage status cannot be changed with aidlc-state.ts approve"), `${label}: ${words}`)
+        .toBe(refusedByStateTool);
     }
   });
 
@@ -4732,5 +4951,359 @@ describe("a kept next run by its id is judged as the command it runs", () => {
     expect(call(["next", "--request", skip, "--", "and keep the old layout"], "kept-skip-words"))
       .toBe(call(["next", "--", "and keep the old layout"], "typed-words"));
     expect(call(["next", "--request", jump], "kept-jump")).toBe("allow");
+  });
+});
+
+// --- guard-tool-call: the four guards in the adapter's own process -----------
+//
+// A child process loads the whole engine again, so a shell call that started
+// the four guards as children cost five engine loads. They run their core hook
+// inside the adapter's process, as on Codex. These cases drive the real
+// adapter: stand-in guards that record their pid show where each one ran, and
+// the same calls through a twin project whose guard files export no run() show
+// that each decision is the one the guard's own process gave. Without run() the
+// adapter starts the guard as a child, as it always did; that child is this
+// project's own hook file only on the copy channel (a compiled engine starts
+// its packaged hook instead), so those cases run on the copy channel.
+const GUARD_HOOKS = [
+  "aidlc-state-transition-guard.ts",
+  "aidlc-reviewer-scope.ts",
+  "aidlc-review-freeze.ts",
+  "aidlc-plan-approval-guard.ts",
+] as const;
+const COPY_CHANNEL: NodeJS.ProcessEnv = { AIDLC_COMPILED_EXECUTABLE: undefined };
+
+type GuardAnswer = { code: number; stderr?: string; throws?: "Error" | "TypeError" };
+
+// A guard that records the pid it ran in and answers as told. With `child` it
+// exports no run(), so the adapter can only start it as its own process.
+function standInGuard(capture: string, hook: string, answer: GuardAnswer, child = false): string {
+  return [
+    'import { appendFileSync } from "node:fs";',
+    `${child ? "" : "export "}async function run(_input: string): Promise<number> {`,
+    `  appendFileSync(${JSON.stringify(capture)}, JSON.stringify({ pid: process.pid, hook: ${JSON.stringify(hook)} }) + "\\n");`,
+    answer.throws === "Error" ? '  throw new Error("STANDIN-THREW");' : "",
+    answer.throws === "TypeError" ? "  if (answer() > 0) return (undefined as unknown as { x: number }).x;" : "",
+    answer.stderr ? `  process.stderr.write(${JSON.stringify(answer.stderr)});` : "",
+    `  return ${answer.code};`,
+    "}",
+    "function answer(): number { return 1; }",
+    "if (import.meta.main) process.exit(await run(await Bun.stdin.text()));",
+  ].join("\n");
+}
+
+function standInGuards(dir: string, capture: string, answers: (hook: string) => GuardAnswer, child = false): void {
+  for (const hook of GUARD_HOOKS) {
+    writeFileSync(join(dir, ".aidlc", "hooks", hook), standInGuard(capture, hook, answers(hook), child), "utf-8");
+  }
+}
+
+function guardRuns(capture: string): Array<{ pid: number; hook: string }> {
+  if (!existsSync(capture)) return [];
+  return readFileSync(capture, "utf-8").trim().split("\n").filter(Boolean)
+    .map((line) => JSON.parse(line) as { pid: number; hook: string });
+}
+
+// The shipped guards, each behind a file whose run is no function: the adapter
+// starts the real hook as its own process, the path every call took before.
+// The file keeps the hook's other exports, because one guard imports another
+// by its file name (the plan check reads shell writes through review-freeze).
+function childOnlyGuards(dir: string): void {
+  for (const hook of GUARD_HOOKS) {
+    const file = join(dir, ".aidlc", "hooks", hook);
+    const real = hook.replace(/\.ts$/, ".real.ts");
+    cpSync(file, join(dir, ".aidlc", "hooks", real));
+    writeFileSync(file, [
+      `export * from "./${real}";`,
+      "export const run = undefined;",
+      `if (import.meta.main) {`,
+      `  const { run } = await import("./${real}");`,
+      "  process.exit(await run(await Bun.stdin.text()));",
+      "}",
+    ].join("\n"), "utf-8");
+  }
+}
+
+// The drop lines doctor reads, without their timestamps.
+function dropLines(dir: string): string[] {
+  const root = join(dir, "aidlc");
+  return (readdirSync(root, { recursive: true }) as string[])
+    .filter((name) => name.endsWith(".drops"))
+    .sort()
+    .flatMap((name) => readFileSync(join(root, name), "utf-8").split("\n").filter(Boolean))
+    .map((line) => line.replace(/^[^\t]*\t/, ""));
+}
+
+function inProject(text: string, dir: string): string {
+  return text
+    .replaceAll(JSON.stringify(dir).slice(1, -1), "<project>")
+    .replaceAll(dir, "<project>")
+    .replaceAll(toPosix(dir), "<project>");
+}
+
+function guardDecision(dir: string, payload: Record<string, unknown>) {
+  const r = runAdapter(dir, "guard-tool-call", payload, COPY_CHANNEL);
+  return { code: r.code, stdout: inProject(r.stdout, dir), drops: dropLines(dir).map((line) => inProject(line, dir)) };
+}
+
+function permission(stdout: string): string | undefined {
+  if (!stdout.trim()) return undefined;
+  return (JSON.parse(stdout) as { hookSpecificOutput?: { permissionDecision?: string } }).hookSpecificOutput?.permissionDecision;
+}
+
+// A reviewer scoped to U01, delegated in a VS Code chat.
+function reviewerOnU01(dir: string, session: string): void {
+  const record = seededRecordDir(dir);
+  mkdirSync(join(record, ".aidlc-engine"), { recursive: true });
+  writeFileSync(
+    join(record, ".aidlc-engine/reviewer-dispatch.json"),
+    JSON.stringify({ reviewer: "aidlc-architecture-reviewer-agent", stage: "functional-design", unit: "U01", exempt: [] }),
+    "utf-8",
+  );
+  runAdapter(dir, "subagent-start", {
+    hook_event_name: "SubagentStart",
+    cwd: dir,
+    session_id: session,
+    agent_type: "aidlc-architecture-reviewer-agent",
+    agent_id: "vscode-agent-twin",
+  });
+}
+
+// Requirements Analysis with its review recorded READY: the requirements file
+// is frozen until the person decides at the gate.
+function frozenRequirements(dir: string): string {
+  const stage = join(seededRecordDir(dir), "inception", "requirements-analysis");
+  mkdirSync(stage, { recursive: true });
+  writeFileSync(join(stage, "requirements.md"), "# Requirements\n");
+  writeFileSync(join(stage, "requirements-analysis-questions.md"), "# Requirements Questions\n");
+  const tool = (file: string, args: string[]): string => {
+    const r = spawnSync(process.execPath, [join(dir, ".aidlc", "tools", file), ...args, "--project-dir", dir], {
+      encoding: "utf-8",
+      env: {
+        ...process.env,
+        AIDLC_PROJECT_DIR: undefined,
+        CLAUDE_PROJECT_DIR: undefined,
+        AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1",
+        AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
+      } as NodeJS.ProcessEnv,
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    if (r.status !== 0) throw new Error(`${file} ${args.join(" ")}: ${r.stdout}${r.stderr}`);
+    return r.stdout;
+  };
+  const review = ["review", "--stage", "requirements-analysis", "--reviewer", "aidlc-product-lead-agent", "--iteration", "1"];
+  const { reviewFile } = JSON.parse(tool("aidlc-log.ts", review)) as { reviewFile: string };
+  mkdirSync(dirname(join(dir, reviewFile)), { recursive: true });
+  writeFileSync(
+    join(dir, reviewFile),
+    "**Verdict:** READY\n**Reviewer:** aidlc-product-lead-agent\n**Iteration:** 1\n\n### Findings\n\nFixture review.\n",
+  );
+  tool("aidlc-log.ts", [...review, "--verdict", "READY"]);
+  tool("aidlc-state.ts", ["gate-start", "requirements-analysis"]);
+  return join(stage, "requirements.md");
+}
+
+describe("t249 Copilot guard-tool-call runs the four guards in the adapter's own process", () => {
+  test("G1: a shell call runs the four guards inside the adapter's process, in order", () => {
+    const dir = scratchProject(true);
+    const capture = join(dir, "guard-runs.ndjson");
+    standInGuards(dir, capture, () => ({ code: 0 }));
+    const r = runAdapter(dir, "guard-tool-call", withCwd(FIXTURES.preToolUse_bash, dir));
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toBe("");
+    const runs = guardRuns(capture);
+    expect(runs.map((run) => run.hook)).toEqual([...GUARD_HOOKS]);
+    expect(r.pid).toBeGreaterThan(0);
+    expect(runs.map((run) => run.pid)).toEqual(GUARD_HOOKS.map(() => r.pid));
+  });
+
+  test("G2: a write and a subagent launch run their guards inside the adapter's process", () => {
+    const dir = orchestrationProject();
+    const capture = join(dir, "guard-runs.ndjson");
+    standInGuards(dir, capture, () => ({ code: 0 }));
+    const write = runAdapter(dir, "guard-tool-call", withCwd({
+      ...FIXTURES.preToolUse_write,
+      tool_input: { path: join(dir, "src", "notes.ts"), file_text: "x" },
+    }, dir));
+    expect(write.code, write.stderr).toBe(0);
+    expect(guardRuns(capture)).toEqual(
+      ["aidlc-reviewer-scope.ts", "aidlc-review-freeze.ts", "aidlc-plan-approval-guard.ts"].map((hook) => ({ pid: write.pid, hook })),
+    );
+    rmSync(capture);
+    const launch = runAdapter(dir, "guard-tool-call", {
+      hook_event_name: "PreToolUse",
+      cwd: dir,
+      tool_name: "task",
+      tool_input: { agent_type: "aidlc-product-agent", prompt: "Write the contribution." },
+    });
+    expect(launch.code, launch.stderr).toBe(0);
+    expect(guardRuns(capture)).toEqual([{ pid: launch.pid, hook: "aidlc-plan-approval-guard.ts" }]);
+  });
+
+  test("G3: every guard decision is byte for byte the one the guard's own process gave", () => {
+    const session = "11111111-2222-4333-8444-555555555557";
+    const sibling = (dir: string, unit: string, file: string) =>
+      join(seededRecordDir(dir), "construction", unit, "functional-design", file);
+    const cases: Array<{
+      name: string;
+      project: () => string;
+      setup?: (dir: string) => unknown;
+      payload: (dir: string, setup: unknown) => Record<string, unknown>;
+      expect: (decision: { stdout: string }) => void;
+    }> = [
+      {
+        name: "an ordinary shell command passes silently",
+        project: () => scratchProject(true),
+        payload: (dir) => withCwd(FIXTURES.preToolUse_bash, dir),
+        expect: (d) => expect(d.stdout).toBe(""),
+      },
+      {
+        name: "a shell call that runs a hook is refused by the state-transition guard",
+        project: () => scratchProject(true),
+        payload: (dir) => withCwd({ ...FIXTURES.preToolUse_bash, tool_input: { command: "bun .aidlc/tools/aidlc.ts engine hook record-human-turn" } }, dir),
+        expect: (d) => {
+          expect(permission(d.stdout)).toBe("deny");
+          expect(d.stdout).toContain("AIDLC runtime records and hooks belong to the harness");
+        },
+      },
+      {
+        name: "the same call with no cwd in the payload",
+        project: () => scratchProject(true),
+        payload: () => {
+          const payload: Record<string, unknown> = { ...FIXTURES.preToolUse_bash, tool_input: { command: "bun .aidlc/tools/aidlc.ts engine hook record-human-turn" } };
+          delete payload.cwd;
+          return payload;
+        },
+        expect: (d) => expect(d.stdout).toContain("AIDLC runtime records and hooks belong to the harness"),
+      },
+      {
+        name: "a shell command that writes code before the plan is approved is refused",
+        project: () => scratchProject(true),
+        setup: (dir) => seedUnapprovedCodeGeneration(dir),
+        payload: (dir) => withCwd({ ...FIXTURES.preToolUse_bash, tool_input: { command: "git diff --output=src/blocked.diff" } }, dir),
+        expect: (d) => expect(permission(d.stdout)).toBe("deny"),
+      },
+      {
+        name: "a write of code before the plan is approved is refused",
+        project: () => scratchProject(true),
+        setup: (dir) => seedUnapprovedCodeGeneration(dir),
+        payload: (dir) => withCwd({ ...FIXTURES.preToolUse_write, tool_input: { path: join(dir, "src", "blocked.ts"), file_text: "x" } }, dir),
+        expect: (d) => expect(permission(d.stdout)).toBe("deny"),
+      },
+      {
+        name: "a reviewer's edit of two sibling files is refused with the first one's words",
+        project: () => scratchProject(true),
+        setup: (dir) => reviewerOnU01(dir, session),
+        payload: (dir) => ({
+          hook_event_name: "PreToolUse",
+          session_id: session,
+          cwd: dir,
+          tool_name: "editFiles",
+          tool_input: { files: [sibling(dir, "U02", "design.md"), sibling(dir, "U03", "design.md")] },
+        }),
+        expect: (d) => {
+          expect(permission(d.stdout)).toBe("deny");
+          expect(d.stdout).toContain("U02");
+          expect(d.stdout).not.toContain("U03");
+        },
+      },
+      {
+        name: "a reviewer's read of two sibling files is refused with the first one's words",
+        project: () => scratchProject(true),
+        setup: (dir) => reviewerOnU01(dir, session),
+        payload: (dir) => ({
+          hook_event_name: "PreToolUse",
+          session_id: session,
+          cwd: dir,
+          tool_name: "read_file",
+          tool_input: { filePaths: [sibling(dir, "U02", "design.md"), sibling(dir, "U03", "design.md")] },
+        }),
+        expect: (d) => {
+          expect(permission(d.stdout)).toBe("deny");
+          expect(d.stdout).toContain("U02");
+          expect(d.stdout).not.toContain("U03");
+        },
+      },
+      {
+        name: "a write the latest review froze is refused",
+        project: () => orchestrationProject(),
+        setup: (dir) => frozenRequirements(dir),
+        payload: (dir, file) => withCwd({ ...FIXTURES.preToolUse_write, tool_input: { path: file as string, file_text: "x" } }, dir),
+        expect: (d) => {
+          expect(permission(d.stdout)).toBe("deny");
+          expect(d.stdout).toContain("latest review is final");
+        },
+      },
+      {
+        name: "launching the developer before the plan is approved is refused",
+        project: () => orchestrationProject(),
+        setup: (dir) => seedUnapprovedCodeGeneration(dir),
+        payload: (dir) => ({
+          hook_event_name: "PreToolUse",
+          cwd: dir,
+          tool_name: "task",
+          tool_input: { agent_type: "aidlc-developer-agent", prompt: "AIDLC-UNIT: todo-core\nImplement todo-core" },
+        }),
+        expect: (d) => {
+          expect(permission(d.stdout)).toBe("deny");
+          expect(d.stdout).toContain("Code generation cannot start");
+        },
+      },
+      {
+        name: "a launch gets the stage rules, and the plan check passes the rewritten brief",
+        project: () => orchestrationProject(),
+        payload: (dir) => ({
+          hook_event_name: "PreToolUse",
+          cwd: dir,
+          tool_name: "agent",
+          tool_input: { agent: "aidlc-product-agent", prompt: "Run .aidlc/aidlc-common/stages/inception/user-stories.md and write the contribution." },
+        }),
+        expect: (d) => expect(d.stdout).toContain("AIDLC_DISPATCH_RULES_BEGIN"),
+      },
+      {
+        name: "a routine AI-DLC command in VS Code is allowed without the Allow prompt",
+        project: () => scratchProject(true),
+        payload: (dir) => ({
+          hook_event_name: "PreToolUse",
+          session_id: session,
+          cwd: dir,
+          tool_name: "run_in_terminal",
+          tool_input: { command: "bun .aidlc/tools/aidlc.ts --version", explanation: "AI-DLC step", goal: "AI-DLC step", mode: "sync" },
+        }),
+        expect: (d) => expect(permission(d.stdout)).toBe("allow"),
+      },
+    ];
+    for (const c of cases) {
+      const [here, child] = [c.project(), c.project()];
+      childOnlyGuards(child);
+      const ranHere = guardDecision(here, c.payload(here, c.setup?.(here)));
+      const ranAsChild = guardDecision(child, c.payload(child, c.setup?.(child)));
+      expect(ranHere, c.name).toEqual(ranAsChild);
+      expect(ranHere.code, c.name).toBe(0);
+      expect(ranHere.drops, c.name).toEqual([]);
+      c.expect(ranHere);
+    }
+  });
+
+  test("G4: a guard that throws fails alone with the line its own process left, and a later refusal still reaches the agent", () => {
+    const answers = (hook: string): GuardAnswer =>
+      hook === "aidlc-state-transition-guard.ts" ? { code: 0, throws: "TypeError" }
+        : hook === "aidlc-reviewer-scope.ts" ? { code: 0, throws: "Error" }
+        : hook === "aidlc-review-freeze.ts" ? { code: 2, stderr: "STANDIN-FREEZE-REFUSAL: the reviewed file is frozen.\n" }
+        : { code: 0 };
+    const [here, child] = [scratchProject(true), scratchProject(true)];
+    standInGuards(here, join(here, "guard-runs.ndjson"), answers);
+    standInGuards(child, join(child, "guard-runs.ndjson"), answers, true);
+    const ranHere = guardDecision(here, withCwd(FIXTURES.preToolUse_bash, here));
+    const ranAsChild = guardDecision(child, withCwd(FIXTURES.preToolUse_bash, child));
+    expect(ranHere).toEqual(ranAsChild);
+    expect(permission(ranHere.stdout)).toBe("deny");
+    expect(ranHere.stdout).toContain("STANDIN-FREEZE-REFUSAL");
+    expect(ranHere.drops).toEqual([
+      expect.stringMatching(/^reviewer-scope exited 1 under the Copilot adapter: error: STANDIN-THREW$/),
+      expect.stringMatching(/^state-transition-guard exited 1 under the Copilot adapter: TypeError: /),
+    ]);
+    // The refusal ends the call: the plan check after it never ran.
+    expect(guardRuns(join(here, "guard-runs.ndjson")).map((run) => run.hook)).toEqual(GUARD_HOOKS.slice(0, 3));
   });
 });

@@ -50,7 +50,7 @@ The 3 Initialization stages run as a single deterministic tool call (`aidlc-util
 - **0.2 Workspace Detection** — Rule-based scan identifies Java 17, Spring Boot 3.2, Maven, brownfield project
 - **0.3 State Init** — Initializes `aidlc-state.md` with scope `bugfix`, depth `Minimal`, and the domain stages marked for execution
 
-> Progress: 3/9 overall | 3/3 INITIALIZATION stages complete. Next: Reverse Engineering
+> Setting up a bugfix workflow for this: 6 stages, 6 approval gates.
 
 ### Stage 2.1 — Reverse Engineering
 
@@ -83,7 +83,7 @@ You select **Approve**.
 The aidlc-product-agent persona loads and creates clarifying questions at `<record>/inception/requirements-analysis/requirements-analysis-questions.md`:
 
 ```markdown
-## Q1: Bug Severity Classification
+## Q1. [Product owner] Bug Severity Classification
 How severe is this bug for your users?
 A. Critical — causes data loss or security exposure
 B. High — blocks a core workflow for affected users
@@ -207,7 +207,7 @@ This example builds a notification service for a task management application. Th
 
 The 3 Initialization stages run automatically inside `aidlc-utility intent-create`. Workspace Detection identifies: TypeScript, Node.js 20, Express, PostgreSQL, brownfield project with existing task and user services.
 
-> Progress: 3/33 overall | Scope: feature, Depth: Standard
+> Setting up a feature workflow for this: 30 stages, 30 approval gates, 5 stages repeat per unit of work in Construction.
 
 ### Ideation Phase (stages 1.1-1.7)
 
@@ -223,7 +223,7 @@ stakeholders, decision authority, communication needs, and scope:
 - [desc] Initial description: "A notification service for our task management app..."
 - [scope] Workflow-selected scope: `feature`.
 
-## Q1. Which notification channels are in scope?
+## Q1. [Product owner] Which notification channels are in scope?
 A. In-app only
 B. In-app + email
 C. In-app + email + push
@@ -264,7 +264,7 @@ Defines scope boundaries: in-scope (3 trigger types, user preferences, email dig
 
 Compiles the initiative brief aggregating all Ideation outputs. Phase boundary verification confirms intent-to-scope traceability.
 
-> Progress: 10/33 overall | IDEATION complete. Verification Gate passed.
+> Progress: 7 of 30 stages done. Next: Reverse Engineering.
 
 ### Inception Phase (stages 2.1-2.9)
 
@@ -323,10 +323,11 @@ also open `<record>/verification-command.txt`. The canonical command must be a
 nonblank single line of at most 1024 characters. Control characters and
 display-spoofing characters (Unicode format characters, including zero-width and
 bidi controls, line/paragraph separators, and no-break space U+00A0) are refused.
-You choose **Approve**; only after recording that exact answer in the same session
-does the typed setter authorize this command for the intent's checkpoints.
+You choose **Approve** (in that chat, or in a new one while it is the newest
+question asked); only after recording that exact answer does the typed setter
+authorize this command for the intent's checkpoints.
 
-> Progress: 19/33 overall | INCEPTION complete. Verification Gate passed.
+> Progress: 16 of 30 stages done. Next: Functional Design.
 
 ### Construction Phase (stages 3.1-3.7)
 
@@ -361,10 +362,11 @@ aidlc engine bolt checkpoint --action ask --unit "notification-core" --kind skel
 It presents "Verified with `bun run verify:notifications` (exit 0). Approve this
 completed notification-core?" with **Approve** / **Request Changes** and waits.
 The code span shows the full recorded command, not a summary. You choose
-**Approve**; only that exact reply in that session, to this checkpoint question,
-authorizes approval. An unrelated reply, another session's reply, or a reply to
-a different question does not. The conductor records your actual choice in the
-same session, never passing `--user-input` you did not choose:
+**Approve**; only that exact reply to this checkpoint question authorizes
+approval, in that chat or in a new one while it is the newest question asked.
+An unrelated reply, the agent's own words, or a reply to a different question
+does not. The conductor records your actual choice in the chat you answered in,
+never passing `--user-input` you did not choose:
 
 ```bash
 aidlc engine bolt checkpoint --action approve --unit "notification-core" --kind skeleton --user-input 'Approve'
@@ -418,7 +420,7 @@ Generates build instructions, runs the full test suite across all 3 Units: 47 te
 
 Configures CI pipeline with lint, build, test, and security scan stages. Quality gates: coverage >= 75%, no critical vulnerabilities.
 
-> Progress: 26/33 overall | CONSTRUCTION complete. Verification Gate passed.
+> Progress: 23 of 30 stages done. Next: Deployment Pipeline.
 
 ### Operation Phase (stages 4.1-4.7)
 
@@ -429,8 +431,6 @@ Configures CI pipeline with lint, build, test, and security scan stages. Quality
 **Stage 4.4 — Observability Setup** — CloudWatch dashboards for notification delivery latency, email send rate, dead-letter queue depth. Alarms for delivery failures.
 
 **Stage 4.7 — Feedback & Optimization** — SLO targets (99.9% in-app delivery, 99% email delivery within 30s), cost analysis, feedback loop document.
-
-> Progress: 33/33 overall | OPERATION complete. Feature workflow complete.
 
 ### Key differences from bugfix
 

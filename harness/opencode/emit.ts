@@ -38,9 +38,8 @@ import {
 // renamed to opencode's native `steps:` key (per-agent step cap, opencode
 // >= 1.0.134; at the cap opencode forces a final TEXT-ONLY turn - the agent
 // can return a summary but cannot make tool calls, so the persona's Turn
-// Budget prose still carries the write-early instruction). Unknown disallowed
-// tools fail the build instead of silently landing in opencode's inert
-// options bag.
+// Budget prose still carries the write-early instruction). A disallowedTools
+// value without Task fails the build.
 function emitSubagentMd(raw: string, srcPath: string, tierCap: EmitContext["tierCap"]): string {
   if (raw.charCodeAt(0) === 0xfeff) raw = raw.slice(1);
   const m = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n/);
@@ -109,6 +108,21 @@ function embedShippedEntrypoints(raw: string, distRoot: string): string {
   return raw.replace(marker, `/* @aidlc-shipped-entrypoints@ */ ${rendered}`);
 }
 
+// The adapter imports its leaf tools from core/ in this repository; in a
+// project they sit in the engine tree beside .opencode/ (both channels ship
+// it), never inside .opencode/, which opencode scans for tools.
+const PLUGIN_TOOL_IMPORTS = ["aidlc-executable-path.ts"];
+
+function projectedToolImports(raw: string, harnessDir: string): string {
+  let out = raw;
+  for (const file of PLUGIN_TOOL_IMPORTS) {
+    const authored = `"../../../core/tools/${file}"`;
+    if (!out.includes(authored)) throw new Error(`opencode adapter no longer imports ${file} from core/tools.`);
+    out = out.replaceAll(authored, `"../../${harnessDir}/tools/${file}"`);
+  }
+  return out;
+}
+
 export default function emit(ctx: EmitContext): void {
   const { coreRoot, harnessRoot, distRoot, harnessDir, substituteToken, tierCap } = ctx;
   const SHELL = join(distRoot, ".opencode");
@@ -163,9 +177,12 @@ export default function emit(ctx: EmitContext): void {
     path: join(SHELL, "plugin", "aidlc-opencode-adapter.ts"),
     content: () =>
       substituteToken(
-        embedShippedEntrypoints(
-          readFileSync(join(harnessRoot, "plugin", "aidlc-opencode-adapter.ts"), "utf-8"),
-          distRoot,
+        projectedToolImports(
+          embedShippedEntrypoints(
+            readFileSync(join(harnessRoot, "plugin", "aidlc-opencode-adapter.ts"), "utf-8"),
+            distRoot,
+          ),
+          harnessDir,
         ),
       ),
   });

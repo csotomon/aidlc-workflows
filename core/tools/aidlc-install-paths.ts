@@ -19,7 +19,7 @@ import { projectionFiles, sha256File, walkFiles } from "./aidlc-distribution.ts"
 // so equivalent spellings of the same directories (macOS /tmp and /private/tmp,
 // a symlinked XDG_DATA_HOME, a re-spelled AIDLC_INSTALL_ROOT) describe one
 // install instead of rejecting each other's launcher as tampered.
-function lexicalInstallRoot(): string {
+export function lexicalInstallRoot(): string {
   const explicit = process.env.AIDLC_INSTALL_ROOT?.trim();
   if (explicit) return isAbsolute(explicit) ? explicit : resolve(process.cwd(), explicit);
   if (platform() === "win32") {
@@ -40,7 +40,16 @@ export function versionRoot(version: string): string {
   return join(versionsRoot(), requireVersion(version));
 }
 
-function lexicalBinRoot(): string {
+// AI-DLC's own plugin catalogue keeps this one path across releases, so a
+// person adds it to Claude Code or Codex once. Its record lists the files the
+// last refresh wrote, which is what makes them AI-DLC's.
+export function pluginCatalogueRoot(): string {
+  return join(installRoot(), "plugins");
+}
+
+export const PLUGIN_CATALOGUE_RECORD = ".aidlc-catalogue.json";
+
+export function lexicalBinRoot(): string {
   const explicit = process.env.AIDLC_BIN_DIR?.trim();
   if (explicit) return isAbsolute(explicit) ? explicit : resolve(process.cwd(), explicit);
   return platform() === "win32"
@@ -157,9 +166,8 @@ export function windowsPosixCommandPath(): string | null {
 // "warning: an unescaped backslash at end of string is not portable" to stderr
 // on the single-backslash operand, on EVERY launch, which would spam every hook
 // invocation. The loop also removes the external-command dependency, so the
-// forwarder works in a stripped MSYS that lacks tr. Manually spot-checked on
-// Windows Server 2022 Git Bash (MINGW64) — zero warnings, identical output;
-// CI exercises the loop via a POSIX /bin/sh test, not MINGW64 itself.
+// forwarder works in a stripped MSYS that lacks tr. CI exercises the loop via
+// a POSIX /bin/sh test, not MINGW64 itself.
 export function windowsPosixShim(): string {
   return [
     "#!/bin/sh",
@@ -197,7 +205,7 @@ export function windowsPosixShim(): string {
 export function previousWindowsPosixShims(): readonly string[] {
   return [
     // v2 — normalised backslashes via `tr "\\" "/"`, which emitted a per-launch
-    // GNU-tr stderr warning in MSYS; superseded by the v3 builtin loop.
+    // GNU-tr stderr warning in MSYS.
     [
       "#!/bin/sh",
       "# aidlc-gitbash-forwarder-v2",

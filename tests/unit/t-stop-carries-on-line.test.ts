@@ -35,7 +35,6 @@ function carryOnParagraph(rel: string): string {
   return found[0] as string;
 }
 
-// Every step the old notes named, now in the skill's own words.
 const STEPS = [
   '"AI-DLC is carrying on with <stage>." (or "AI-DLC is carrying on.")',
   '"The last AI-DLC step stopped on a problem: ..."',
@@ -47,10 +46,8 @@ const STEPS = [
   "`--single`, `--checkpoint` or `--questions-file`",
   "end your turn without asking it again",
   "If the person asked to stop here, run `{{INVOKE}} engine orchestrate park --person-asked`.",
-  // Rules parts: the receipt the agent holds; a stale one gets the current step.
   "`{{INVOKE}} engine orchestrate continue <receipt>` with the receipt of the last part you hold",
   "a receipt that no longer fits is answered with the current step",
-  // A recorded result that moved on, and stale evidence: one fresh next.
   "after a result you recorded moved the work on",
   "run one fresh `{{INVOKE}} engine orchestrate next` (never an earlier receipt)",
   "Never report an approval the person did not give, and never mark a stage done or approved just to end the turn.",
@@ -86,8 +83,6 @@ describe("t-stop-carries-on-line: the agent's steps for the one-line Stop note",
         );
         expect(paragraph, rel).not.toContain("first say the carrying-on line to them once");
       } else {
-        // One plain sentence in the agent's own reply, only when it carries on
-        // with the work: the line as the note names it, and nothing else.
         expect(paragraph, rel).toContain(
           `${tool} does not show the note to the person, so if you carry on with the work (the rules parts, the stage, or a fresh \`next\`), ` +
             "first say the carrying-on line to them once, word for word and as a sentence of its own",
@@ -116,11 +111,18 @@ describe("t-stop-carries-on-line: the agent's steps for the one-line Stop note",
   // case first, then the line, and the line is AI-DLC's, never the person's
   // answer (a Kiro IDE agent recorded "user implicitly confirmed by hook
   // trigger" as a decision right after saying it).
-  test("(b2) the hook's step puts the question case first and says the line confirms nothing", () => {
+  // A person who asked to stop or pause is parked by the step itself, with the
+  // install's exact command: on Kiro CLI no tool sees what they typed while the
+  // agent worked, and the agent explained the note to them in engine words.
+  test("(b2) the hook's step puts the question case first, parks a person who asked to stop, and says the line confirms nothing", () => {
     const stop = readFileSync(join(REPO_ROOT, "core/hooks/aidlc-continue-workflow.ts"), "utf-8");
-    const step = stop.slice(stop.indexOf("const SAY_THE_LINE ="), stop.indexOf("const STOP_NOTE ="));
-    expect(step.indexOf("If you had just asked the person a question")).toBeGreaterThan(0);
-    expect(step.indexOf("If you had just asked the person a question")).toBeLessThan(step.indexOf("first say that line"));
+    const step = stop.slice(stop.indexOf("const AGENT_STEP_OPENING ="), stop.indexOf("const STOP_NOTE ="));
+    const question = step.indexOf('const AGENT_STEP_OPENING = "If you had just asked the person a question"');
+    const park = step.indexOf("If the person asked you to stop or pause, run ");
+    expect(step).toContain('aidlcToolInvocation("orchestrate")} park --person-asked\\` and end your turn.');
+    expect(question).toBe(0);
+    expect(park).toBeGreaterThan(question);
+    expect(park).toBeLessThan(step.indexOf("first say that line"));
     expect(step).toContain("it is AI-DLC's line, not the person's, and confirms nothing, so record nothing as theirs because of it");
   });
 
@@ -184,8 +186,6 @@ describe("t-stop-carries-on-line: the agent's steps for the one-line Stop note",
       const step = REPORT_STEP.exec(carryOnParagraph(rel));
       if (step === null) throw new Error(`${rel}: no report step built from the run-stage`);
       expect(step[1], rel).toBe("{{INVOKE}} engine orchestrate report --stage <directive.stage> --result <outcome>");
-      // Filled from what the agent holds for a team-owned Unit's isolated
-      // step, it is one whole command with only the outcome left to fill in.
       const held = { stage: "code-generation", unit: "alpha", single: true };
       const built = [
         step[1].replace("{{INVOKE}}", "aidlc").replace("<directive.stage>", held.stage).replace(" --result", ` ${step[2].replace("<directive.unit>", held.unit)} --result`),

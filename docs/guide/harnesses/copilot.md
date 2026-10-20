@@ -152,15 +152,15 @@ then use the ignored local `dist/copilot/` output.
   The human's next chat message does; the questions FILE with `[Answer]:` tags
   stays the source of truth.
 - **Only what you type counts as your reply.** When the agent hands work to a
-  subagent (a reviewer, a builder), VS Code delivers the agent's written brief
-  to the hooks the same way it delivers your chat messages. AI-DLC recognizes
-  that brief and never records it as your turn: it does not satisfy an
-  approval, is not read as your answer or your requested changes, and does not
-  apply a typed switch. Anything you type, including while a subagent is still
-  running, counts as before. The exception is the first few seconds after a
-  subagent starts in your chat: a message then that AI-DLC cannot match to a
-  brief is taken to be that brief and is not counted, and if it was yours you
-  are asked to reply again.
+  subagent (a reviewer, a builder), VS Code and the Copilot CLI deliver the
+  agent's written brief to the hooks the same way they deliver your chat
+  messages. AI-DLC recognizes that brief and never records it as your turn: it
+  does not satisfy an approval, is not read as your answer or your requested
+  changes, and does not apply a typed switch. Anything you type, including
+  while a subagent is still running, counts as before. The exception is the
+  first few seconds after a subagent starts in your chat: a message then that
+  AI-DLC cannot match to a brief is taken to be that brief and is not counted,
+  and if it was yours you are asked to reply again.
 - **Typing `/aidlc` with your request keeps your words.** Copilot hands a
   skill you invoke by its slash name to AI-DLC as the skill's own text with
   your words filled in, not as the line you typed. AI-DLC rebuilds that line
@@ -212,8 +212,8 @@ then use the ignored local `dist/copilot/` output.
   `sensor-required-sections`, `sensor-upstream-coverage`, and
   `sensor-claim-sources`, which only read files), and the project commands in
   AI-DLC's own command table (`engine log`, `engine state`, `engine runtime`,
-  `engine learnings`, `engine testing-posture`, `engine intent list`, and the
-  rest), in the direct, source-dispatcher, compiled, or tool-script spelling.
+  `engine learnings`, `engine testing-posture`, `engine intent list`,
+  `engine intent add-checkout`, and the rest), in the direct, source-dispatcher, compiled, or tool-script spelling.
   The copy channel's `aidlc-utility.ts <verb>` gets the same answer as its
   `engine workspace <verb>` spelling. It answers only when all of these hold:
   - the call carries VS Code's chat session, every AI-DLC guard has passed,
@@ -264,11 +264,16 @@ then use the ignored local `dist/copilot/` output.
     `engine recompose` when you have not replied since the last question
     (after you approve a plan change, the recompose that applies it runs
     without a click), `next --skip`, `next --add`, `engine jump execute`,
-    `engine scope change`, `engine intent create --skip`, `engine config set`
-    and `next config set`,
-    `engine bolt set-autonomy`, the `engine state` status changes, and the
+    `engine scope change`, `engine intent create --skip`,
+    `engine intent remove-checkout` (it takes code out of what the review
+    covers), `engine config set` and `next config set`,
+    `engine bolt set-autonomy`, the `engine state` status changes while the
+    state-transition check is off for that work (by you or by your Guard
+    Policy), since then the change would land, and the
     gate setters (`set-unit-gate-rhythm`, `set-construction-checkpoints`,
-    `set-skeleton-stance`, `set-status`). `set-construction-checkpoints`, and
+    `set-skeleton-stance`, `set-status`). While that check is on, AI-DLC
+    refuses an `engine state` status change itself, so there is nothing to
+    click. `set-construction-checkpoints`, and
     `engine config set` for one of your checks (plan approval, summary
     confirmation, a fence, or Guard Policy), run without a click when you
     asked for that change in the chat since the last decision, and turning a

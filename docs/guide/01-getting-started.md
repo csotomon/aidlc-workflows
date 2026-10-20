@@ -47,7 +47,7 @@ install runs its hooks and commands through `aidlc` and does not call `bun`. On
 Windows, it installs for the current account, registers the bin directory in
 persistent User PATH, and updates the current PowerShell process. Run it from a
 normal PowerShell window; one opened with "Run as administrator" gets a warning
-and a prompt, since installing as administrator is less safe. If another session cannot find `aidlc`, open a new terminal.
+and a prompt, since installing as administrator is less safe. A terminal app or IDE that was already open (Kiro, VS Code, Cursor) keeps the PATH it started with, so quit and reopen it before using `aidlc` there; a new tab inside it is not enough.
 Use [`-NoModifyPath`](18-install-and-lifecycle.md#windows-powershell) to skip
 both PATH changes and invoke the printed direct command instead. On macOS,
 Linux, or WSL, apply the installer's PATH instruction if `aidlc` is not found.
@@ -57,6 +57,7 @@ PATH:
 
 ```text
 PASS installed AI-DLC X.Y.Z with all harness runtimes
+Plugin marketplace for Claude Code and Codex: /home/you/.local/share/aidlc/plugins (add it once; updates keep it current)
 Next: aidlc config
 ```
 
@@ -64,6 +65,7 @@ and like this when it is not:
 
 ```text
 PASS installed AI-DLC X.Y.Z with all harness runtimes
+Plugin marketplace for Claude Code and Codex: /home/you/.local/share/aidlc/plugins (add it once; updates keep it current)
 Add AI-DLC to PATH for this shell:
   export PATH="/home/you/.local/bin:$PATH"
 Then run: aidlc config
@@ -84,6 +86,9 @@ The SHA-256 checks always run; the GitHub CLI adds the signed-provenance check
 ([Release Authentication](18-install-and-lifecycle.md#release-authentication)).
 On Windows the installer's own result starts with `Installed AI-DLC X.Y.Z`, and
 the paths in later screens use Windows separators, such as `.claude\`.
+The plugin marketplace line is for AI-DLC's own plugins: add that path once in
+Claude Code or Codex ([Plugins](18-install-and-lifecycle.md#plugins)), or skip
+it if you do not use them.
 
 Prefer to manage the project files yourself, or cannot install a native
 executable? The manual-copy path is the one place Bun is needed: install
@@ -97,7 +102,10 @@ command.
 
 ## 2. Set up your project
 
-Run `aidlc config` in the project folder. This run uses a new, empty folder:
+Run `aidlc config` in the project folder. AI-DLC does not look upward for a git
+root, so this folder is where `aidlc/` will live; with several repos, see
+[Where `aidlc/` lives](03-spaces-and-intents.md#where-aidlc-lives). This run uses
+a new, empty folder:
 
 ```text
 $ mkdir inventory-api && cd inventory-api && git init -q
@@ -110,7 +118,7 @@ $ aidlc config
     Harness    Claude Code detected  (2.1.296 on your PATH)
     Project    git repo, no AI-DLC files yet
     AWS        credentials not found
-    Runtime    one PATH fix needed - shown at the end
+    Runtime    aidlc on this shell's PATH only: start Claude Code from a terminal
 
   Set up AI-DLC for Claude Code with recommended defaults?
 
@@ -136,10 +144,12 @@ Nothing is written before you answer. What it checked:
   ([Configure or Refresh a Project](18-install-and-lifecycle.md#configure-or-refresh-a-project)).
 - **AWS**: whether it found AWS credentials, which matters only if you choose
   Amazon Bedrock as the model provider.
-- **Runtime**: whether AI-DLC's hooks can find the `aidlc` command. The fix it
-  counts here matters only if you start Claude Code from a desktop icon rather
-  than a terminal. Setup does not print it at the end; `aidlc doctor` does, in
-  step 4.
+- **Runtime**: whether AI-DLC's hooks can find the `aidlc` command. Claude Code
+  started from a terminal hands that terminal's PATH to the hooks, so `aidlc`
+  on your shell's PATH is enough, and the line says to start it from a
+  terminal; a PATH fix it counts here is shown at the end of setup. If you
+  start Claude Code from a desktop icon instead, `aidlc doctor` says what to
+  add, in step 4.
 
 Press Enter for the recommended defaults. They record:
 
@@ -191,8 +201,8 @@ every default except the provider, where it chose Amazon Bedrock:
     2. Codex CLI
     3. GitHub Copilot
     4. Cursor
-    5. Kiro CLI
-    6. Kiro IDE
+    5. Kiro CLI (V2)
+    6. Kiro            Kiro IDE and Kiro CLI on its v3 engine
     7. opencode
   Harness [1]:
   Using Claude Code.
@@ -200,7 +210,7 @@ every default except the provider, where it chose Amazon Bedrock:
   Step 2 of 6 - Model provider
   No AWS credentials were detected.
     1. keep current     inherit the provider already configured in the harness (default)
-    2. amazon-bedrock   write the AWS region and profile to settings.json
+    2. amazon-bedrock   write the AWS region and profile to settings.local.json, just for you
   Provider [1]: 2
   AWS region [us-east-1]:
   AWS profile [default credential chain]:
@@ -250,7 +260,7 @@ What each step writes:
 | Step | Writes |
 | --- | --- |
 | 1. Harness | Which tool's files to set up (`.claude/` for Claude Code). |
-| 2. Model provider | `keep current` writes nothing. `amazon-bedrock` adds `CLAUDE_CODE_USE_BEDROCK` and `AWS_REGION` (and the profile, when you name one) to the `env` block of `.claude/settings.json`. |
+| 2. Model provider | `keep current` writes nothing. `amazon-bedrock` adds `CLAUDE_CODE_USE_BEDROCK` and `AWS_REGION` (and the profile, when you name one) to the `env` block of your own `.claude/settings.local.json` (git ignores it), never the shared `.claude/settings.json`; the project's record of the answer keeps no profile. |
 | 3. Model effort preset | The preset name in the file step 6 picks; `unchanged` records none. |
 | 4. Plugins | Which installed plugins are on. |
 | 5. MCP servers | `.mcp.json` with the shipped servers, or none. |
@@ -318,8 +328,8 @@ up, with no default:
     2. Codex CLI
     3. GitHub Copilot
     4. Cursor
-    5. Kiro CLI
-    6. Kiro IDE
+    5. Kiro CLI (V2)
+    6. Kiro            Kiro IDE and Kiro CLI on its v3 engine
     7. opencode
   Harness [1-7]:
 
@@ -344,7 +354,7 @@ $ git status --short
 | Path | What it is | Commit it? |
 | --- | --- | --- |
 | `.claude/` | Claude Code's AI-DLC files: the `/aidlc` skill, agents, stages, hooks, tools, and `settings.json` (hooks, permissions, the welcome message) | Yes |
-| `aidlc/` | The workspace: `aidlc/spaces/default/memory/` holds the rules (the framework's defaults, and your team's and project's own), and each piece of work gets its record here | Yes |
+| `aidlc/` | AI-DLC's records: `aidlc/spaces/default/memory/` holds the rules (the framework's defaults, and your team's and project's own), and each piece of work gets its record here | Yes |
 | `.gitignore` | AI-DLC's own marked block, added to yours if you had one | Yes |
 | `.mcp.json` | The MCP servers, when you chose them | Yes |
 | `aidlc.settings.json` | The model preset | Yes |
@@ -444,8 +454,8 @@ this kind of work. Here it picked `mvp`; your words may get another:
 ```text
  Plan
  I'd run the "mvp" plan for: "Build a REST API for inventory management" - 19 stages, 19 approval
- gates, 5 stages repeat per unit of work in Construction; lead agent only. Do you want me to go
- ahead with it, use a different plan, or tailor one to this task?
+ gates, 5 stages repeat per unit of work in Construction. Do you want me to go ahead with it, use
+ a different plan, or tailor one to this task?
  > 1. Go ahead with the "mvp" plan
       19 stages: skips operations and ships the core API.
    2. Use a different plan
@@ -568,7 +578,6 @@ aidlc/spaces/default/intents/261013-inventory-rest-api/ideation/intent-capture/.
 
 Stage: Intent Capture & Framing
 Review outcome: Concerns remain for your decision.
-Why now: First review completed.
 
 | ID   | Severity | Where                                      | Status |
 |------|----------|--------------------------------------------|--------|
@@ -607,13 +616,11 @@ the stage back to address them (say what to change, or that you want the
 follow-up question). This run approved:
 
 ```text
-Progress: 1/19 in-scope stages complete (4/33 overall) | 1/4 IDEATION. Next: Feasibility & Constraints
+Progress: 1 of 19 stages done. Next: Feasibility & Constraints.
 Now working on Feasibility & Constraints, wearing the architect hat.
 ```
 
-The overall count includes the three setup stages that ran when the record was
-created. The record for this piece of work now holds (trimmed to the main
-files):
+The record for this piece of work now holds (trimmed to the main files):
 
 ```text
 aidlc/spaces/default/intents/261013-inventory-rest-api/
@@ -637,8 +644,8 @@ The steps are the same everywhere; these differ:
 | Harness | Config value | Open | Invoke |
 | --- | --- | --- | --- |
 | Claude Code | `claude` | `claude` | `/aidlc` |
-| Kiro IDE | `kiro-ide` | Open the project, then choose **aidlc** in the chat panel's agent picker | `/aidlc` |
-| Kiro CLI (legacy) | `kiro` | `kiro-cli chat` | `/aidlc` |
+| Kiro (Kiro IDE, Kiro CLI on v3) | `kiro-ide` | Open the project, then choose **aidlc** in the chat panel's agent picker, or run `kiro-cli` in the project | `/aidlc` |
+| Kiro CLI (V2) | `kiro` | `kiro-cli chat` | `/aidlc` |
 | Codex CLI | `codex` | `codex` | `$aidlc` |
 | Cursor | `cursor` | Open Cursor or run `agent` | `/aidlc` |
 | opencode | `opencode` | `opencode` | `/aidlc` |
@@ -649,8 +656,8 @@ After config, complete the one step config names for your tool:
 | Harness | Typical action |
 | --- | --- |
 | Claude Code | If Claude Code is already open in this folder, exit it and start it again |
-| Kiro IDE | Open the configured project, then choose **aidlc** in the chat panel's agent picker |
-| Kiro CLI (legacy) | Start `kiro-cli chat`; the project selects the AI-DLC agent |
+| Kiro (Kiro IDE, Kiro CLI on v3) | Open the configured project, then choose **aidlc** in the chat panel's agent picker, or start `kiro-cli` in the project |
+| Kiro CLI (V2) | Start `kiro-cli chat`; the project selects the AI-DLC agent |
 | Codex CLI | Approve the hook trust prompt or apply the generated trust seed |
 | Cursor | Open the configured project or run `agent` |
 | opencode | Start `opencode` in the project |
@@ -658,9 +665,9 @@ After config, complete the one step config names for your tool:
 
 The welcome message is Claude Code's alone. AI-DLC draws its own status line
 on Claude Code; on Codex, setup offers Codex's built-in status line, with the
-task progress AI-DLC keeps current. On Kiro CLI 2.24.1 or later, use `kiro-ide`, which pins
-Kiro's v3 engine; `kiro` is the legacy row ([Kiro CLI](harnesses/kiro-cli.md)
-says how an existing `kiro` project switches).
+task progress AI-DLC keeps current. For Kiro's v3 engine on Kiro CLI 2.24.1 or
+later, use `kiro-ide`, which pins it; `kiro` is Kiro CLI (V2)
+([Kiro CLI](harnesses/kiro-cli.md) says how an existing `kiro` project switches).
 
 In Kiro IDE, the **aidlc** agent appears in the agent picker only after you
 trust the folder and reload the window: if the Restricted Mode banner shows,

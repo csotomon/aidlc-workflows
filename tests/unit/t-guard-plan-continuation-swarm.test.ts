@@ -783,7 +783,7 @@ describe("delegated continuation follows the parent approval and live fence", ()
 // `invoke-swarm` directive. These cases run it exactly so: project and cwd are
 // the parent, and the targets are where the engine's own records put them.
 describe("a parallel batch's writes judged from the parent", () => {
-  function parentHook(pd: string, toolName: "Write" | "Bash", toolInput: Record<string, unknown>) {
+  function parentHook(pd: string, toolName: "Write" | "Bash", toolInput: Record<string, unknown>, cwd = pd) {
     const result = Bun.spawnSync([process.execPath, join(AIDLC_SRC, "hooks", "aidlc-plan-approval-guard.ts")], {
       timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       cwd: pd,
@@ -793,7 +793,7 @@ describe("a parallel batch's writes judged from the parent", () => {
       },
       stdin: Buffer.from(JSON.stringify({
         hook_event_name: "PreToolUse", tool_name: toolName, tool_input: toolInput,
-        session_id: "swarm-parent-session", cwd: pd,
+        session_id: "swarm-parent-session", cwd,
       })),
       stdout: "pipe", stderr: "pipe",
     });
@@ -920,20 +920,22 @@ describe("a parallel batch's writes judged from the parent", () => {
       `cat ${sh(join(pd, "src", `${UNIT}.ts`))} 2>&1 | head -60`,
       `git -C ${sh(pd)} status --short && git -C ${sh(pd)} log --oneline -3`,
       `cd ${sh(join(pd, "src"))} && ls`,
+      // Inline code and AI-DLC's own tool in a spelling the shell reading does not admit: their
+      // writes cannot be seen, and the plan is approved and current, so they run, as a serial
+      // build's commands do once its plan is approved. The approval admits them, not the spelling.
+      "node -e 'console.log(1)'",
+      `bun ${sh(join(AIDLC_SRC, "tools", "aidlc-swarm.ts"))} --help 2>&1 | head -60`,
+      // A Windows-spelled tool path reaches bash only when quoted, and is then AI-DLC's own tool run.
+      ...(win32 ? [`bun "${join(AIDLC_SRC, "tools", "aidlc-swarm.ts")}" --help 2>&1 | head -60`] : []),
     ]) {
       const probe = parentHook(pd, "Bash", { command });
       expect(probe.code, `${command}\n${probe.out}\n${probe.err}`).toBe(0);
     }
     expect(blocked(pd)).toBe(before);
-    // Anything that writes in the main checkout, whose writes cannot be seen (inline code),
-    // or that runs an AI-DLC tool in a spelling the guard does not admit, still waits.
+    // Anything seen writing in the main checkout still waits.
     const refusedProbes = [
       `ls ${sh(pd)} > ${sh(join(pd, "listing.txt"))}`,
       `cat ${sh(join(pd, "src", `${UNIT}.ts`))} | tee ${sh(join(pd, "copy.ts"))}`,
-      "node -e 'console.log(1)'",
-      `bun ${sh(join(AIDLC_SRC, "tools", "aidlc-swarm.ts"))} --help 2>&1 | head -60`,
-      // A Windows-spelled tool path reaches bash only when quoted, and is then AI-DLC's own tool run.
-      ...(win32 ? [`bun "${join(AIDLC_SRC, "tools", "aidlc-swarm.ts")}" --help 2>&1 | head -60`] : []),
     ];
     for (const command of refusedProbes) {
       const refused = parentHook(pd, "Bash", { command });
@@ -941,6 +943,69 @@ describe("a parallel batch's writes judged from the parent", () => {
       expect(refused.err).toContain(REFUSAL);
     }
     expect(blocked(pd)).toBe(before + refusedProbes.length);
+  });
+
+  // While every listed Unit's approved plan holds, a command whose writes cannot be seen runs,
+  // as a serial build's does once its plan is approved: the live shapes of workers, reviewers
+  // and the conductor, before `prepare` and after. What it is seen to write still lands only in
+  // one prepared worktree; whether the main checkout changed is the landing's to say.
+  test("while every listed plan holds, a command whose writes cannot be seen runs; one seen writing elsewhere waits", () => {
+    const pd = fixture(true);
+    publish(pd, GROUP_UNITS);
+    const before = blocked(pd);
+    const ran = (command: string, cwd = pd) => {
+      const result = parentHook(pd, "Bash", { command }, cwd);
+      expect(result.code, `${command}\n${result.out}\n${result.err}`).toBe(0);
+      expect(result.out).toBe("");
+    };
+    // Before `prepare`: the conductor reads the plans through a variable.
+    ran('cat package.json; R=aidlc/spaces; for u in alpha beta; do ls "$R/$u" 2>/dev/null; done; echo "exit=$?"');
+    succeeded(prepare(pd, false, GROUP_UNITS));
+    publish(pd, GROUP_UNITS);
+    const alpha = sh(child(pd, "alpha"));
+    const beta = sh(child(pd, "beta"));
+    for (const command of [
+      `cd ${alpha} && bun test; echo "exit=$?"`,
+      `cd ${beta} && bun --version && bun test src/beta.test.ts; echo "exit=$?"; bun test; echo "full-suite exit=$?"`,
+      `R=${alpha}/aidlc/spaces; cat "$R/notes.md" 2>&1; echo "exit=$?"`,
+      `W=${beta}\nls -la "$W/src/" 2>&1\nfind "$W/src" -name "*.ts"`,
+      `cd ${alpha} && for f in src/*.ts; do cat "$f"; done`,
+      `cd ${alpha} && bun -e 'console.log(1)'`,
+      `cd ${alpha} && bun test > ${alpha}/test.log 2>&1; echo "exit=$?"`,
+      `bun ${alpha}/.claude/tools/aidlc.ts engine sensor-traceability --stage-slug code-generation 2>&1`,
+      // AI-DLC's own report named through a variable, as in a serial build once the plan is approved:
+      // the engine judges its own verbs.
+      "T=.claude/tools/aidlc.ts; bun $T engine orchestrate report --stage code-generation --result approved",
+    ]) ran(command);
+    ran(`bun test; echo "exit=$?"`, child(pd, "beta"));
+    expect(blocked(pd)).toBe(before);
+
+    // Seen writing in the main checkout (its code or its record), or in two worktrees: refused at once.
+    const waits = [
+      `bun test > test.log 2>&1; echo "exit=$?"`,
+      `cd ${alpha} && bun test; echo "exit=$?" > ${sh(join(pd, "src", "alpha.ts"))}`,
+      `echo "$X" > ${sh(join(recordDir(pd)!, "notes.md"))}`,
+      `echo "$X" > ${alpha}/a.txt; echo "$X" > ${beta}/b.txt`,
+    ];
+    for (const command of waits) {
+      const refused = parentHook(pd, "Bash", { command });
+      expect(refused.code, `${command}\n${refused.out}\n${refused.err}`).toBe(2);
+      expect(refused.err).toContain(REFUSAL);
+    }
+    expect(blocked(pd)).toBe(before + waits.length);
+
+    // A step that lists no Units holds no plan to admit by.
+    publish(pd, []);
+    const none = parentHook(pd, "Bash", { command: `bun test; echo "exit=$?"` });
+    expect(none.code, `${none.out}\n${none.err}`).toBe(2);
+    expect(none.err).toContain(REFUSAL);
+
+    // A listed plan edited since the person approved it: the same command waits, with today's words.
+    publish(pd, GROUP_UNITS);
+    revise(pd, false, "alpha");
+    const changed = parentHook(pd, "Bash", { command: `cd ${beta} && bun test; echo "exit=$?"` });
+    expect(changed.code, `${changed.out}\n${changed.err}`).toBe(2);
+    expect(changed.err).toContain(REFUSAL);
   });
 
   test("the review request and verdict commands are the engine's own, whichever folder or Unit they name", () => {
@@ -1131,5 +1196,62 @@ describe("prepare with plan approval off", () => {
     expect(codeGenerationExecutionAllowed(worker, TARGET)).toBe(true);
     expect(readAuditShardEvents(pd).filter((row) => row.event === "PLAN_APPROVAL_RECORDED")).toHaveLength(0);
     expect(readFileSync(join(codeGenerationRecordDir(pd, UNIT), "code-generation-questions.md"), "utf-8")).toBe(questions);
+  });
+
+  // Nobody approved this plan, so a change after the engine's record is no
+  // reason to ask for an approval: strict built one Unit at a time carries on,
+  // and so does the parallel build. Asking would loop, since `next` never asks.
+  test("under strict, a pull after the plan-approval-off record still sets the Units up, with no approval asked", () => {
+    const pd = fixture(false, false);
+    const statePath = seededStateFile(pd);
+    writeFileSync(statePath, readFileSync(statePath, "utf-8").replace(
+      "- **Guard Policy**: strict (set by you)\n",
+      "- **Guard Policy**: strict (set by you)\n- **Plan Approval**: off (set by you)\n",
+    ));
+    publish(pd);
+    const directive = { kind: "invoke-swarm", stage: STAGE, units: [UNIT] } as unknown as Parameters<typeof publishPlanApprovalSkip>[1];
+    expect(publishPlanApprovalSkip(pd, directive)).toBe(true);
+    const questionsPath = join(codeGenerationRecordDir(pd, UNIT), "code-generation-questions.md");
+    const questions = readFileSync(questionsPath, "utf-8");
+    writeFileSync(join(pd, "src", "pulled.ts"), "export const pulled = 1;\n");
+    git(pd, ["add", "src/pulled.ts"]);
+    git(pd, ["commit", "-qm", "a pull"]);
+
+    const prepared = prepare(pd);
+    expect(prepared.code, `${prepared.out}\n${prepared.err}`).toBe(0);
+    expect(JSON.parse(prepared.out).change_notices).toEqual([
+      "1 file changed since this plan was approved: src/pulled.ts. Building alpha now.",
+    ]);
+    const worker = child(pd);
+    expect(existsSync(join(worker, "src", "pulled.ts"))).toBe(true);
+    expect(starts(pd)).toHaveLength(1);
+    expect(codeGenerationExecutionAllowed(worker, TARGET)).toBe(true);
+    const rows = () => readAuditShardEvents(pd);
+    expect(rows().filter((row) => row.event === "CHANGE_ACCEPTED")).toHaveLength(1);
+    expect(rows().filter((row) => row.event === "PLAN_APPROVAL_SKIPPED")).toHaveLength(1);
+    expect(rows().filter((row) => row.event === "PLAN_APPROVAL_RECORDED")).toHaveLength(0);
+    expect(rows().filter((row) => row.event === "DECISION_RECORDED" &&
+      auditBlockField(row.block, "Checkpoint") === "plan-approval")).toHaveLength(0);
+    expect(readFileSync(questionsPath, "utf-8")).toBe(questions);
+
+    // The way on leads on: `next` hands back the batch that is out, asking nothing.
+    const after = tool(pd, "aidlc-orchestrate.ts", ["next", "--project-dir", pd]);
+    succeeded(after);
+    expect(JSON.parse(after.out)).toMatchObject({ kind: "invoke-swarm", units: [UNIT] });
+
+    // The batch is sent back, the engine builds the new attempt's plan without
+    // asking again, and another pull lands before the batch is picked up again.
+    completeAndReject(pd);
+    expect(publishPlanApprovalSkip(pd, directive)).toBe(true);
+    expect(rows().filter((row) => row.event === "PLAN_APPROVAL_SKIPPED")).toHaveLength(2);
+    writeFileSync(join(pd, "src", "later.ts"), "export const later = 1;\n");
+    git(pd, ["add", "src/later.ts"]);
+    git(pd, ["commit", "-qm", "another pull"]);
+    const resumed = prepare(pd, true);
+    expect(resumed.code, `${resumed.out}\n${resumed.err}`).toBe(0);
+    expect(JSON.parse(resumed.out).change_notices).toEqual([
+      "1 file changed since this plan was approved: src/later.ts. Building alpha now.",
+    ]);
+    expect(rows().filter((row) => row.event === "PLAN_APPROVAL_RECORDED")).toHaveLength(0);
   });
 });

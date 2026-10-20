@@ -1,6 +1,6 @@
 // code-generation-states.ts - every Code Generation state a person can be in,
 // built through the installed tools, and the seven harness shapes of one tool
-// call against the plan-approval guard.
+// call (and of a call to the person's MCP server) against the plan-approval guard.
 //
 // The no-dead-end sweep (tests/unit/t-code-generation-no-dead-end.test.ts)
 // asks, in every state and for every harness: is the person's message kept,
@@ -8,8 +8,7 @@
 // guard, does every refusal name a way past the guard admits, and are the
 // developer dispatch and a source write refused before the approval and
 // admitted after it. The helpers here are the plan-approval ask test's
-// (tests/unit/t-plan-approval-ask.test.ts), kept apart so that file stays
-// another PR's rebase surface.
+// (tests/unit/t-plan-approval-ask.test.ts).
 import { spawnSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
@@ -189,10 +188,10 @@ export function shellWords(command: string): string[] {
 }
 
 /** An engine command spelled `bun .claude/tools/... ...`, run as the agent would. */
-export function runNamed(proj: string, command: string): RunResult {
+export function runNamed(proj: string, command: string, extra: NodeJS.ProcessEnv = {}): RunResult {
   const words = shellWords(command);
   if (words[0] !== "bun") throw new Error(`not an engine command: ${command}`);
-  return run(proj, [...words.slice(1)]);
+  return run(proj, [...words.slice(1)], undefined, extra);
 }
 
 export function auditEvents(proj: string) {
@@ -247,7 +246,7 @@ export interface StateBuilder {
 }
 
 /** The review a reviewer leaves for a stage, the shape the engine reads (tests/harness/scope-run.ts reviewText). */
-function reviewText(reviewer: string): string {
+export function reviewText(reviewer: string): string {
   return `## Review\n\n**Verdict:** READY\n**Reviewer:** ${reviewer}\n**Date:** 2026-01-01T00:00:00Z\n**Iteration:** 1\n\n### Findings\n\n**Prior findings**\n\n| ID | Now | Severity | Note |\n|---|---|---|---|\n\n**New findings**\n\n| Severity | Location | Finding | Required action |\n|---|---|---|---|\n\n### Summary\n\nReady.\n`;
 }
 
@@ -264,6 +263,56 @@ function askOpen(proj: string): Step {
     throw new Error(`expected the plan question, got ${JSON.stringify(step)}`);
   }
   return step;
+}
+
+/**
+ * The open Code Generation gate (S11a): the plan approved (asked, or built
+ * without asking where plan approval is off), the build's outputs and the
+ * stage's review written, and `report --result awaiting-approval` run. The
+ * report moves the state and writes no step, so no step is current: a door is
+ * refused naming `next` (the pin test below the sweep).
+ */
+export function openCodeGenerationGate(
+  policy: "strict" | "relaxed" | "off" = "relaxed",
+  planApproval: "on" | "off" = "on",
+): string {
+  const proj = createCodeGenerationProject(policy, planApproval);
+  // What a poc run has here: this stage in progress (the previous stage's
+  // approval marks it [-], aidlc-state.ts) and Units Generation skipped
+  // (core/scopes/aidlc-poc.md), so the stage's records are stage-level.
+  const stateFile = seededStateFile(proj);
+  writeFileSync(stateFile, readFileSync(stateFile, "utf-8")
+    .replace("- [ ] code-generation", "- [-] code-generation")
+    .replace(/^(- \[.\] units-generation) \u2014 EXECUTE$/m, "$1 \u2014 SKIP"), "utf-8");
+  next(proj);
+  if (planApproval === "on") {
+    askOpen(proj);
+    approve(proj);
+    next(proj);
+  } else {
+    writePlan(proj);
+    const step = next(proj);
+    if (step.kind !== "run-stage" || step.plan_approval?.status !== "approved") {
+      throw new Error(`expected the build without asking, got ${JSON.stringify(step)}`);
+    }
+  }
+  // The build's outputs, the stage's review, then the gate.
+  writeFileSync(join(stageDir(proj), "traceability.json"), "{}\n", "utf-8");
+  writeFileSync(join(proj, "src", "slugify.ts"), "export const slugify = (s: string) => s;\n", "utf-8");
+  const reviewer = "aidlc-architecture-reviewer-agent";
+  const review = ["engine", "log", "review", "--stage", "code-generation", "--reviewer", reviewer, "--iteration", "1"];
+  const requested = run(proj, [DISPATCHER, ...review]);
+  const reviewFile = (JSON.parse(requested.stdout || "{}") as { reviewFile?: string }).reviewFile;
+  if (requested.status !== 0 || !reviewFile) throw new Error(`no review file named:\n${requested.stdout}${requested.stderr}`);
+  mkdirSync(dirname(join(proj, reviewFile)), { recursive: true });
+  writeFileSync(join(proj, reviewFile), reviewText(reviewer), "utf-8");
+  const recorded = run(proj, [DISPATCHER, ...review, "--verdict", "READY"]);
+  if (recorded.status !== 0) throw new Error(`the review was not recorded:\n${recorded.stdout}${recorded.stderr}`);
+  const opened = run(proj, [DISPATCHER, "engine", "orchestrate", "report", "--stage", "code-generation",
+    "--result", "awaiting-approval"]);
+  const gate = JSON.parse(opened.stdout || "{}") as { kind?: string };
+  if (opened.status !== 0 || gate.kind !== "print") throw new Error(`the gate did not open:\n${opened.stdout}${opened.stderr}`);
+  return proj;
 }
 
 export const STATES: StateBuilder[] = [
@@ -461,43 +510,11 @@ export const STATES: StateBuilder[] = [
   },
   {
     id: "S11a", name: "no current step: the gate opened and retired it",
-    build: () => {
-      const proj = createCodeGenerationProject();
-      // What a poc run has here: this stage in progress (the previous stage's
-      // approval marks it [-], aidlc-state.ts) and Units Generation skipped
-      // (core/scopes/aidlc-poc.md), so the stage's records are stage-level.
-      const stateFile = seededStateFile(proj);
-      writeFileSync(stateFile, readFileSync(stateFile, "utf-8")
-        .replace("- [ ] code-generation", "- [-] code-generation")
-        .replace(/^(- \[.\] units-generation) \u2014 EXECUTE$/m, "$1 \u2014 SKIP"), "utf-8");
-      next(proj);
-      askOpen(proj);
-      approve(proj);
-      next(proj);
-      // The build's outputs, the stage's review, then the gate.
-      writeFileSync(join(stageDir(proj), "traceability.json"), "{}\n", "utf-8");
-      writeFileSync(join(proj, "src", "slugify.ts"), "export const slugify = (s: string) => s;\n", "utf-8");
-      const reviewer = "aidlc-architecture-reviewer-agent";
-      const review = ["engine", "log", "review", "--stage", "code-generation", "--reviewer", reviewer, "--iteration", "1"];
-      const requested = run(proj, [DISPATCHER, ...review]);
-      const reviewFile = (JSON.parse(requested.stdout || "{}") as { reviewFile?: string }).reviewFile;
-      if (requested.status !== 0 || !reviewFile) throw new Error(`no review file named:\n${requested.stdout}${requested.stderr}`);
-      mkdirSync(dirname(join(proj, reviewFile)), { recursive: true });
-      writeFileSync(join(proj, reviewFile), reviewText(reviewer), "utf-8");
-      const recorded = run(proj, [DISPATCHER, ...review, "--verdict", "READY"]);
-      if (recorded.status !== 0) throw new Error(`the review was not recorded:\n${recorded.stdout}${recorded.stderr}`);
-      const opened = run(proj, [DISPATCHER, "engine", "orchestrate", "report", "--stage", "code-generation",
-        "--result", "awaiting-approval"]);
-      const gate = JSON.parse(opened.stdout || "{}") as { kind?: string };
-      if (opened.status !== 0 || gate.kind !== "print") throw new Error(`the gate did not open:\n${opened.stdout}${opened.stderr}`);
-      // No current step now: a door is refused naming `next` (the pin test
-      // below the sweep). The sweep's own `next` makes the step current again,
-      // and the approved plan opens the build's doors.
-      return {
-        proj, session: SESSION, approved: true,
-        how: "approved, built, reviewed; report awaiting-approval opened the gate and retired the step; next re-issues it",
-      };
-    },
+    build: () => ({
+      proj: openCodeGenerationGate(),
+      session: SESSION, approved: true,
+      how: "approved, built, reviewed; report awaiting-approval opened the gate and retired the step; next re-issues it",
+    }),
   },
   {
     id: "S11b", name: "no current step: the chat compacted",
@@ -525,6 +542,28 @@ export const STATES: StateBuilder[] = [
   },
 ];
 
+/**
+ * The plan approved and the build step handed over, then the chat compacted:
+ * the step the agent held is set aside (`kind: "error"`, out of date) and no
+ * `next` has run since. Under Guard Policy off it is still the step.
+ */
+export function approvedBuildSetAside(policy: "strict" | "relaxed" | "off"): BuiltState {
+  const proj = createCodeGenerationProject(policy);
+  next(proj);
+  askOpen(proj);
+  approve(proj);
+  const step = next(proj);
+  if (step.kind !== "run-stage" || step.plan_approval?.status !== "approved") {
+    throw new Error(`expected the build step, got ${JSON.stringify(step)}`);
+  }
+  const markerPath = join(seededRecordDir(proj), ".aidlc-engine", "active-directive.json");
+  const marker = JSON.parse(readFileSync(markerPath, "utf-8")) as { owner_session?: string };
+  if (!invalidateActiveDirectiveContext(proj, readFileSync(seededStateFile(proj), "utf-8"), marker.owner_session ?? SESSION)) {
+    throw new Error("the build step could not be marked as lost to compaction");
+  }
+  return { proj, session: SESSION, approved: true, how: `Guard Policy ${policy}: approved, the build handed over, then the chat compacted` };
+}
+
 // ---------------------------------------------------------------------------
 // The seven harness shapes of one tool call
 // ---------------------------------------------------------------------------
@@ -549,7 +588,11 @@ export interface Shape {
   /** Install this harness's tree into the project (removing a sibling that shares the dir). */
   install(proj: string): void;
   call(proj: string, session: string, call: ToolCall): Verdict | Promise<Verdict>;
+  /** A call to one of the person's MCP servers, named and delivered as this harness's own hook entry gets it. */
+  mcp(proj: string, session: string): Verdict | Promise<Verdict>;
 }
+
+const MCP_INPUT = { message: "look this up" };
 
 const DIST = join(REPO_ROOT, "dist");
 
@@ -596,11 +639,18 @@ const claude: Shape = {
     { hook_event_name: "PreToolUse", session_id: session, cwd: proj, ...claudeInput(call, ".claude") },
     { CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj },
   )),
+  // settings.json sends no `mcp__` tool to the hooks; the group's own matchers are the next door.
+  mcp: (proj, session) => stderrVerdict(spawnShape(
+    proj, [join(proj, ".claude", "tools", "aidlc.ts"), "engine", "hook", "guard-tool-call"],
+    { hook_event_name: "PreToolUse", session_id: session, cwd: proj, tool_name: "mcp__everything__echo", tool_input: MCP_INPUT },
+    { CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj },
+  )),
 };
 
 // Codex gives every tool call its own turn and call ids; its adapter replays a
 // verdict only for a byte-identical delivery, so each call here carries its own.
 let codexCall = 0;
+const CODEX_ENV = { CLAUDE_PROJECT_DIR: undefined, CODEX_THREAD_ID: undefined, CODEX_SESSION_ID: undefined, AIDLC_COMPILED_EXECUTABLE: "" };
 
 const codex: Shape = {
   name: "codex", dir: ".codex",
@@ -619,9 +669,18 @@ const codex: Shape = {
         hook_event_name: "PreToolUse", cwd: proj, session_id: session,
         turn_id: `turn-sweep-${++codexCall}`, tool_use_id: `call-sweep-${codexCall}`, ...native,
       },
-      { CLAUDE_PROJECT_DIR: undefined, CODEX_THREAD_ID: undefined, CODEX_SESSION_ID: undefined, AIDLC_COMPILED_EXECUTABLE: "" },
+      CODEX_ENV,
     ));
   },
+  mcp: (proj, session) => stderrVerdict(spawnShape(
+    proj, [join(proj, ".codex", "hooks", "aidlc-codex-adapter.ts"), "guard-tool-call"],
+    {
+      hook_event_name: "PreToolUse", cwd: proj, session_id: session,
+      turn_id: `turn-sweep-${++codexCall}`, tool_use_id: `call-sweep-${codexCall}`,
+      tool_name: "mcp__everything__echo", tool_input: MCP_INPUT,
+    },
+    CODEX_ENV,
+  )),
 };
 
 const copilot: Shape = {
@@ -635,20 +694,32 @@ const copilot: Shape = {
         : call.tool === "Edit"
           ? { tool_name: "replace_string_in_file", tool_input: { filePath: call.path, oldString: "a", newString: "b" } }
           : { tool_name: "runSubagent", tool_input: { subagent_type: call.agent, prompt: respell(call.prompt, ".aidlc") } };
-    const result = spawnShape(
-      proj, [join(proj, ".aidlc", "hooks", "aidlc-copilot-adapter.ts"), "guard-tool-call"],
-      { hook_event_name: "PreToolUse", session_id: session, timestamp: new Date().toISOString(), cwd: proj, ...native },
-      { AIDLC_PROJECT_DIR: undefined, CLAUDE_PROJECT_DIR: undefined, AIDLC_COMPILED_EXECUTABLE: undefined },
-    );
-    if (result.status !== 0) return { code: result.status, said: `adapter failed: ${result.stderr.trim()}` };
-    const line = result.stdout.trim().split("\n").find((entry) => entry.startsWith("{"));
-    const out = line ? JSON.parse(line) as { hookSpecificOutput?: { permissionDecision?: string; permissionDecisionReason?: string } } : {};
-    const decision = out.hookSpecificOutput?.permissionDecision;
-    return decision === "deny"
-      ? { code: 2, said: out.hookSpecificOutput?.permissionDecisionReason ?? "" }
-      : { code: 0, said: "" };
+    return copilotCall(proj, session, native);
+  },
+  // VS Code's name for an MCP tool, then the Copilot CLI's: both must pass.
+  mcp: (proj, session) => {
+    for (const tool_name of ["mcp_everything_echo", "everything-echo"]) {
+      const verdict = copilotCall(proj, session, { tool_name, tool_input: MCP_INPUT });
+      if (verdict.code !== 0) return { code: verdict.code, said: `${tool_name}: ${verdict.said}` };
+    }
+    return { code: 0, said: "" };
   },
 };
+
+function copilotCall(proj: string, session: string, native: Record<string, unknown>): Verdict {
+  const result = spawnShape(
+    proj, [join(proj, ".aidlc", "hooks", "aidlc-copilot-adapter.ts"), "guard-tool-call"],
+    { hook_event_name: "PreToolUse", session_id: session, timestamp: new Date().toISOString(), cwd: proj, ...native },
+    { AIDLC_PROJECT_DIR: undefined, CLAUDE_PROJECT_DIR: undefined, AIDLC_COMPILED_EXECUTABLE: undefined },
+  );
+  if (result.status !== 0) return { code: result.status, said: `adapter failed: ${result.stderr.trim()}` };
+  const line = result.stdout.trim().split("\n").find((entry) => entry.startsWith("{"));
+  const out = line ? JSON.parse(line) as { hookSpecificOutput?: { permissionDecision?: string; permissionDecisionReason?: string } } : {};
+  const decision = out.hookSpecificOutput?.permissionDecision;
+  return decision === "deny"
+    ? { code: 2, said: out.hookSpecificOutput?.permissionDecisionReason ?? "" }
+    : { code: 0, said: "" };
+}
 
 const cursor: Shape = {
   name: "cursor", dir: ".cursor",
@@ -661,24 +732,29 @@ const cursor: Shape = {
         : call.tool === "Edit"
           ? { tool_name: "Edit", tool_input: { file_path: call.path, old_string: "a", new_string: "b" } }
           : { tool_name: "Task", tool_input: { description: "build", subagent_type: call.agent, prompt: respell(call.prompt, ".cursor") } };
-    const result = spawnShape(
-      proj, [join(proj, ".cursor", "hooks", "aidlc-cursor-adapter.ts"), "guards"],
-      {
-        conversation_id: session, generation_id: session, model: "", tool_use_id: "toolu_sweep",
-        session_id: session, hook_event_name: "preToolUse", cursor_version: "2026.07.23-e383d2b",
-        workspace_roots: [proj], user_email: "user@example.com", transcript_path: null, cwd: proj, ...native,
-      },
-      {
-        AIDLC_PROJECT_DIR: proj, AIDLC_HARNESS_DIR: ".cursor",
-        GIT_CONFIG_GLOBAL: join(proj, ".absent-global-gitconfig"), GIT_CONFIG_SYSTEM: join(proj, ".absent-system-gitconfig"),
-      },
-    );
-    if (result.status !== 0) return { code: result.status, said: `adapter failed: ${result.stderr.trim()}` };
-    const line = result.stdout.trim().split("\n").find((entry) => entry.startsWith("{"));
-    const out = line ? JSON.parse(line) as { permission?: string; agent_message?: string } : {};
-    return out.permission === "deny" ? { code: 2, said: out.agent_message ?? "" } : { code: 0, said: "" };
+    return cursorCall(proj, session, native);
   },
+  mcp: (proj, session) => cursorCall(proj, session, { tool_name: "MCP:echo", tool_input: MCP_INPUT }),
 };
+
+function cursorCall(proj: string, session: string, native: Record<string, unknown>): Verdict {
+  const result = spawnShape(
+    proj, [join(proj, ".cursor", "hooks", "aidlc-cursor-adapter.ts"), "guards"],
+    {
+      conversation_id: session, generation_id: session, model: "", tool_use_id: "toolu_sweep",
+      session_id: session, hook_event_name: "preToolUse", cursor_version: "2026.07.23-e383d2b",
+      workspace_roots: [proj], user_email: "user@example.com", transcript_path: null, cwd: proj, ...native,
+    },
+    {
+      AIDLC_PROJECT_DIR: proj, AIDLC_HARNESS_DIR: ".cursor",
+      GIT_CONFIG_GLOBAL: join(proj, ".absent-global-gitconfig"), GIT_CONFIG_SYSTEM: join(proj, ".absent-system-gitconfig"),
+    },
+  );
+  if (result.status !== 0) return { code: result.status, said: `adapter failed: ${result.stderr.trim()}` };
+  const line = result.stdout.trim().split("\n").find((entry) => entry.startsWith("{"));
+  const out = line ? JSON.parse(line) as { permission?: string; agent_message?: string } : {};
+  return out.permission === "deny" ? { code: 2, said: out.agent_message ?? "" } : { code: 0, said: "" };
+}
 
 function kiroNative(call: ToolCall, dir: string): { tool_name: string; tool_input: Record<string, unknown> } {
   switch (call.tool) {
@@ -697,6 +773,12 @@ const kiro: Shape = {
     { hook_event_name: "preToolUse", cwd: proj, session_id: session, ...kiroNative(call, ".kiro") },
     { CLAUDE_PROJECT_DIR: proj },
   )),
+  // The agent registers this guard for execute_bash, fs_write and subagent only; the adapter is the next door.
+  mcp: (proj, session) => stderrVerdict(spawnShape(
+    proj, [join(proj, ".kiro", "hooks", "aidlc-kiro-adapter.ts"), "plan-approval-guard"],
+    { hook_event_name: "preToolUse", cwd: proj, session_id: session, tool_name: "@everything/echo", tool_input: MCP_INPUT },
+    { CLAUDE_PROJECT_DIR: proj },
+  )),
 };
 
 const kiroIde: Shape = {
@@ -712,23 +794,18 @@ const kiroIde: Shape = {
       { CLAUDE_PROJECT_DIR: proj, USER_PROMPT: undefined },
     ));
   },
+  // The one card every non-read tool meets (aidlc-guard-tool-call.json).
+  mcp: (proj, session) => stderrVerdict(spawnShape(
+    proj, [join(proj, ".kiro", "hooks", "aidlc-kiro-adapter.ts"), "guard-tool-call"],
+    { hook_event_name: "PreToolUse", cwd: proj, session_id: session, tool_name: "mcp_everything_echo", tool_input: MCP_INPUT },
+    { CLAUDE_PROJECT_DIR: proj, USER_PROMPT: undefined },
+  )),
 };
 
 const opencode: Shape = {
   name: "opencode", dir: ".aidlc",
   install: (proj) => installTree(proj, "opencode", ".aidlc"),
-  call: async (proj, session, call) => {
-    // The shipped plugin with its own defaults: the shipped entrypoint list and
-    // the installed `bun .aidlc/tools/aidlc.ts engine` of the project.
-    const { default: createAdapter } = await import("../../dist/opencode/.opencode/plugin/aidlc-opencode-adapter.ts");
-    const client = {
-      session: {
-        get: async () => ({ data: {} }),
-        prompt: async () => {},
-      },
-    };
-    const adapter = await createAdapter({ client: client as never, directory: proj } as never);
-    const before = (adapter as Record<string, (a: unknown, b: unknown) => Promise<void>>)["tool.execute.before"];
+  call: (proj, session, call) => {
     const [tool, args] = call.tool === "Bash"
       ? ["bash", { command: respell(call.command, ".aidlc") }]
       : call.tool === "Write"
@@ -736,14 +813,30 @@ const opencode: Shape = {
         : call.tool === "Edit"
           ? ["edit", { filePath: call.path, oldString: "a", newString: "b" }]
           : ["task", { subagent_type: call.agent, prompt: respell(call.prompt, ".aidlc") }];
-    try {
-      await before({ tool, sessionID: session, callID: `sweep-${tool}` }, { args });
-      return { code: 0, said: "" };
-    } catch (error) {
-      return { code: 2, said: error instanceof Error ? error.message : String(error) };
-    }
+    return opencodeCall(proj, session, tool, args);
   },
+  mcp: (proj, session) => opencodeCall(proj, session, "everything_echo", MCP_INPUT),
 };
+
+// The shipped plugin with its own defaults: the shipped entrypoint list and the
+// installed `bun .aidlc/tools/aidlc.ts engine` of the project.
+async function opencodeCall(proj: string, session: string, tool: string, args: Record<string, unknown>): Promise<Verdict> {
+  const { default: createAdapter } = await import("../../dist/opencode/.opencode/plugin/aidlc-opencode-adapter.ts");
+  const client = {
+    session: {
+      get: async () => ({ data: {} }),
+      prompt: async () => {},
+    },
+  };
+  const adapter = await createAdapter({ client: client as never, directory: proj } as never);
+  const before = (adapter as Record<string, (a: unknown, b: unknown) => Promise<void>>)["tool.execute.before"];
+  try {
+    await before({ tool, sessionID: session, callID: `sweep-${tool}` }, { args });
+    return { code: 0, said: "" };
+  } catch (error) {
+    return { code: 2, said: error instanceof Error ? error.message : String(error) };
+  }
+}
 
 export const SHAPES: Shape[] = [claude, codex, copilot, cursor, kiro, kiroIde, opencode];
 

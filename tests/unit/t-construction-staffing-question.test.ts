@@ -57,8 +57,8 @@ const CHAT = chat("01995000-7a11-7000-8000-000000001395");
 const QUESTION = "Inception is done, and the plan has 2 Units. Who builds them?";
 const DEFAULT_LINE = "This session builds the 2 Units one after another. To have several teams each own a Unit " +
   "instead, say so before the first Unit is built.";
-const APPROVALS_LINE = "Each team builds its Unit start to finish and approves it after every stage. To approve " +
-  "once at the end of each Unit instead, say so before the first Unit is built.";
+const APPROVALS_LINE = "Each team will approve its Unit after every stage. Do you want them to approve once at the " +
+  "end of each Unit instead? I'd keep after every stage, so a wrong turn is caught at the stage where it happens.";
 const REPOS_LINE = "This work spans 2 repos, so this session builds its 2 Units: teams each owning a Unit is " +
   "not available yet for work across repos.";
 
@@ -247,11 +247,9 @@ describe("who builds the Units is asked once as Inception ends", () => {
     expect(ask.choices?.map((c) => c.label)).toEqual(["Just me", "Several teams"]);
     expect(String(ask.choices?.[0].command)).toEndWith("aidlc-state.ts set-unit-ownership solo");
     expect(String(ask.choices?.[1].command)).toEndWith("aidlc-state.ts set-unit-ownership team");
-    // How team approvals go is read before the pick, in the question itself.
     expect(String(ask.choices?.[1].detail)).toContain("approves it after every stage, or once at the end of the Unit");
     expect(ask.numbered_prose_question).toContain("1. **Just me**");
     expect(ask.numbered_prose_question).toContain("2. **Several teams**");
-    // Asking records nothing as the person's.
     expect(field(state(proj), "Unit Ownership")).toBeUndefined();
     expect(events(proj, "UNIT_OWNERSHIP_SET")).toEqual([]);
   });
@@ -298,7 +296,6 @@ describe("who builds the Units is asked once as Inception ends", () => {
     expect(ran.rc, ran.out).toBe(0);
     const after = state(proj);
     expect(field(after, "Unit Ownership")).toBe("solo");
-    // Every other line stays as it was.
     const lines = (content: string) =>
       content.split("\n").filter((line) => line.trim() !== "" && !/^- \*\*(Last Updated|Unit Ownership)\*\*:/.test(line));
     expect(lines(after)).toEqual(lines(before));
@@ -390,7 +387,6 @@ describe("who builds the Units is asked once as Inception ends", () => {
     const again = next(proj, [], CHAT);
     expect(again.kind).toBe("run-stage");
     expect(again.change_notices ?? []).not.toContain(DEFAULT_LINE);
-    // Once a Unit's work has started, another chat is not told it either.
     appendAuditEntry("UNIT_STARTED", { Stage: "functional-design", Unit: "alpha", "Run floor": "unstarted#0" }, proj);
     expect(next(proj, [], chat("01995000-7a11-7000-8000-000000001396")).change_notices ?? []).not.toContain(DEFAULT_LINE);
   });
@@ -419,7 +415,6 @@ describe("who builds the Units is asked once as Inception ends", () => {
     expect(step.kind, JSON.stringify(step)).toBe("run-stage");
     expect(step.change_notices ?? []).toContain(REPOS_LINE);
     expect(next(proj, [], CHAT).change_notices ?? []).not.toContain(REPOS_LINE);
-    // Asking for teams by name says the same, with the way on.
     const before = state(proj);
     const teams = runState(proj, ["set-unit-ownership", "team"]);
     expect(teams.rc).not.toBe(0);

@@ -58,7 +58,8 @@ Shipped agents are authored with a `tier:` (`judgment` | `balanced` | `templated
 The first-run wizard defaults to the `balanced` **preset**, which is distinct
 from the reviewer **tier**: it records medium effort for all three groups. On
 Kiro IDE, Cursor, and Copilot it records no preset, because agents there keep
-your session's model and effort.
+your session's model and effort (on Kiro, unless a model or effort is set for
+that agent).
 Select a preset with `aidlc config models --preset balanced --project --yes`:
 
 | Preset | Deciding | Reviewing | Writing up |
@@ -79,7 +80,7 @@ Explicit group dials still have no Kiro CLI surface. See
 [Model Policy](18-install-and-lifecycle.md#model-policy) for profiles, overrides,
 and the upgrade path.
 
-To change ONE agent's effort, run `aidlc config models --agent <name> --effort <low|medium|high|xhigh|max> --project --yes`. To pin its model, use `--model <id>` (a model ID enabled on your install) in place of `--effort`, or pass both. `--effort default` (or `--model default`) removes that one setting of the agent's, so the preset or group applies to it again; the command prints it as the undo of a change. `--local` instead of `--project` keeps the change to yourself. Config records the change in the settings file and rewrites that agent's file from it. Do not edit the `aidlc-*-agent` files by hand where config writes them: `aidlc config models --check` reports a hand edit as drift, and the next `aidlc config` puts the recorded value back. Claude Code, Codex, and opencode take both a model and an effort for one agent (Codex runs `max` as `xhigh`, and opencode runs `xhigh` as `high`). Kiro CLI takes a model, and an effort only together with a model. On Kiro IDE, Cursor, and Copilot every agent keeps the session's model and effort, and the command says what it could not apply there; on Kiro IDE a `model:` line you add by hand to an agent's `.kiro/agents/aidlc-*-agent.md` changes that agent until the next `aidlc config`. To cap EVERY agent when building your own distribution from source, set a `tier_cap:` in `core/memory/org.md`/`project.md` frontmatter or run the packager with `AIDLC_TIER_CAP=<tier>`. Both are pack-time knobs on `bun scripts/package.ts`, not runtime settings.
+To change ONE agent's effort, run `aidlc config models --agent <name> --effort <low|medium|high|xhigh|max> --project --yes`. To pin its model, use `--model <id>` (a model ID enabled on your install) in place of `--effort`, or pass both. `--effort default` (or `--model default`) removes that one setting of the agent's, so the preset or group applies to it again; the command prints it as the undo of a change. `--local` instead of `--project` keeps the change to yourself. Config records the change in the settings file and rewrites that agent's file from it. Do not edit the `aidlc-*-agent` files by hand where config writes them: `aidlc config models --check` reports a hand edit as drift, and the next `aidlc config` puts the recorded value back. Claude Code, Codex, and opencode take both a model and an effort for one agent (Codex runs `max` as `xhigh`, and opencode runs `xhigh` as `high`). Kiro CLI takes a model, and an effort only together with a model. Kiro IDE (and Kiro CLI on its v3 engine) takes both a model and an effort for one agent, written into that agent's `.kiro/agents/aidlc-<name>-agent.md` ([One agent on its own model and effort](harnesses/kiro-ide.md#one-agent-on-its-own-model-and-effort)); a preset or group effort changes nothing there. On Cursor and Copilot every agent keeps the session's model and effort, and the command says what it could not apply there. To cap EVERY agent when building your own distribution from source, set a `tier_cap:` in `core/memory/org.md`/`project.md` frontmatter or run the packager with `AIDLC_TIER_CAP=<tier>`. Both are pack-time knobs on `bun scripts/package.ts`, not runtime settings.
 
 ---
 
@@ -259,10 +260,13 @@ Precedence is global kill switch (`1`) → valid intent field → scope default 
 New intents store `Sensors`, `Learnings`, `Summary Confirmation`,
 `Plan Approval`, and `Collaborators` after `Guard Policy` in `aidlc-state.md`, each with a source
 label such as `on (from scope classic)`. For a plan composed for this piece of work, `--status` shows that label as `(from the approved plan)`; the state file keeps the scope. The label reads `set by you` when the
-agent runs the setter for a message of yours (a switch typed as a flag, plan
-approval off in your own words, or a Guard Policy or fence switch, together
-with the settings typed beside it), or when the agent turns off a check you asked it to turn off in the
-chat. Sensors, learnings or summary confirmation you type with a request
+record shows you asked for it: you typed the switch as a flag on your own line
+(with the settings typed beside it), you ran the command at your own terminal,
+or you asked in your own words and the agent passed those words with the setter
+(`--person-words`), and a message of yours in this chat since the last decision
+is exactly those words. Your words go on the audit row. A setting the agent runs
+on its own after a reply that never asked for it ("looks good, carry on") still
+takes effect, and reads `set by a command`. Sensors, learnings or summary confirmation you type with a request
 (`/aidlc --learnings on build the export`), or before any work exists, also
 read `set by you` on the work that request creates. So does plan approval or a
 Guard Policy the command that starts new work carries once you have asked for it
@@ -332,8 +336,7 @@ way it applies to this piece of work and records a `CEREMONY_SET` row; a plan al
 your answer then builds. A question or remark that mentions plan approval
 changes nothing. Before the work exists, at the compose gate or the scope
 confirmation, your words answer that request: the piece of work created from it
-starts with plan approval off, set by you (the creation line says
-`no plan approval`). Said before you describe the work, they answer the next
+starts with plan approval off, set by you. Said before you describe the work, they answer the next
 request you make, or, where other work is here and you pick it up instead, they
 apply to that work and you hear so once. Work created from any other request keeps its scope's value,
 and typing `/aidlc --plan-approval on` first takes the words back. The agent never turns it off on its own and never
@@ -392,7 +395,9 @@ Guard Policy is one setting with three values, `strict`, `relaxed`, and `off`. I
 - `strict` reopens the approval. The run stops with one plain sentence naming what changed and asks you again.
 - `relaxed` and `off` keep going. The change is recorded once in the audit trail as a `CHANGE_ACCEPTED` row, you hear one line about it, and the run continues. Nothing is deleted: the approval and its evidence stay exactly as they were.
 
-Other code moving after you approved a code plan (a `git pull`, another Unit landing) never asks again, on any value: approving a plan is about the plan and its test instructions. The build continues, you hear one line naming what moved (for example `2 files changed since this plan was approved: src/api.ts, src/db.ts. Building auth now.`), and one `CHANGE_ACCEPTED` row records it. An AI-DLC update you took is not your change: its files are never named, and when they are all that moved, nothing is said or recorded and a build of Units in parallel starts without asking you to commit them.
+Other code moving after you approved a code plan (a `git pull`, another Unit landing) never asks again, on any value, with one exception below: approving a plan is about the plan and its test instructions. The build continues, you hear which files moved (for example `2 files changed since this plan was approved: src/api.ts, src/db.ts. Building auth now.`), and a `CHANGE_ACCEPTED` row records it. An AI-DLC update you took is not your change: its files are never named, and when they are all that moved, nothing is said or recorded and a build of Units in parallel starts without asking you to commit them.
+
+The exception is a build of Units in parallel under `strict`. A change in the project after Code Generation started that is not a Unit's own landing or an AI-DLC update (your edit or commit, a `git pull`) stops the next Unit from landing; under `relaxed` and `off` the Unit lands with the change kept, and one line says so. If the change came after you approved the plan, `strict` also asks you to approve the plan again before the Units are set up, and approving again does not lift the stop at the landing. To go on, undo the change and tell the agent to carry on, or set Guard Policy `relaxed` for this piece of work (`/aidlc --guard-policy relaxed`) and the Unit lands with it kept. Where your team locked `strict` in memory, that switch is refused with a line naming the file, so undoing the change is the way on there.
 
 **How hard the fences hold.** `strict` leaves all five fences up. `relaxed` lowers plan re-approval and review freeze. `off` lowers those two plus state transition and reviewer read scope. No value lowers human presence or claimed-checkout Unit write ownership. A lowered fence still writes an audit row every time it lets something through.
 
@@ -428,13 +433,20 @@ Intent creation reads Guard Policy from the scope the plan runs on. The conducto
 The resolved value is written to the intent's `aidlc-state.md` at creation as `- **Guard Policy**: <value> (from scope <name>)`, rewritten by the flag, typed confirmation words, or a plain-words request the conductor carries out through the setter, and read by value only. Because the state file is committed with the intent, the value survives sessions and teammates see the same one; a memory edit that changes the effective value for a running intent is recorded as a `GUARD_POLICY_SET` row naming the memory file the next time a governed check runs. An intent created before this field existed stays `strict (not set)` until you set it, unless a memory file declares `relaxed` or `off`, which applies to it too; an invalid field is unavailable until `/aidlc --guard-policy` with one of the three values repairs it. The next intent starts from its scope's default again.
 
 If a state file carries both `Guard Policy` and the retired `Change Control` with
-different policy words, strict applies and status shows
-`strict (from conflicting state lines)`; memory-held strict still takes precedence.
-If both agree, the `Guard Policy` line is used. Any write of the policy line removes
-the retired line, leaving one setting. Until a conflict is resolved, `next` carries
-this notice:
+different policy words (a teammate on a release before the rename can leave both,
+since the state file travels by git), the next `next` keeps one of them and writes
+it as the only line: the one the audit trail shows was set last, else the one you
+set yourself, else the one the scope starts with, else the stricter. It records a
+`GUARD_POLICY_SET` row with `Source: command` and a `Settled` field naming both
+lines, and asks nothing. When it kept your own last choice it says nothing; when
+the record could not tell, it says once which it kept, for example:
 
-> This work has two settings for how closely AI-DLC checks changes, and they disagree, so AI-DLC checks everything for now. Do you want it to keep checking everything, carry on with a note when something you approved changes, or also skip some of its own checks? I'll ask again until you choose.
+> This work had two settings for how closely AI-DLC checks changes, and they disagreed. The record does not say which was set last, so AI-DLC keeps the stricter one: it checks everything. You can change it any time.
+
+Until then status shows `strict (from conflicting state lines)`. A team that holds
+strict in memory keeps strict, and the two lines stay as they are. If both agree,
+the `Guard Policy` line is used. Any write of the policy line removes the retired
+line, leaving one setting.
 
 #### This setting used to be called Change Control
 
@@ -475,7 +487,7 @@ If a memory file holds Guard Policy strict, `/aidlc config set guard.<fence> off
 
 Memory-held strict also overrides a fence you lowered earlier. The persisted `Guards Off` entry stays in the intent, but `/aidlc --status` then leaves that fence off its `Checks off:` line; the entry takes effect again only after the memory line no longer holds strict. A machine-wide kill switch still takes precedence.
 
-Switching one off writes `- **Guards Off**: review-freeze (set by you)` into `aidlc-state.md` and one `GUARD_DISABLED` audit row; switching it back on removes it from that list and writes `GUARD_RESTORED`. Setting `on` also raises a policy-lowered fence, records `- **Guards On**: review-freeze (set by you)`, and writes `GUARD_RESTORED`. The lines name only the switchable fences (a `plan-approval` entry written before plan approval became its own setting is still read); a persisted human-presence entry is ignored. `/aidlc --status` prints a `Checks off:` line naming each check that someone switched off (you for this work, or this machine's environment) and where that came from; the plan approval fence shows there as `plan re-approval`, the check on a plan edited after approval. The checks a lower Guard Policy turns off are not listed there: they go with the `Guard Policy:` line, which says where the policy came from. Precedence is the machine-wide kill switch, then per-work off unless memory holds strict, then per-work on, then the Guard Policy word, then on by default. Setting the Guard Policy word yourself covers every check in its own direction (each change written as `GUARD_DISABLED` or `GUARD_RESTORED`): `off` clears the checks this work kept on, so none is left on, `strict` clears the checks it turned off, so none is left off, and `relaxed` clears neither, so it never turns a check back on or off. A memory-held strict still wins, and a single check you switch after it still applies.
+Switching one off writes `- **Guards Off**: review-freeze (set by you)` into `aidlc-state.md` and one `GUARD_DISABLED` audit row (the line has one label: `set by you` while every check on it is yours, `set by a command` once one is not); switching it back on removes it from that list and writes `GUARD_RESTORED`. Setting `on` also raises a policy-lowered fence, records `- **Guards On**: review-freeze (set by you)`, and writes `GUARD_RESTORED`. The lines name only the switchable fences (a `plan-approval` entry written before plan approval became its own setting is still read); a persisted human-presence entry is ignored. `/aidlc --status` prints a `Checks off:` line naming each check that someone switched off (you for this work, or this machine's environment) and where that came from; the plan approval fence shows there as `plan re-approval`, the check on a plan edited after approval. The checks a lower Guard Policy turns off are not listed there: they go with the `Guard Policy:` line, which says where the policy came from. Precedence is the machine-wide kill switch, then per-work off unless memory holds strict, then per-work on, then the Guard Policy word, then on by default. Setting the Guard Policy word yourself covers every check in its own direction (each change written as `GUARD_DISABLED` or `GUARD_RESTORED`): `off` clears the checks this work kept on, so none is left on, `strict` clears the checks it turned off, so none is left off, and `relaxed` clears neither, so it never turns a check back on or off. A memory-held strict still wins, and a single check you switch after it still applies.
 
 The reviewer-scope setting governs the dispatched reviewer's read/search bound. A checkout stamped as owning one team Unit still cannot write another Unit's `construction/` subtree; that ownership boundary is not switchable by Guard Policy, a per-work fence setting, or `AIDLC_DISABLE_REVIEWER_SCOPE_HOOK`.
 
@@ -604,7 +616,7 @@ The file is AI-DLC's, so the next `aidlc config` in the project stops at your ed
 ```text
 $ aidlc config --harness claude --yes
 error: 1 config conflict(s): .claude/hooks/aidlc-statusline.ts (locally modified or unowned)
-fix: to keep your version, move .claude/hooks/aidlc-statusline.ts somewhere else and run the same command again; to take the shipped version over it, run it again with --force. `aidlc config --dry-run --verbose` lists every change first.
+fix: to keep your version, move .claude/hooks/aidlc-statusline.ts somewhere else and run the same command again; to take the shipped version over it, run it again with --force.
 ```
 
 Keep a copy of your version before you take the shipped one with `--force`.

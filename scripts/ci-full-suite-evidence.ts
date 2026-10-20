@@ -1,7 +1,5 @@
-// Stable releases publish only after a release-purpose Full Suite passed for the
-// exact tagged commit. `find` looks for that result in a trusted earlier run, so
-// release.yml can reuse it instead of running the suite again; `check` validates
-// the result file publication relies on, whichever run produced it.
+// Optional inspector for a recorded Full Suite result. Promotion links the
+// selected preview's prior results without making this inspector a release gate.
 import { spawnSync } from "node:child_process";
 import { appendFileSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -13,12 +11,10 @@ export const EVIDENCE_ARTIFACT = "full-suite-result";
 const COMMIT = /^[a-f0-9]{40}$/;
 const RUN_FIELDS = "databaseId,event,headBranch,headSha,conclusion";
 
-/** Why a full-suite-result cannot qualify a stable release of `sha`; empty when it does. */
 export function evidenceProblems(result: unknown, sha: string, runId: string): string[] {
   if (typeof result !== "object" || result === null || Array.isArray(result)) return ["the result is not a JSON object"];
   const report = result as Record<string, unknown>;
   const problems: string[] = [];
-  // The result must name this commit and the run it was downloaded from.
   const expected: Record<string, unknown> = {
     sha, runId, purpose: "release", verificationFamily: "all", coveragePolicy: FULL_SUITE_COVERAGE_POLICY, passed: true,
   };
@@ -38,7 +34,6 @@ export function evidenceProblems(result: unknown, sha: string, runId: string): s
   if (typeof legs !== "object" || legs === null || Array.isArray(legs)) {
     problems.push("legs are missing");
   } else {
-    // Every job this commit declares must pass, and so must any extra leg.
     const statuses = legs as Record<string, unknown>;
     for (const job of new Set<string>([...FULL_SUITE_JOBS, ...Object.keys(statuses)])) {
       const expected = (RELEASE_OMITTED_JOBS as readonly string[]).includes(job) ? "skipped" : "success";
@@ -93,7 +88,6 @@ export function evidenceRuns(gh: GhRunner, repository: string, sha: string): Evi
   });
 }
 
-/** The id of the first trusted run whose downloaded result qualifies `sha`, if any. */
 export function findEvidence(options: {
   sha: string;
   repository: string;
@@ -157,14 +151,14 @@ function main(argv: readonly string[]): number {
         }).status === 0,
       });
     } catch (error) {
-      // Searching is an optimization: without it the release runs the suite itself.
+      // An unavailable search leaves the caller without verified evidence.
       console.log(`::warning::Could not search earlier runs for Full Suite evidence: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
       rmSync(scratch, { recursive: true, force: true });
     }
     console.log(runId
-      ? `Reusing the passing Full Suite result of run ${runId} for ${sha}`
-      : `No earlier passing Full Suite result for ${sha}; this release runs the Full Suite`);
+      ? `Found the passing Full Suite result of run ${runId} for ${sha}`
+      : `No earlier passing Full Suite result for ${sha}`);
     if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `run_id=${runId ?? ""}\n`);
     return 0;
   }
@@ -180,7 +174,7 @@ function main(argv: readonly string[]): number {
       problems = [`run ${runId} left no readable ${EVIDENCE_ARTIFACT} artifact`];
     }
     if (problems.length > 0) {
-      console.error(`::error::Stable publication refused: no passing release-purpose Full Suite for ${sha}. ` +
+      console.error(`::error::No passing release-purpose Full Suite for ${sha}. ` +
         `Run ${runId}: ${problems.join(", ")}`);
       return 1;
     }

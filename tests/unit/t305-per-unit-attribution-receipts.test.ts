@@ -235,6 +235,59 @@ describe("t305 strict source-manifest validation", () => {
     expect(snapshot?.listing.has("\0generated/old.ts")).toBe(false);
   });
 
+  test("directory claims honor explicit source-map exclusions, with registered paths taking precedence", () => {
+    const { project, record } = fixture();
+    mkdirSync(join(project, "src"));
+    writeFileSync(join(project, "src/main.ts"), "export const answer: number = 42;\n");
+    writeFileSync(join(project, ".gitignore"), "**/*.js.map\n");
+    const value = { stage: "code-generation", unit: "alpha", version: 1, writes: [{ path: "src/" }] };
+    manifest(record, "alpha", value);
+    expect(readUnitSourceManifest(project, "code-generation", "alpha").ok).toBe(true);
+    const built = spawnSync(process.execPath, ["build", "src/main.ts", "--target=node", "--sourcemap=external", "--outdir=src"], { cwd: project, encoding: "utf-8" });
+    expect(built.status).toBe(0);
+    expect(existsSync(join(project, "src/main.js.map"))).toBe(true);
+    expect(readUnitSourceManifest(project, "code-generation", "alpha").ok).toBe(false);
+    manifest(record, "alpha", { ...value, writes: [{ path: "src/main.ts" }, { path: "src/main.js" }] });
+    expect(readUnitSourceManifest(project, "code-generation", "alpha").ok).toBe(true);
+    manifest(record, "alpha", value);
+    const registry = join(project, ".aidlc-source-paths.json");
+    writeFileSync(registry, JSON.stringify({ version: 1, exclude: ["src/main.js.map"] }));
+    expect(readUnitSourceManifest(project, "code-generation", "alpha").ok).toBe(true);
+    expect(workspaceSourceListing(project)?.has("\0src/main.js.map")).toBe(false);
+    // Exact ignored claims still cannot offer excluded output as review evidence.
+    manifest(record, "alpha", { ...value, writes: [{ path: "src/main.js.map" }] });
+    expect(readUnitSourceManifest(project, "code-generation", "alpha").ok).toBe(false);
+    manifest(record, "alpha", value);
+    for (const registered of ["src/main.js.map", "src"]) {
+      writeFileSync(registry, JSON.stringify({ version: 1, exclude: ["src/main.js.map"], paths: [registered] }));
+      expect(workspaceSourceListing(project)?.has("\0src/main.js.map")).toBe(true);
+      expect(readUnitSourceManifest(project, "code-generation", "alpha").ok).toBe(false);
+    }
+    writeFileSync(registry, JSON.stringify({ version: 1, exclude: ["src/main.js.map"] }));
+    writeFileSync(join(project, "src/other.js.map"), "{}\n");
+    const other = readUnitSourceManifest(project, "code-generation", "alpha");
+    expect(other.ok).toBe(false);
+    if (!other.ok) expect(other.reason).toContain("src/other.js.map");
+    writeFileSync(registry, "invalid JSON");
+    expect(readUnitSourceManifest(project, "code-generation", "alpha").ok).toBe(false);
+  });
+
+  test("directory claims read the selected repo's exclusions and directory boundaries", () => {
+    const { project, record } = fixture(["repo-a", "repo-b"]);
+    const repo = join(project, "repo-a");
+    mkdirSync(join(repo, "src/output"), { recursive: true });
+    writeFileSync(join(repo, "src/main.ts"), "export const main = 1;\n");
+    writeFileSync(join(repo, "src/output/generated.tmp"), "output\n");
+    writeFileSync(join(repo, ".gitignore"), "*.tmp\n");
+    manifest(record, "alpha", { stage: "code-generation", unit: "alpha", version: 1, writes: [{ repo: "repo-a", path: "src/" }] });
+    writeFileSync(join(project, ".aidlc-source-paths.json"), JSON.stringify({ version: 1, exclude: ["src/output"] }));
+    expect(readUnitSourceManifest(project, "code-generation", "alpha").ok).toBe(false);
+    writeFileSync(join(repo, ".aidlc-source-paths.json"), JSON.stringify({ version: 1, exclude: ["src/output"] }));
+    expect(readUnitSourceManifest(project, "code-generation", "alpha").ok).toBe(true);
+    writeFileSync(join(repo, "src/output-other.tmp"), "source\n");
+    expect(readUnitSourceManifest(project, "code-generation", "alpha").ok).toBe(false);
+  });
+
   test("rejects ignored exact claims and prefixes containing ignored source", () => {
     const { project, record } = fixture();
     writeFileSync(
@@ -321,7 +374,10 @@ describe("t305 strict source-manifest validation", () => {
     });
     const prefix = readUnitSourceManifest(project, "code-generation", "alpha");
     expect(prefix.ok).toBe(false);
-    if (!prefix.ok) expect(prefix.reason).toContain("contains ignored application source");
+    if (!prefix.ok) {
+      expect(prefix.reason).toContain("contains ignored application source");
+      expect(prefix.reason).not.toContain("neither tracked at HEAD");
+    }
 
     writeFileSync(join(project, "force-only.secret"), "staged but uncommitted\n");
     writeFileSync(
@@ -375,6 +431,55 @@ describe("t305 strict source-manifest validation", () => {
     );
     expect(slashless.ok).toBe(false);
     if (!slashless.ok) expect(slashless.reason).toContain("must end with");
+  });
+
+  test("a gitignored exact dependency file cannot be registered as source", () => {
+    const { project, record } = fixture();
+    mkdirSync(join(project, "node_modules/pkg"), { recursive: true });
+    writeFileSync(join(project, "node_modules/pkg/index.js"), "module.exports = {};\n");
+    writeFileSync(join(project, ".gitignore"), "node_modules/\n");
+    manifest(record, "alpha", { stage: "code-generation", unit: "alpha", version: 1,
+      writes: [{ path: "node_modules/pkg/index.js" }] });
+    const refused = readUnitSourceManifest(project, "code-generation", "alpha");
+    expect(refused.ok).toBe(false);
+    if (!refused.ok) {
+      expect(refused.reason).toContain("omit this exact claim");
+      expect(refused.reason).not.toContain('"paths":[');
+    }
+  });
+
+  test("ignored exact-file admission distinguishes index tracking, HEAD membership, and source registration", () => {
+    const { project, record } = fixture();
+    mkdirSync(join(project, "src"));
+    const file = join(project, "src/main.js.map");
+    writeFileSync(file, "{}\n");
+    writeFileSync(join(project, ".gitignore"), "*.js.map\n");
+    manifest(record, "alpha", { stage: "code-generation", unit: "alpha", version: 1, writes: [{ path: "src/main.js.map" }] });
+    const first = readUnitSourceManifest(project, "code-generation", "alpha");
+    expect(first.ok).toBe(false);
+    if (!first.ok) {
+      expect(first.reason).toContain('"src/main.js.map" is ignored by Git and cannot be source-review evidence');
+      expect(first.reason).toContain("neither tracked at HEAD nor explicitly registered as source");
+      expect(first.reason).toContain("Git index-only additions (including force-add) or jj tracking alone");
+      expect(first.reason).toContain('{"version":1,"paths":["src/main.js.map"]}');
+      expect(first.reason).toContain(".aidlc-source-paths.json in this repository's root (merge with existing entries)");
+      expect(first.reason).toContain("omit this exact claim");
+      expect(first.reason).toContain("exclude list instead of paths");
+    }
+    git(project, ["add", "-f", "--", "src/main.js.map"]);
+    expect(readUnitSourceManifest(project, "code-generation", "alpha").ok).toBe(false);
+    const registry = join(project, ".aidlc-source-paths.json");
+    writeFileSync(registry, JSON.stringify({ version: 1, paths: ["src/main.js.map"], exclude: ["src/main.js.map"] }));
+    expect(readUnitSourceManifest(project, "code-generation", "alpha").ok).toBe(true);
+    expect(workspaceSourceListing(project)?.has("\0src/main.js.map")).toBe(true);
+    // Removing registration restores the refusal even when exclude is present.
+    writeFileSync(registry, JSON.stringify({ version: 1, exclude: ["src/main.js.map"] }));
+    expect(readUnitSourceManifest(project, "code-generation", "alpha").ok).toBe(false);
+    rmSync(registry);
+    git(project, ["commit", "-qm", "track ignored file in HEAD"]);
+    expect(readUnitSourceManifest(project, "code-generation", "alpha").ok).toBe(true);
+    expect(readFileSync(file, "utf-8")).toBe("{}\n");
+    expect(readFileSync(join(project, ".gitignore"), "utf-8")).toBe("*.js.map\n");
   });
 
   test("rechecks mixed ignore matches and negations on each read of the same manifest", () => {
@@ -1393,9 +1498,31 @@ describe("t305 real receipt and guard flows", () => {
     const refused = cli(LOG, args, project);
     expect(refused.rc).toBe(1);
     expect(refused.out).toContain("ignored by Git");
+    expect(refused.out).toContain("neither tracked at HEAD nor explicitly registered as source");
+    const diagnostic = JSON.parse(refused.out) as { error: string };
+    expect(diagnostic.error).toContain('{"version":1,"paths":["ignored.ts"]}');
     expect(readAllAuditShards(project)).not.toMatch(
       /\*\*Event\*\*: REVIEW_REQUESTED[\s\S]*?\*\*Unit\*\*: alpha/,
     );
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("excluded ignored output leaves directory review receipts fresh while source edits invalidate them", () => {
+    const { project, record } = runtimeFixture();
+    mkdirSync(join(project, "src"));
+    writeFileSync(join(project, "src/main.ts"), "export const main = 1;\n");
+    writeFileSync(join(project, "src/main.js.map"), "{}\n");
+    writeFileSync(join(project, ".gitignore"), "*.js.map\n");
+    writeFileSync(join(project, ".aidlc-source-paths.json"), JSON.stringify({ version: 1, exclude: ["src/main.js.map"] }));
+    const result = review(project, record, "alpha", [{ path: "src/" }]);
+    expect(result.request.rc).toBe(0);
+    expect(result.verdict.rc).toBe(0);
+    const stage = { slug: "code-generation", phase: "construction", for_each: "unit-of-work", reviewer: REVIEWER, review_artifact: "code-generation-plan", reviewer_max_iterations: 2, workspace_requires: true, produces: ["code-generation-plan", "unit-test-instructions", "code-summary", "traceability"] };
+    const state = readFileSync(join(record, "aidlc-state.md"), "utf-8");
+    writeFileSync(join(project, "src/main.js.map"), "{\"generated\":true}\n");
+    const fresh = freshReviewReceipts(project, state, stage);
+    expect(fresh.unitStale.has("alpha")).toBe(false);
+    writeFileSync(join(project, "src/main.ts"), "export const main = 2;\n");
+    expect(freshReviewReceipts(project, state, stage).unitStale.has("alpha")).toBe(true);
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("3 disjoint unit invalidation names only beta and bounded recovery clears", () => {
@@ -3601,7 +3728,7 @@ describe("t305 stage and protocol source-attribution requirements", () => {
   test("pins schema, Bolt-relative paths, review freeze, and workspace_requires semantics", () => {
     const stage=readFileSync(STAGE,"utf-8"); const reviewer=readFileSync(join(PROTOCOL,"stage-protocol-reviewer.md"),"utf-8"); const definition=readFileSync(join(PROTOCOL,"stage-definition.md"),"utf-8"); const swarm=readFileSync(join(PROTOCOL,"stage-protocol-swarm.md"),"utf-8");
     expect(stage).toContain('"version": 1'); expect(stage).toContain("created, modified, or deleted"); expect(stage).toContain("trailing `/` directory claim"); expect(stage).toContain("MUST omit `repo`"); expect(stage).toContain("unclaimed changed paths block stage completion; under relaxed or off they are\nkept"); expect(stage).toContain("engine-validated against its strict schema");
-    expect(reviewer).toContain("differentially at those paths"); expect(reviewer).toContain("source-manifest.json"); expect(reviewer).toContain("claimed source paths");
+    const reviewerUnit=readFileSync(join(PROTOCOL,"stage-protocol-reviewer-unit.md"),"utf-8"); expect(reviewerUnit).toContain("differentially at those paths"); expect(reviewer).toContain("source-manifest.json"); expect(reviewerUnit).toContain("claimed source paths");
     expect(swarm).toContain("before the in-Bolt review"); expect(swarm).toContain("worktree-relative and omit `repo`"); expect(definition).toContain("source-manifest.json"); expect(definition).toContain("stage-entry source baseline");
     expect(swarm).toContain("Post-finalize source landing"); expect(swarm).toContain("cleanup-only reconciliation"); expect(swarm).toContain("SWARM_SOURCE_MERGED");
   });

@@ -8,22 +8,23 @@
 // the core hook bodies, each run as a bun subprocess fed the ClaudeCodeHookInput
 // JSON shape the core hooks parse (live-verified on opencode 1.17.18):
 //
-//   opencode moment                      → core hook (Claude event it mirrors)
-//   ------------------------------------------------------------------------
-//   chat.message (first per session)     → aidlc-session-start.ts  (SessionStart)
-//   chat.message (every human turn)      → aidlc-record-human-turn.ts  (UserPromptSubmit)
-//   tool.execute.before task             → aidlc-deliver-stage-rules.ts rewrite + plan-approval guard (PreToolUse)
-//   tool.execute.before other tools      → entrypoint boundary + aidlc-reviewer-scope.ts (PreToolUse)
-//   tool.execute.after write|edit|patch  → aidlc-write-audit-log.ts + aidlc-run-sensors.ts (PostToolUse Write|Edit)
-//   tool.execute.after bash              → aidlc-rebuild-stage-graph.ts (PostToolUse Bash)
-//   tool.execute.after todowrite         → aidlc-sync-workflow-state.ts (PostToolUse TaskUpdate)
-//   tool.execute.after task              → aidlc-log-subagent.ts    (SubagentStop)
-//   event session.idle                   → aidlc-continue-workflow.ts            (Stop)
-//   experimental.session.compacting      → aidlc-validate-state.ts  (PreCompact)
+//   opencode moment                           -> core hook (Claude event it mirrors)
+//   ----------------------------------------------------------------------------
+//   chat.message (until a workflow is active) -> aidlc-session-start.ts  (SessionStart)
+//   chat.message (every human turn)           -> aidlc-record-human-turn.ts  (UserPromptSubmit)
+//   shell.env (every shell command)           -> names the command's chat (AIDLC_SESSION_OVERRIDE)
+//   tool.execute.before task                  -> aidlc-deliver-stage-rules.ts rewrite + plan-approval guard (PreToolUse)
+//   tool.execute.before other tools           -> entrypoint boundary + state-transition, review-freeze, plan-approval and reviewer-scope guards (PreToolUse)
+//   tool.execute.after write|edit|apply_patch -> aidlc-write-audit-log.ts + aidlc-run-sensors.ts (PostToolUse Write|Edit)
+//   tool.execute.after bash                   -> aidlc-rebuild-stage-graph.ts (PostToolUse Bash)
+//   tool.execute.after todowrite              -> aidlc-sync-workflow-state.ts (PostToolUse TaskUpdate)
+//   tool.execute.after task                   -> aidlc-log-subagent.ts    (SubagentStop)
+//   event session.idle                        -> aidlc-continue-workflow.ts            (Stop)
+//   experimental.session.compacting           -> aidlc-validate-state.ts  (PreCompact)
 //
 // Stop enforcement: session.idle is a REACTIVE event (opencode has no blocking
 // continue-workflow channel), so when the core continue-workflow hook answers {"decision":"block",
-// "reason":…} this plugin re-engages the loop by injecting the reason as a new
+// "reason":...} this plugin re-engages the loop by injecting the reason as a new
 // session prompt via the SDK client. The injected prompt carries the NUDGE
 // sentinel so the chat.message arm never mints HUMAN presence for it (a
 // synthetic nudge is not a human turn), and loop-guarding stays with the core
@@ -38,13 +39,13 @@
 // command's template, and the chat.message that follows records it as their
 // turn.
 //
-// Known degradations vs Claude Code (documented in AGENTS.md):
+// Known degradations vs Claude Code (documented in .aidlc/onboarding.md):
 //   - session-start's additionalContext has no injection channel; the hook
 //     still runs for its side effects (session→intent stamp, state checks).
 //   - There is no session-end moment; SESSION_ENDED is not emitted.
 //   - Presence minting is skipped for subagent (child) sessions. A parent
-//     lookup failure fails closed for that event and is retried later; an
-//     uncertain child can never record-human-turn a HUMAN_TURN into the shared ledger.
+//     lookup exception fails closed for that event and is retried later; a
+//     response without a session record is treated as a main session.
 //   - tool.execute.before carries no active-agent field. Reviewer identity is
 //     correlated from chat.message.agent by session; when that field is absent,
 //     a child session is treated as scoped registration while a dispatch record
@@ -53,6 +54,8 @@
 
 import { spawn } from "node:child_process";
 import { isAbsolute, join } from "node:path";
+// emit.ts points this at the projected .aidlc/tools/ copy.
+import { windowsScriptLaunch } from "../../../core/tools/aidlc-executable-path.ts";
 
 const NUDGE_SENTINEL = "[aidlc-forwarding-nudge]";
 const PROJECTED_INVOKE = "{{INVOKE}}";
@@ -69,21 +72,30 @@ function runCoreHook(
   input: Record<string, unknown>,
   cwd: string,
   aidlcCommand: readonly string[],
+  platform: NodeJS.Platform,
 ): Promise<{ stdout: string; stderr: string; code: number }> {
   return new Promise((resolve) => {
-    const [bin, ...prefix] = aidlcCommand;
     const hook = hookFile.replace(/^aidlc-/, "").replace(/\.ts$/, "");
+    const env = {
+      ...process.env,
+      AIDLC_PROJECT_DIR: cwd,
+      CLAUDE_PROJECT_DIR: cwd,
+    };
+    const [bin, ...prefix] = aidlcCommand;
     if (!bin) return resolve({ stdout: "", stderr: "", code: 0 });
+    // Windows starts the native install's aidlc.cmd only through cmd.exe; the
+    // project folder then goes by the environment above.
+    const viaCmd = windowsScriptLaunch(bin, [...prefix, "hook", hook], platform, env);
+    if (viaCmd === "refused") return resolve({ stdout: "", stderr: "", code: 0 }); // fail open
     try {
-      const child = spawn(bin, [...prefix, "hook", hook, "--project-dir", cwd], {
-        cwd,
-        stdio: ["pipe", "pipe", "pipe"],
-        env: {
-          ...process.env,
-          AIDLC_PROJECT_DIR: cwd,
-          CLAUDE_PROJECT_DIR: cwd,
-        },
-      });
+      const child = viaCmd
+        ? spawn(viaCmd.file, viaCmd.args, {
+          cwd,
+          stdio: ["pipe", "pipe", "pipe"],
+          env: { ...env, ...viaCmd.env },
+          windowsVerbatimArguments: true,
+        })
+        : spawn(bin, [...prefix, "hook", hook, "--project-dir", cwd], { cwd, stdio: ["pipe", "pipe", "pipe"], env });
       let out = "";
       let err = "";
       child.stdout.on("data", (d: Buffer) => {
@@ -540,7 +552,7 @@ export default async ({
     hookFile: string,
     input: Record<string, unknown>,
     _cwd = directory,
-  ) => runCoreHook(hookFile, input, directory, aidlcCommand);
+  ) => runCoreHook(hookFile, input, directory, aidlcCommand, platform);
 
   // The rebuild-stage-graph hook's only stdout on this harness is the
   // engine-error relay: one {"systemMessage": <exact directive.message>} line.
@@ -709,6 +721,23 @@ export default async ({
       typedCommands.set(input.sessionID, showTypedCommand(output.parts, input.arguments));
     },
 
+    // One opencode process hosts every chat of a window, so the process tree
+    // names only the chat that started last. opencode asks for each shell
+    // command's environment and names the chat it runs for; that chat's owner
+    // makes the engine act on its own work. opencode's own terminal names no chat.
+    "shell.env": async (
+      input: { cwd: string; sessionID?: string; callID?: string },
+      output: { env: Record<string, string> },
+    ) => {
+      if (!input.sessionID) return;
+      try {
+        output.env.AIDLC_SESSION_OVERRIDE = await owningSession(input.sessionID);
+        output.env.AIDLC_SESSION_OVERRIDE_SOURCE = "payload";
+      } catch {
+        // A throw here fails the person's command; unconfirmed, the engine finds the chat as before.
+      }
+    },
+
     "tool.execute.before": async (
       input: { tool: string; sessionID: string; callID: string },
       output: { args: Record<string, unknown> },
@@ -759,9 +788,8 @@ export default async ({
         const violation = aidlcBashBoundaryViolation(command, aidlcEntrypoints, await currentShellDialect());
         if (violation) throw new Error(violation);
         // State-transition guard, parallel to the Claude/Kiro/Codex PreToolUse
-        // wiring. The state CLI's ownership check remains the hard floor; this
-        // gives the conductor the same immediate redirect the other harnesses
-        // get instead of a late CLI error.
+        // wiring: runtime integrity, and a named worker's lifecycle and routing
+        // commands. A direct stage-status verb is the state CLI's own to refuse.
         const guard = await runCore(
           "aidlc-state-transition-guard.ts",
           {
@@ -1040,7 +1068,7 @@ export default async ({
       idleInFlight.add(sessionID);
       // opencode provides no stop_hook_active flag and no transcript, so the
       // core hook's run-mode-aware no-progress ceiling is the loop guard here
-      // (same degradation profile as Kiro). The absent transcript no longer makes
+      // (same degradation profile as Kiro). The absent transcript does not make
       // the conversational carve-out inert: the core hook falls back to the
       // `.aidlc-engine/human-turn` / `.aidlc-engine/engine-touch` mtime comparison, and the
       // chat.message arm's aidlc-record-human-turn.ts forward writes the former.

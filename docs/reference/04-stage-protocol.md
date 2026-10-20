@@ -21,7 +21,7 @@ map to the static protocol or the named conditional module.
 
 ## Protocol File Structure
 
-The stage protocol is split across twelve files, loaded conditionally by the
+The stage protocol is split across sixteen files, loaded conditionally by the
 conductor based on workflow context:
 
 | File | Contents | When Loaded |
@@ -30,13 +30,17 @@ conductor based on workflow context:
 | `stage-protocol-recovery.md` | Error Recovery + Change Handling | On session resume, or when a change event is detected mid-stage |
 | `stage-protocol-governance.md` | Phase Boundary Verification (§13) | At phase boundaries (1.7->2.1, 2.9->3.1, 3.7->4.1) |
 | `stage-protocol-learnings.md` | §13 diary, surfacing, human learning question, admission check, and persistence | Only when `directive.protocol_modules` lists `learnings` |
-| `stage-protocol-reviewer.md` | Reviewer dispatch, receipts, read scope, terminal ordering, and NOT-READY loop | When the directive names an effective reviewer |
+| `stage-protocol-reviewer.md` | Reviewer dispatch, receipts, and terminal ordering | When the directive names an effective reviewer |
+| `stage-protocol-reviewer-unit.md` | A Unit's review: membership, per-Unit inputs and source, read scope, dispatch record | When `directive.protocol_modules` lists `reviewer-unit`: a Unit's review and every invoke-swarm |
+| `stage-protocol-reviewer-repair.md` | The adversarial NOT-READY loop and the strict stale-receipt recovery | When `directive.protocol_modules` lists `reviewer-repair`: an adversarial review, Guard Policy `strict`, a checkpoint re-check, and every invoke-swarm |
 | `stage-protocol-ensemble.md` | Ensemble topology and subagent returns | For subagent, pipeline, mob, or support-agent stages |
 | `stage-protocol-collaborators.md` | Contribution files, mob rounds, and objection triage | When `directive.protocol_modules` lists `collaborators`: a stage that dispatches support agents |
 | `stage-protocol-construction.md` | Construction routing, policy changes, the autonomy choice, halt-and-ask, the shipped per-unit walk, receipts, team-owned Units, and Grouped Plan Approval | On the first Construction directive of the session and every invoke-swarm |
 | `stage-protocol-checkpoint.md` | Unit and skeleton checkpoint verification and approval, and the verification command every checkpoint uses | When `directive.protocol_modules` lists `checkpoint`: a checkpoint step and every invoke-swarm |
 | `stage-protocol-loopback.md` | Build-and-Test failure loop-back | When `directive.protocol_modules` lists `loopback`: every Code Generation and Build and Test step and every invoke-swarm |
 | `stage-protocol-wave.md` | Per-unit batch waves | When `directive.protocol_modules` lists `wave`: a step that carries `directive.wave` |
+| `stage-protocol-summary.md` | The consolidated summary confirmation before generation | When `directive.protocol_modules` lists `summary`: the step asks for the summary confirmation |
+| `stage-protocol-sensors.md` | Sensor imports and a blocking gate sensor at the approval gate | When `directive.protocol_modules` lists `sensors`: Sensors are on, and every invoke-swarm under them |
 | `stage-protocol-swarm.md` | Harness-specific autonomous fan-out, the autonomous Code Generation plan contract (§12b), the batch checkpoint, convergence, finalize, and reviewer boundary | Every invoke-swarm |
 
 ### Conditional Loading Logic (from SKILL.md Routing)
@@ -54,7 +58,9 @@ The conductor's Routing section defines the loading rules:
   is needed.
 - **`stage-protocol-learnings.md`**: load only when `protocol_modules` includes `learnings`. With `ceremony.learnings: off`, keep no diary and skip the entire ritual.
 - **`stage-protocol-reviewer.md`**: load when `protocol_modules` includes
-  `reviewer`, or when the directive carries a reviewer.
+  `reviewer`, or when the directive carries a reviewer. **`stage-protocol-reviewer-unit.md`**
+  and **`stage-protocol-reviewer-repair.md`** load when it names `reviewer-unit` or
+  `reviewer-repair`.
 - **`stage-protocol-ensemble.md`**: load when `protocol_modules` includes
   `ensemble`; the fallback trigger is a dispatched topology or support agents.
 - **`stage-protocol-construction.md`**: load on the first Construction
@@ -64,6 +70,9 @@ The conductor's Routing section defines the loading rules:
   when `protocol_modules` names `checkpoint`, `loopback`, `wave`, or
   `collaborators`. The engine names each only on the steps that take that
   branch, so the other steps never read them.
+- **`stage-protocol-summary.md`** and **`stage-protocol-sensors.md`**: load when
+  `protocol_modules` names `summary` or `sensors`, which the engine does while
+  that ceremony is on.
 - **`stage-protocol-swarm.md`**: load for invoke-swarm.
 
 Before running the stage body, the conductor reads every module named by
@@ -103,7 +112,7 @@ with a fresh timestamp.
 
 | # | Check |
 |---|-------|
-| 1 | At the approval gate, call `aidlc engine orchestrate report --stage <slug> --result awaiting-approval`. When `ceremony.sensors` is `on`, gate-bound sensors run once per existing deliverable before the transaction when a person will answer the gate (a gate the engine approves itself under Construction autonomy runs only its blocking sensors). A blocking binding requires a verified pass. To override, log and present the separate `Fix findings` / `Override blocking sensors` decision, wait for the exact human-backed answer, then retry with `--override-blocking-sensors --user-input "Override blocking sensors"`; a bare flag and autonomous mode are refused. The engine then flips state from `[-]` to `[?]` AwaitingApproval and emits `STAGE_AWAITING_APPROVAL` atomically, so status shows the held gate while the prompt is open. (`STAGE_STARTED` / the `[-]` transition was emitted when the stage became active.) |
+| 1 | At the approval gate, call `aidlc engine orchestrate report --stage <slug> --result awaiting-approval`. When `ceremony.sensors` is `on`, gate-bound sensors run once per existing deliverable (`upstream-coverage` and `claim-sources` once per output folder) before the transaction when a person will answer the gate (a gate the engine approves itself under Construction autonomy runs only its blocking sensors). A blocking binding requires a verified pass. To override, log and present the separate `Fix findings` / `Override blocking sensors` decision, wait for the exact human-backed answer, then retry with `--override-blocking-sensors --user-input "Override blocking sensors"`; a bare flag and autonomous mode are refused. The engine then flips state from `[-]` to `[?]` AwaitingApproval and emits `STAGE_AWAITING_APPROVAL` atomically, so status shows the held gate while the prompt is open. (`STAGE_STARTED` / the `[-]` transition was emitted when the stage became active.) |
 | 2 | For non-gate questions, log options BEFORE calling `AskUserQuestion` via `aidlc engine log decision` (not by hand-writing to the `audit/` shards), then log the exact response via `aidlc engine log answer`. A question logged after the person already replied takes that reply with `--message <id>` (the refusal names the id); the person is never asked again. |
 | 3 | After an approval-gate response, call `aidlc engine orchestrate report --stage <slug> --result approved --user-input "Approve"` for approval or `aidlc engine orchestrate report --stage <slug> --result rejected --user-input "Request Changes"` for request-changes, passing the choice they made by its label (the engine keeps their own words as the feedback; add `--reason '<what they asked to change>'` only to say more). Never call the log tool's `decision` or `answer` verb for the gate. After revision work, report `--result revised` before re-presenting it. |
 | 4 | Record the choice the person made, read from their reply; the human-turn hook keeps their exact words with it. Never choose for them or paraphrase their words in an answer or note; for automated stages use `N/A -- [reason]` |
@@ -351,12 +360,12 @@ After an approval that moves on, the engine's narration carries the progress
 line; relay it as written and count nothing yourself:
 
 ```
-Progress: [done]/[planned] in-scope stages complete ([done]/[all] overall) | [phase-done]/[phase-planned] [PHASE]. Next: [Next Stage Name]
+Progress: [done] of [planned] stages done. Next: [Next Stage Name].
 ```
 
 The engine counts completed stages only; a skipped stage leaves the plan rather
 than counting as done. Example from a Claude Code run on the `mvp` plan, after
-Intent Capture: `Progress: 1/19 in-scope stages complete (4/33 overall) | 1/4 IDEATION. Next: Feasibility & Constraints`
+Intent Capture: `Progress: 1 of 19 stages done. Next: Feasibility & Constraints.`
 
 ---
 
@@ -391,6 +400,13 @@ changes** options are unlettered. All `[Answer]:` tags start blank.
 Multi-select questions add "(select all that apply)" to the question text;
 answer format: `[Answer]: A, B, E`.
 
+The agent groups a fresh file's questions by who would answer them: each
+heading names the trade whose decision it is after its number
+(`## Q3. [Developer] ...`), and each trade's questions sit together unless a
+question depends on another's answer. The trade alone never skips or
+delegates a question. An existing file is never reordered or renumbered; a
+follow-up takes the next unused number.
+
 When the stage's `<slug>-questions.md` already exists with its questions (an
 `[Answer]:` tag, filled in or still blank), the run-stage directive carries
 `questions_answered` (`path`), on `next --resume`, a bare `next` and every
@@ -401,14 +417,16 @@ the stage's next step), never creating it again, writing new questions over it,
 or asking an answered question again (#1873). A redo the person asked for
 (`artifact_reuse`, which drops the field, or Redo from scratch) starts afresh.
 
-**Step 2: How the person answers.** The run-stage directive carries
-`answer_mode` (`mode`, `ask`, `reused_from`, `notice`) and, beside it, the
-instruction the conductor follows, `answer_mode_note` (`answerModeNote` in
-`aidlc-directive.ts`). The first stage with questions in a piece of work asks;
+**Step 2: How the person answers.** The engine resolves the stage's answer
+mode (`resolveStageAnswerMode`: `mode`, `ask`, `reused_from`, `notice`), and the
+run-stage directive carries only the instruction the conductor follows, made
+from it: `answer_mode_note` (`answerModeNote` in `aidlc-directive.ts`).
+`withAgentNotes` leaves the mode itself out of the step, because an agent handed
+it read its fields aloud ("answer_mode.ask: true"). The first stage with questions in a piece of work asks;
 the engine then reuses the latest recorded answer to the mode question
 (`latestRecordedAnswerMode`, the same DECISION_RECORDED / QUESTION_ANSWERED
 pairing the Stop hook reads). The note makes the branch the protocol used to
-make on the field: with `ask: true` it carries the question ("I've created [N]
+make on the mode: with `ask: true` it carries the question ("I've created [N]
 questions at [the questions file]. How would you like to answer them?"), the
 three choices with their descriptions (Guide me, I'll edit the file, Chat), the
 exact `log decision` and `log answer` commands for this stage, and the notice to
@@ -464,7 +482,7 @@ and an unclear reply gets one short follow-up.
   `aidlc-review-brief.ts summary --stage <slug> --questions-file <path>` before
   the structured **Looks correct** / **Request changes** confirmation. The
   deterministic brief names the stage, questions file, generated artifacts,
-  why the decision is required now, and the exact effect of both choices. Do
+  and the exact effect of both choices. Do
   not ask for confirmation as bare prose. Before presenting it, append or reset a dedicated
   **Consolidated Summary Confirmation** entry in the stage questions file with
   both options and a blank `[Answer]:`. Record the prompt with
@@ -554,8 +572,17 @@ ask targeted follow-up. Do NOT proceed until resolved.
   decides: it picks the option that best fits what they have said and records
   it with `log answer --on-instruction '<their words>'` (single-quoted, like
   every piece of the person's text on a command line), so the record shows
-  the agent chose it as they asked. It then says one line: "You left <the
-  question> to me, so I chose <the choice>. Say if you want something else."
+  the agent chose it as they asked. The tool keeps the words only when
+  something the person said holds them, case, spacing and punctuation aside
+  (`holdsQuote` and `personsSaidWords` in `aidlc-message-store.ts`, the same
+  check the live drives' person-turn check makes): a message the human-turn
+  hook kept, a question box's reply, or the request that started the work.
+  Otherwise it tells the agent to quote their words or show the questions and
+  wait. Where the record lacks some of what they said (a host that passed no
+  words, a message too long to keep whole, a message older than the store
+  keeps, no hook), the choice is recorded as before. The agent then says one
+  line: "You left <the question> to me, so I chose <the choice>. Say if you
+  want something else."
   (for several questions, "You left <Stage>'s <N> questions to me, so I chose
   the recommended answers: ... Say if you want any of them changed."), and
   once per piece of work: "Approvals are still yours: I'll stop at each stage
@@ -707,9 +734,12 @@ dynamic per workflow position.
 
 1. Apply the ordered `load-steering` sequence before `run-stage`. It delivers
    every substantive active-space rule as content and re-runs on every stage.
-2. Read every `inline_context_paths` entry: lead + supports for `inline`, and
-   the lead's persona and knowledge for `mob` because mob supports are
-   dispatched. Persona and knowledge remain path-loaded. Show any
+2. Take on `lead_persona`, the lead's persona the step carries, then read
+   every `inline_context_paths` entry: the supports' personas and every inline
+   agent's knowledge for `inline`, and the lead's knowledge for `mob` because
+   mob supports are dispatched. Support personas and knowledge remain
+   path-loaded; a step that carries no `lead_persona` lists the lead's persona
+   file first instead. Show any
    `context_warnings` verbatim and continue with the readable roster. Agent
    names alone are not loaded context.
 3. Apply every loaded perspective during execution. Do not omit support-agent
@@ -1271,8 +1301,9 @@ change. See
    consumed - an advisory normal-flow budget is exactly one pass, so a counted
    cut-off would exhaust it without any review happening), and a second
    incomplete attempt records the terminal receipt `--verdict NOT-READY` with no
-   review file and the brief's fallback finding "review did not complete within
-   its turn budget" - the gate is reached with a concrete finding, never
+   review file, and the brief names it "The review did not finish, so there is
+   no review result to rely on." (followed by the conductor's `--fallback-finding` reason when
+   the reviewer's reply said why) - the gate is reached with a concrete finding, never
    presented on (or deadlocked by) a silently missing verdict. That receipt
    is no reviewer's verdict: the logger marks its row `Review Finished: no`,
    a Unit checkpoint asks about it with `review_not_finished.question`, and the
@@ -1343,10 +1374,14 @@ instead of another request. With Construction checkpoints on, a Unit whose
 code or documents changed after their review gets that recovery again each
 time the person approves the Unit, and under `relaxed` and `off`, where such a
 change is accepted, a review of that Unit is the same one recovery. A review
-the person asked for (they spoke since the last decision and since that review
-was last requested) is never refused, under every Guard Policy: the conductor
-records it the first time they ask, and the budget and the recovery bound only
-the passes the conductor starts on its own.
+the person asked for (the conductor passes `--person-asked`, and they spoke
+since the last decision and since that review was last requested) is never
+refused, under every Guard Policy: the conductor records it the first time they
+ask, the request row carries `Person Asked` and their words, and the budget and
+the recovery bound only the passes the conductor starts on its own. When they
+spoke but the flag is missing, the refusal is the conductor's step: it names
+the flag first, then the usual way on if they did not ask, and puts no question
+to the person.
 When Construction runs one Unit at a time and a Unit's finished step loses its
 work, the walk hands the step back and the Unit starts it again (`unit start`
 after its `UNIT_COMPLETED`, a wave completion included). That run of the step
@@ -1397,7 +1432,12 @@ When `directive.protocol_modules` lists `learnings`, the ritual runs between the
    keep and, for free-text additions, picks the heading that derives the
    destination. The always-present "Anything to add?" channel renders at least
    `Nothing to add` and `Add a note`; one-option structured questions are
-   invalid on Claude Code and Codex.
+   invalid on Claude Code and Codex. Its `log decision` carries
+   `--question-kind learnings-note`, so an answer of `Add a note` is known by
+   that field, never by the question's wording (a question recorded before
+   the field existed is known by exactly those two options): it ends the turn
+   at the follow-up, and its `agent_note` tells the agent to take the note
+   from the person's reply when they already gave it, and ask only otherwise.
 4. **Admission check**: each kept learning is checked against `org.md`'s
    matching section; a contradiction is surfaced to revise / skip / escalate.
 5. **Persist**: `aidlc-learnings.ts persist` writes each confirmed learning as a practice to

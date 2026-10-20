@@ -65,8 +65,14 @@ const REVIEWERS = [
 
 const CAP = "60";
 const REVIEWER_MODULE = "aidlc-common/protocols/stage-protocol-reviewer.md";
+// A Unit's review rules, named on the reviews that take them.
+const REVIEWER_UNIT_MODULE = "aidlc-common/protocols/stage-protocol-reviewer-unit.md";
 const SKILL = join("skills", "aidlc", "SKILL.md");
-const MISSING_VERDICT_FINDING = "review did not complete within its turn budget";
+// The brief names a review that did not finish from the record; the
+// conductor adds why only when what the reviewer returned says it. A fixed
+// "turn budget" reason was wrong whenever something else stopped the review.
+const MISSING_VERDICT_FINDING = "names the review that did not finish";
+const MISSING_VERDICT_REASON = '`--fallback-finding "<why, in one plain sentence>"`';
 
 /** The frontmatter block of an agent .md (throws when unclosed). */
 function frontmatter(body: string, label: string): string {
@@ -299,9 +305,12 @@ describe("t279 reviewer turn budget is stated on every surface", () => {
       // The second incomplete attempt records the terminal receipt with the
       // named finding and routes per review class.
       expect(labelled).toContain(MISSING_VERDICT_FINDING);
+      expect(labelled).toContain(MISSING_VERDICT_REASON);
+      expect(labelled).not.toContain("within its turn budget");
       expect(labelled).toMatch(
-        /record the\s+terminal receipt with `--verdict NOT-READY` and no review file/,
+        /record the\s+terminal receipt with `--verdict NOT-READY` and no `--review-file`/,
       );
+      expect(labelled).toMatch(/accepts a missing or incomplete review only for this retried\s+NOT-READY fallback/);
       expect(labelled).toMatch(/on `advisory` it is terminal/);
       expect(labelled).toMatch(/skip the lead re-invoke/);
       expect(labelled).toMatch(
@@ -339,8 +348,8 @@ describe("t279 reviewer turn budget is stated on every surface", () => {
     // so the protocol's dispatch-record roster must include it - it was
     // written before the Copilot harness landed and went stale.
     for (const path of [
-      join(REPO_ROOT, "core", REVIEWER_MODULE),
-      join(AIDLC_SRC, REVIEWER_MODULE),
+      join(REPO_ROOT, "core", REVIEWER_UNIT_MODULE),
+      join(AIDLC_SRC, REVIEWER_UNIT_MODULE),
     ]) {
       const body = readFileSync(path, "utf-8");
       expect(body).toContain(
@@ -412,6 +421,8 @@ describe("t279 reviewer turn budget is stated on every surface", () => {
       expect(labelled).toMatch(/no canonical verdict line/);
       // Incomplete attempt: one retry, then the terminal NOT-READY receipt.
       expect(labelled).toContain(MISSING_VERDICT_FINDING);
+      expect(labelled).toContain(MISSING_VERDICT_REASON);
+      expect(labelled).not.toContain("within its turn budget");
       expect(labelled).toMatch(/no review file at all/);
       expect(labelled).toContain("`--retry-pending`");
       expect(labelled).toMatch(/re-dispatch it\s+exactly once/);
@@ -445,6 +456,10 @@ describe("t279 reviewer turn budget is stated on every surface", () => {
       "utf-8",
     );
     expect(module).toContain(MISSING_VERDICT_FINDING);
-    expect(module).toContain("(Kiro IDE today), do not write the record");
+    const unitModule = readFileSync(
+      join(REPO_ROOT, "dist", "kiro-ide", ".kiro", REVIEWER_UNIT_MODULE),
+      "utf-8",
+    );
+    expect(unitModule).toContain("(Kiro IDE today), do not write the record");
   });
 });
