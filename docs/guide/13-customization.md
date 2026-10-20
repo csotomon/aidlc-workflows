@@ -22,19 +22,6 @@ AI-DLC is designed to adapt to your team's needs. This chapter covers settings o
 
 ---
 
-## ML Methodology Profiles
-
-The optional [AWS MLOps plugin](../../plugins/aws-mlops/docs/aws-mlops.md) adds a reusable SageMaker
-platform profile and an initial CRISP-ML(Q) model profile. The person chooses
-the methodology explicitly; CRISP-DM, TDSP, SEMMA and KDD are planned profiles.
-Its shared AWS capabilities, specialist agents, versioned local methodology
-reference and advisory evidence/phase-coverage checks extend the workflow through
-the additive plugin mechanism. The method is supplied as context rather than
-depending on the model's prior familiarity; see the plugin's controlled
-multi-model test instructions in its guide.
-
----
-
 ## Settings Overrides (`settings.local.json`)
 
 The shared `.claude/settings.json` belongs to the project and is committed to version control. AI-DLC refreshes its own hook registrations and command allow entries while keeping your hooks, deny rules, custom `statusLine`, environment, and other settings. Notes explain what was restored or kept; `--force` is not needed for this file. Retired shipped allow entries are not removed automatically. To override settings for your local environment without affecting the team, create a personal overrides file (if `.claude/settings.local.json` already exists, for example because AI-DLC's status line is on for you, add your keys to it instead of copying over it):
